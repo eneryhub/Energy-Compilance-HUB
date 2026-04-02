@@ -1,0 +1,2430 @@
+//SERVER.JS//
+
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { Pool } = require('pg');
+const PDFDocument = require('pdfkit');
+
+dotenv.config();
+
+const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'energy-compliance-secret-key-2026';
+const JWT_EXPIRES_IN = '30d';
+
+// Configuración de la conexión a Supabase
+const poolConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL?.includes('supabase.co') 
+      ? { rejectUnauthorized: false } 
+      : false
+};
+
+console.log('========================================');
+console.log('DEBUG - Configuración de Base de Datos:');
+console.log('DATABASE_URL configurada:', process.env.DATABASE_URL ? 'SÍ (Existe)' : 'NO (Vacía)');
+if (process.env.DATABASE_URL) {
+    console.log('URL empieza con:', process.env.DATABASE_URL.substring(0, 20) + '...');
+}
+console.log('Modo SSL:', JSON.stringify(poolConfig.ssl));
+console.log('========================================');
+
+const pool = new Pool(poolConfig);
+
+pool.on('error', (err) => {
+    console.error('DEBUG - Error inesperado en el Pool de Postgres:', err);
+});
+
+// Configuración CORS mejorada
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'https://energy-compliance.vercel.app',
+    'https://energy-compliance-git-main.vercel.app',
+    'https://*.vercel.app'
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+            callback(null, true);
+        } else {
+            console.log('❌ CORS bloqueado para:', origin);
+            callback(new Error('No permitido por CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    exposedHeaders: ['Content-Length', 'X-Requested-With']
+}));
+
+app.options('*', cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ============ PLANES DE SUSCRIPCIÓN ============
+const PLANS = {
+    starter: {
+        name: 'Starter',
+        price: 149,
+        max_users: 10,
+        max_permits_per_month: 200,
+        features: ['firma_basica', 'dashboard_basico', 'soporte_email', 'gps_basico', 'offline', 'pdf_basico']
+    },
+    business: {
+        name: 'Business',
+        price: 499,
+        max_users: 50,
+        max_permits_per_month: 2000,
+        features: ['firma_avanzada', 'dashboard_avanzado', 'soporte_prioritario', 'geocerca', 'offline', 'api_access', 'reportes_analitica']
+    },
+    enterprise: {
+        name: 'Enterprise',
+        price: 'Personalizado',
+        max_users: 999999,
+        max_permits_per_month: 999999,
+        features: ['firma_legal', 'dashboard_personalizado', 'soporte_247', 'mapas_calor', 'integracion_erp', 'auditoria_entes', 'gerente_cuenta']
+    }
+};
+
+// ============ FUNCIONES DE UTILIDAD ============
+async function getMonthlyPermitsCount(companyId) {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const result = await pool.query(
+        'SELECT COUNT(*) FROM permits WHERE company_id = $1 AND created_at >= $2',
+        [companyId, startOfMonth]
+    );
+    return parseInt(result.rows[0].count);
+}
+
+async function getCompanyUsersCount(companyId) {
+    const result = await pool.query(
+        'SELECT COUNT(*) FROM users WHERE company_id = $1 AND is_active = true',
+        [companyId]
+    );
+    return parseInt(result.rows[0].count);
+}
+
+async function getCompanyPlan(companyId) {
+    const result = await pool.query(
+        'SELECT subscription_plan FROM companies WHERE id = $1',
+        [companyId]
+    );
+    return result.rows[0]?.subscription_plan || 'starter';
+}
+
+// ============ FUNCIÓN DE GENERACIÓN DE PDF ============
+function generateFullPermitPDF(permit, supervisor_signature = null) {
+    return new Promise((resolve) => {
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        const buffers = [];
+        
+        doc.on('data', buffers.push.bind(buffers));
+        doc.on('end', () => {
+            const pdfData = Buffer.concat(buffers);
+            resolve(pdfData);
+        });
+        
+        // Encabezado
+        doc.fontSize(20).font('Helvetica-Bold').text('ENERGY-COMPLIANCE', { align: 'center' });
+        doc.moveDown(0.5);
+        doc.fontSize(14).font('Helvetica').text('PERMISO DE TRABAJO SEGURO', { align: 'center' });
+        doc.moveDown(0.5);
+        
+        // Línea separadora
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveDown(0.5);
+        
+        // Estado
+        if (permit.status === 'APPROVED') {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('green').text('✅ APROBADO - TRABAJO SEGURO', { align: 'center' });
+            doc.fillColor('black');
+        } else if (permit.status === 'REJECTED') {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('red').text('❌ RECHAZADO', { align: 'center' });
+            doc.fillColor('black');
+        } else {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('orange').text('⏳ PENDIENTE DE APROBACIÓN', { align: 'center' });
+            doc.fillColor('black');
+        }
+        doc.moveDown(0.5);
+        
+        // Datos del permiso
+        doc.fontSize(10).font('Helvetica-Bold').text(`Número: ${permit.permit_number}`);
+        doc.font('Helvetica').text(`Fecha: ${new Date(permit.created_at).toLocaleString('es-ES')}`);
+        doc.text(`Riesgo: ${permit.risk_type === 'ALTURA' ? 'Trabajo en Altura' : 
+                             permit.risk_type === 'ELECTRICO' ? 'Riesgo Eléctrico' :
+                             permit.risk_type === 'CONFINADO' ? 'Espacio Confinado' :
+                             permit.risk_type === 'CALIENTE' ? 'Trabajo en Caliente' : permit.risk_type}`);
+        doc.moveDown(0.5);
+        
+        // Datos del personal
+        doc.fontSize(12).font('Helvetica-Bold').text('DATOS DEL PERSONAL');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Técnico: ${permit.technician_name}`);
+        doc.text(`Supervisor: ${permit.supervisor_name}`);
+        if (permit.approved_by_name) {
+            doc.text(`Aprobado por: ${permit.approved_by_name}`);
+        }
+        doc.moveDown(0.5);
+        
+        // Ubicación y descripción
+        doc.fontSize(12).font('Helvetica-Bold').text('UBICACIÓN Y DESCRIPCIÓN');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Ubicación: ${permit.work_location}`);
+        doc.moveDown(0.3);
+        doc.text('Descripción:');
+        doc.text(permit.work_description, { width: 500, align: 'justify' });
+        doc.moveDown(0.5);
+        
+        // Lista de verificación
+        doc.fontSize(12).font('Helvetica-Bold').text('LISTA DE VERIFICACIÓN');
+        doc.moveDown(0.3);
+        
+        const checks = permit.safety_checks;
+        if (checks && typeof checks === 'object') {
+            Object.entries(checks).forEach(([key, value]) => {
+                const label = key.replace(/_/g, ' ').toUpperCase();
+                doc.fontSize(10).font('Helvetica').text(`${value ? '✓' : '✗'} ${label}: ${value ? 'SÍ' : 'NO'}`);
+            });
+        }
+        doc.moveDown(0.5);
+        
+        // FIRMA DEL TÉCNICO
+        doc.fontSize(12).font('Helvetica-Bold').text('FIRMA DEL TÉCNICO');
+        doc.moveDown(0.3);
+        
+        if (permit.technician_signature) {
+            const signature = permit.technician_signature;
+            doc.fontSize(10).font('Helvetica').text(`Firmado por: ${signature.signerName || 'Técnico'}`);
+            doc.text(`Fecha: ${new Date(signature.timestamp).toLocaleString('es-ES')}`);
+            if (signature.location) {
+                doc.text(`Ubicación GPS: ${signature.location.latitude?.toFixed(6)}, ${signature.location.longitude?.toFixed(6)}`);
+            }
+            if (signature.signatureData) {
+                try {
+                    const base64Data = signature.signatureData.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    doc.image(imageBuffer, { width: 200, height: 80 });
+                } catch (err) {
+                    doc.text('(Imagen de firma disponible)');
+                }
+            }
+        } else {
+            doc.fontSize(10).text('Pendiente de firma');
+        }
+        doc.moveDown(0.5);
+        
+        // FIRMA DEL SUPERVISOR
+        doc.fontSize(12).font('Helvetica-Bold').text('FIRMA DEL SUPERVISOR');
+        doc.moveDown(0.3);
+        
+        const supervisorSig = supervisor_signature || permit.supervisor_signature;
+        if (supervisorSig) {
+            doc.fontSize(10).font('Helvetica').text(`Firmado por: ${supervisorSig.signerName || 'Supervisor'}`);
+            doc.text(`Fecha: ${new Date(supervisorSig.timestamp).toLocaleString('es-ES')}`);
+            if (supervisorSig.location) {
+                doc.text(`Ubicación GPS: ${supervisorSig.location.latitude?.toFixed(6)}, ${supervisorSig.location.longitude?.toFixed(6)}`);
+            }
+            if (supervisorSig.signatureData) {
+                try {
+                    const base64Data = supervisorSig.signatureData.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    doc.image(imageBuffer, { width: 200, height: 80 });
+                } catch (err) {
+                    doc.text('(Imagen de firma disponible)');
+                }
+            }
+        } else if (permit.status === 'PENDING') {
+            doc.fontSize(10).text('Pendiente de aprobación');
+        } else {
+            doc.fontSize(10).text('No firmado');
+        }
+        doc.moveDown(0.5);
+        
+        // EVIDENCIA FOTOGRÁFICA
+        doc.fontSize(12).font('Helvetica-Bold').text('EVIDENCIA FOTOGRÁFICA');
+        doc.moveDown(0.3);
+        
+        const photosData = permit.photos;
+        if (photosData && Array.isArray(photosData) && photosData.length > 0) {
+            doc.fontSize(10).text(`${photosData.length} foto(s) adjunta(s) como evidencia del trabajo realizado:`);
+            doc.moveDown(0.3);
+            
+            photosData.forEach((photo, index) => {
+                if (index < 3 && photo.data) {
+                    try {
+                        const base64Data = photo.data.replace(/^data:image\/\w+;base64,/, '');
+                        const imageBuffer = Buffer.from(base64Data, 'base64');
+                        doc.image(imageBuffer, { width: 150, height: 100 });
+                        doc.text(`Foto ${index + 1}`, { continued: true });
+                        doc.moveDown(0.5);
+                    } catch (err) {
+                        doc.text(`Foto ${index + 1}: Imagen disponible`);
+                    }
+                }
+            });
+            if (photosData.length > 3) {
+                doc.text(`... y ${photosData.length - 3} foto(s) adicional(es)`);
+            }
+        } else {
+            doc.fontSize(10).text('No se adjuntaron fotos como evidencia');
+        }
+        doc.moveDown(0.5);
+        
+        // Código de verificación
+        doc.fontSize(8).fillColor('gray').text(`Código de verificación: ${permit.permit_number.split('-')[1]}`, { align: 'center' });
+        doc.moveDown(0.3);
+        
+        // Pie de página
+        doc.fontSize(8).fillColor('gray').text(
+            `Documento generado por Energy-Compliance - Sistema de Gestión de Permisos de Trabajo Seguro\n` +
+            `Este documento tiene validez legal y debe ser presentado en caso de auditoría.\n` +
+            `Fecha de emisión: ${new Date().toLocaleString('es-ES')}`,
+            { align: 'center', width: 500 }
+        );
+        
+        doc.end();
+    });
+}
+
+// ============ MIDDLEWARES ============
+const authenticate = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: 'No autorizado' });
+    const token = authHeader.split(' ')[1];
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const result = await pool.query(
+            'SELECT * FROM users WHERE id = $1 AND is_active = true',
+            [decoded.userId]
+        );
+        if (result.rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado' });
+        req.user = result.rows[0];
+        next();
+    } catch (error) {
+        return res.status(401).json({ error: 'Token inválido' });
+    }
+};
+
+const checkRole = (allowedRoles) => {
+    return (req, res, next) => {
+        if (!allowedRoles.includes(req.user.role)) {
+            return res.status(403).json({ error: 'Permiso denegado' });
+        }
+        next();
+    };
+};
+
+const checkSubscriptionLimits = async (req, res, next) => {
+    const planName = await getCompanyPlan(req.user.company_id);
+    const plan = PLANS[planName];
+    if (!plan) return next();
+    
+    if (req.path === '/users' && req.method === 'POST') {
+        const companyUsers = await getCompanyUsersCount(req.user.company_id);
+        if (companyUsers >= plan.max_users) {
+            return res.status(403).json({ error: `Límite de usuarios alcanzado. Tu plan ${plan.name} permite hasta ${plan.max_users} usuarios.` });
+        }
+    }
+    
+    if (req.path === '/permits' && req.method === 'POST') {
+        const monthlyCount = await getMonthlyPermitsCount(req.user.company_id);
+        if (monthlyCount >= plan.max_permits_per_month) {
+            return res.status(403).json({ error: `Límite de permisos alcanzado. Has usado ${monthlyCount} de ${plan.max_permits_per_month} este mes.` });
+        }
+    }
+    next();
+};
+
+// ============ RUTAS DE AUTENTICACIÓN ============
+app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const result = await pool.query(
+            'SELECT * FROM users WHERE email = $1 AND is_active = true',
+            [email]
+        );
+        if (result.rows.length === 0) return res.status(401).json({ error: 'Credenciales inválidas' });
+        const user = result.rows[0];
+        const isValid = bcrypt.compareSync(password, user.password_hash);
+        if (!isValid) return res.status(401).json({ error: 'Credenciales inválidas' });
+        
+        const companyResult = await pool.query(
+            'SELECT name, subscription_plan FROM companies WHERE id = $1',
+            [user.company_id]
+        );
+        const company = companyResult.rows[0];
+        
+        const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+        res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                full_name: user.full_name, 
+                role: user.role, 
+                company_id: user.company_id, 
+                company_name: company?.name || '',
+                subscription_plan: company?.subscription_plan || 'starter'
+            } 
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error en el servidor' });
+    }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+    const { company_name, email, password, full_name } = req.body;
+    
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        if (!email) {
+            return res.status(400).json({ error: 'El email es requerido' });
+        }
+        
+        const existingCompany = await client.query(
+            'SELECT id FROM companies WHERE email = $1',
+            [email]
+        );
+        
+        if (existingCompany.rows.length > 0) {
+            return res.status(400).json({ error: 'La empresa ya está registrada' });
+        }
+        
+        const hash = bcrypt.hashSync(password, 10);
+        
+        // ✅ Crear empresa con plan STARTER
+        const companyResult = await client.query(
+            `INSERT INTO companies (name, email, subscription_plan, max_users, max_permits_month, created_at) 
+             VALUES ($1, $2, 'starter', 10, 200, NOW()) 
+             RETURNING id`,
+            [company_name, email]
+        );
+        const companyId = companyResult.rows[0].id;
+        
+        const userResult = await client.query(
+            `INSERT INTO users (company_id, email, password_hash, full_name, role, is_active, created_at) 
+             VALUES ($1, $2, $3, $4, 'admin', true, NOW()) 
+             RETURNING id, email, full_name, role`,
+            [companyId, email, hash, full_name]
+        );
+        
+        await client.query('COMMIT');
+        
+        const newUser = userResult.rows[0];
+        const token = jwt.sign(
+            { userId: newUser.id, email: newUser.email, role: newUser.role }, 
+            JWT_SECRET, 
+            { expiresIn: JWT_EXPIRES_IN }
+        );
+        
+        res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                ...newUser, 
+                company_name, 
+                subscription_plan: 'starter' 
+            } 
+        });
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('DETALLE DEL ERROR:', error.message);
+        res.status(500).json({ error: 'Error de base de datos: ' + error.message });
+    } finally {
+        client.release();
+    }
+});
+
+// ============ RUTAS DE SUSCRIPCIÓN ============
+app.get('/api/subscription/plan', authenticate, async (req, res) => {
+    try {
+        const companyResult = await pool.query(
+            'SELECT subscription_plan, name FROM companies WHERE id = $1',
+            [req.user.company_id]
+        );
+        
+        const company = companyResult.rows[0];
+        const planName = company?.subscription_plan || 'starter';
+        const plan = PLANS[planName];
+        
+        const currentUsers = await getCompanyUsersCount(req.user.company_id);
+        const currentMonthPermits = await getMonthlyPermitsCount(req.user.company_id);
+        
+        res.json({ 
+            success: true, 
+            subscription: {
+                plan: planName,
+                plan_name: plan.name,
+                price: plan.price,
+                max_users: plan.max_users,
+                max_permits_per_month: plan.max_permits_per_month,
+                current_users: currentUsers,
+                current_month_permits: currentMonthPermits,
+                features: plan.features,
+                company_name: company.name
+            } 
+        });
+    } catch (error) {
+        console.error('Error fetching subscription:', error);
+        res.status(500).json({ error: 'Error al obtener suscripción' });
+    }
+});
+
+app.post('/api/subscription/upgrade', authenticate, checkRole(['admin']), async (req, res) => {
+    const { plan } = req.body;
+    
+    if (!PLANS[plan]) {
+        return res.status(400).json({ error: 'Plan no válido' });
+    }
+    
+    try {
+        await pool.query(
+            'UPDATE companies SET subscription_plan = $1 WHERE id = $2',
+            [plan, req.user.company_id]
+        );
+        
+        const planData = PLANS[plan];
+        
+        res.json({ 
+            success: true, 
+            message: `Plan actualizado a ${planData.name}`,
+            subscription: {
+                plan,
+                plan_name: planData.name,
+                price: planData.price,
+                max_users: planData.max_users,
+                max_permits_per_month: planData.max_permits_per_month
+            }
+        });
+    } catch (error) {
+        console.error('Error upgrading plan:', error);
+        res.status(500).json({ error: 'Error al actualizar el plan' });
+    }
+});
+
+// ============ RUTAS DE USUARIOS ============
+app.get('/api/users', authenticate, checkRole(['admin']), async (req, res) => {
+    const result = await pool.query(
+        'SELECT id, email, full_name, role, is_active FROM users WHERE company_id = $1',
+        [req.user.company_id]
+    );
+    res.json({ success: true, users: result.rows });
+});
+
+app.post('/api/users', authenticate, checkRole(['admin']), checkSubscriptionLimits, async (req, res) => {
+    const { email, password, full_name, role } = req.body;
+    try {
+        const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+        if (existingUser.rows.length > 0) {
+            return res.status(400).json({ error: 'El email ya está registrado' });
+        }
+        
+        const hash = bcrypt.hashSync(password, 10);
+        const result = await pool.query(
+            'INSERT INTO users (company_id, email, password_hash, full_name, role, is_active, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, email, full_name, role',
+            [req.user.company_id, email, hash, full_name, role, true]
+        );
+        res.json({ success: true, user: result.rows[0] });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error al crear usuario' });
+    }
+});
+
+// ============ RUTAS DE PERMISOS ============
+// server/server.js - Actualizar POST /api/permits
+app.post('/api/permits', authenticate, checkSubscriptionLimits, async (req, res) => {
+    try {
+        const { 
+            risk_type, 
+            safety_checks, 
+            technician_name, 
+            supervisor_name, 
+            work_location, 
+            work_description, 
+            technician_signature, 
+            photos,
+            locationData  // ✅ NUEVO: datos de ubicación del trabajo
+        } = req.body;
+        
+        const permitNumber = `PTC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const status = (req.user.role === 'admin' || req.user.role === 'supervisor') ? 'APPROVED' : 'PENDING';
+        
+        // ✅ Procesar ubicación del trabajo
+        let workLatitude = null;
+        let workLongitude = null;
+        let workRadius = 100;
+        let workLocationId = null;
+        let locationSource = 'manual';
+        
+        if (locationData) {
+            workLatitude = locationData.latitude;
+            workLongitude = locationData.longitude;
+            workRadius = locationData.radius || 100;
+            locationSource = locationData.source || 'gps';
+            
+            if (locationData.type === 'saved' && locationData.id) {
+                workLocationId = locationData.id;
+            }
+        }
+        
+        const result = await pool.query(
+            `INSERT INTO permits (
+                permit_number, risk_type, safety_checks, technician_name, supervisor_name, 
+                work_location, work_description, status, technician_signature, photos, photos_count, 
+                created_by, created_by_name, created_by_role, company_id, created_at,
+                work_latitude, work_longitude, work_radius, work_location_id, location_source
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(),
+                $16, $17, $18, $19, $20
+            ) RETURNING *`,
+            [
+                permitNumber, risk_type, JSON.stringify(safety_checks || {}),
+                technician_name, supervisor_name, work_location, work_description, status,
+                technician_signature ? JSON.stringify(technician_signature) : null,
+                JSON.stringify(photos || []), (photos || []).length,
+                req.user.id, req.user.full_name, req.user.role, req.user.company_id,
+                workLatitude, workLongitude, workRadius, workLocationId, locationSource
+            ]
+        );
+        
+        const newPermit = result.rows[0];
+        
+        // Generar PDF con firma del técnico
+        const pdfBuffer = await generateFullPermitPDF(newPermit);
+        const pdfBase64 = pdfBuffer.toString('base64');
+        
+        res.json({ 
+            success: true, 
+            permit: newPermit, 
+            safetyEvaluation: { isSafe: true }, 
+            pdf: pdfBase64,
+            requiresApproval: req.user.role === 'technician',
+            locationUsed: {
+                latitude: workLatitude,
+                longitude: workLongitude,
+                radius: workRadius,
+                source: locationSource
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error al crear permiso:', error);
+        res.status(500).json({ error: 'Error al crear permiso: ' + error.message });
+    }
+});
+
+
+// server/server.js - Actualizar GET /api/permits
+// server/server.js - GET /api/permits CORREGIDO
+// server/server.js - GET /api/permits CORREGIDO
+app.get('/api/permits', authenticate, async (req, res) => {
+    let query;
+    let params;
+    
+    if (req.user.role === 'technician') {
+        query = `
+            SELECT 
+                p.*
+            FROM permits p
+            WHERE p.created_by = $1 
+            ORDER BY p.created_at DESC
+        `;
+        params = [req.user.id];
+    } else {
+        query = `
+            SELECT 
+                p.*
+            FROM permits p
+            WHERE p.company_id = $1 
+            ORDER BY p.created_at DESC
+        `;
+        params = [req.user.company_id];
+    }
+    
+    try {
+        const result = await pool.query(query, params);
+        
+        // Procesar las firmas directamente desde las columnas de permits
+        const permits = result.rows.map(permit => {
+            // Procesar firma del técnico desde la columna technician_signature
+            let technician_signature = null;
+            if (permit.technician_signature) {
+                try {
+                    const sigData = typeof permit.technician_signature === 'string' 
+                        ? JSON.parse(permit.technician_signature) 
+                        : permit.technician_signature;
+                    
+                    technician_signature = sigData;
+                    
+                    // Log para depurar (opcional, puedes eliminarlo después)
+                    console.log(`✅ Permiso ${permit.id}: Firma técnica encontrada`, {
+                        tieneImagen: !!sigData.signatureData,
+                        tamanoImagen: sigData.signatureData?.length,
+                        ubicacion: !!sigData.location
+                    });
+                } catch (e) {
+                    console.error(`Error parsing technician signature for permit ${permit.id}:`, e);
+                }
+            }
+            
+            // Procesar firma del supervisor desde la columna supervisor_signature
+            let supervisor_signature = null;
+            if (permit.supervisor_signature) {
+                try {
+                    const sigData = typeof permit.supervisor_signature === 'string' 
+                        ? JSON.parse(permit.supervisor_signature) 
+                        : permit.supervisor_signature;
+                    
+                    supervisor_signature = sigData;
+                } catch (e) {
+                    console.error(`Error parsing supervisor signature for permit ${permit.id}:`, e);
+                }
+            }
+            
+            return {
+                ...permit,
+                technician_signature,
+                supervisor_signature
+            };
+        });
+        
+        console.log(`📊 Enviando ${permits.length} permisos al frontend`);
+        
+        res.json({ success: true, permits });
+    } catch (error) {
+        console.error('Error en GET /api/permits:', error);
+        res.status(500).json({ error: 'Error al obtener permisos', details: error.message });
+    }
+});
+
+// server/server.js - Modificar el reject para generar PDF
+
+// server/server.js - PUT /api/permits/:permitId/approve
+app.put('/api/permits/:permitId/approve', authenticate, checkRole(['admin', 'supervisor']), async (req, res) => {
+    const { permitId } = req.params;
+    const { action, supervisor_signature, rejection_reason } = req.body;
+    
+    console.log('========================================');
+    console.log('📝 APROBACIÓN RECIBIDA:', { permitId, action });
+    
+    try {
+        const permitResult = await pool.query(
+            'SELECT * FROM permits WHERE id = $1 AND company_id = $2',
+            [parseInt(permitId), req.user.company_id]
+        );
+        
+        if (permitResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Permiso no encontrado' });
+        }
+        
+        const permit = permitResult.rows[0];
+        if (permit.status !== 'PENDING') {
+            return res.status(400).json({ error: 'Ya fue procesado' });
+        }
+        
+        if (action === 'approve') {
+            // Actualizar el permiso con la firma del supervisor
+            const result = await pool.query(
+                `UPDATE permits 
+                 SET status = 'APPROVED', 
+                     approved_by = $1, 
+                     approved_by_name = $2, 
+                     approved_at = NOW(), 
+                     supervisor_signature = $3 
+                 WHERE id = $4 
+                 RETURNING *`,
+                [req.user.id, req.user.full_name, supervisor_signature ? JSON.stringify(supervisor_signature) : null, parseInt(permitId)]
+            );
+            
+            const approvedPermit = result.rows[0];
+            
+            // ✅ IMPORTANTE: Asegurar que las firmas estén correctamente formateadas
+            // La firma del técnico ya está en approvedPermit.technician_signature
+            // La firma del supervisor la acabamos de guardar
+            
+            // Procesar las firmas para el PDF
+            let technicianSig = null;
+            if (approvedPermit.technician_signature) {
+                technicianSig = typeof approvedPermit.technician_signature === 'string' 
+                    ? JSON.parse(approvedPermit.technician_signature) 
+                    : approvedPermit.technician_signature;
+            }
+            
+            let supervisorSig = supervisor_signature;
+            if (supervisorSig && typeof supervisorSig === 'string') {
+                supervisorSig = JSON.parse(supervisorSig);
+            }
+            
+            // Procesar las fotos
+            let photos = [];
+            if (approvedPermit.photos) {
+                photos = typeof approvedPermit.photos === 'string' 
+                    ? JSON.parse(approvedPermit.photos) 
+                    : approvedPermit.photos;
+            }
+            
+            // Crear un objeto completo con todos los datos para el PDF
+            const completePermitForPDF = {
+                ...approvedPermit,
+                technician_signature: technicianSig,
+                supervisor_signature: supervisorSig,
+                photos: photos
+            };
+            
+            console.log('📄 Generando PDF completo con:', {
+                tieneFirmaTecnico: !!technicianSig,
+                tieneFirmaSupervisor: !!supervisorSig,
+                tieneImagenTecnico: technicianSig?.signatureData ? 'SÍ' : 'NO',
+                tieneImagenSupervisor: supervisorSig?.signatureData ? 'SÍ' : 'NO',
+                cantidadFotos: photos?.length || 0
+            });
+            
+            // ✅ Usar la función que genera el PDF COMPLETO (con firmas y fotos)
+            const pdfBuffer = await generateFullPermitPDF(completePermitForPDF, supervisorSig);
+            const pdfBase64 = pdfBuffer.toString('base64');
+            
+            console.log('✅ PDF generado correctamente, tamaño:', pdfBase64.length);
+            
+            return res.json({ 
+                success: true, 
+                permit: approvedPermit,
+                pdf: pdfBase64
+            });
+            
+        } else if (action === 'reject') {
+            // Código de rechazo...
+            const result = await pool.query(
+                `UPDATE permits 
+                 SET status = 'REJECTED', 
+                     rejected_by = $1, 
+                     rejected_by_name = $2,
+                     rejected_at = NOW(), 
+                     rejection_reason = $3 
+                 WHERE id = $4 
+                 RETURNING *`,
+                [req.user.id, req.user.full_name, rejection_reason || 'Sin especificar', parseInt(permitId)]
+            );
+            
+            const rejectedPermit = result.rows[0];
+            
+            // Generar PDF de rechazo (puedes mantener tu función existente)
+            const pdfBuffer = await generateRejectionPDF(rejectedPermit);
+            const pdfBase64 = pdfBuffer.toString('base64');
+            
+            return res.json({ 
+                success: true, 
+                permit: rejectedPermit,
+                pdf: pdfBase64
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error en aprobación:', error);
+        return res.status(500).json({ error: 'Error al procesar la solicitud' });
+    }
+});
+
+// Función para generar PDF (si no existe)
+// server/server.js - Función COMPLETA de generación de PDF
+// server/server.js - Función COMPLETA de generación de PDF
+function generateFullPermitPDF(permit, supervisor_signature = null) {
+    return new Promise((resolve) => {
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        const buffers = [];
+        
+        doc.on('data', buffers.push.bind(buffers));
+        doc.on('end', () => {
+            const pdfData = Buffer.concat(buffers);
+            resolve(pdfData);
+        });
+        
+        // Encabezado
+        doc.fontSize(20).font('Helvetica-Bold').text('ENERGY-COMPLIANCE', { align: 'center' });
+        doc.moveDown(0.5);
+        doc.fontSize(14).font('Helvetica').text('PERMISO DE TRABAJO SEGURO', { align: 'center' });
+        doc.moveDown(0.5);
+        
+        // Línea separadora
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveDown(0.5);
+        
+        // Estado
+        if (permit.status === 'APPROVED') {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('green').text('✅ APROBADO - TRABAJO SEGURO', { align: 'center' });
+            doc.fillColor('black');
+        } else if (permit.status === 'REJECTED') {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('red').text('❌ RECHAZADO', { align: 'center' });
+            doc.fillColor('black');
+        } else {
+            doc.fontSize(12).font('Helvetica-Bold').fillColor('orange').text('⏳ PENDIENTE DE APROBACIÓN', { align: 'center' });
+            doc.fillColor('black');
+        }
+        doc.moveDown(0.5);
+        
+        // Datos del permiso
+        doc.fontSize(10).font('Helvetica-Bold').text(`Número: ${permit.permit_number}`);
+        doc.font('Helvetica').text(`Fecha: ${new Date(permit.created_at).toLocaleString('es-ES')}`);
+        doc.text(`Riesgo: ${permit.risk_type === 'ALTURA' ? 'Trabajo en Altura' : 
+                             permit.risk_type === 'ELECTRICO' ? 'Riesgo Eléctrico' :
+                             permit.risk_type === 'CONFINADO' ? 'Espacio Confinado' :
+                             permit.risk_type === 'CALIENTE' ? 'Trabajo en Caliente' : permit.risk_type}`);
+        doc.moveDown(0.5);
+        
+        // Datos del personal
+        doc.fontSize(12).font('Helvetica-Bold').text('DATOS DEL PERSONAL');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Técnico: ${permit.technician_name}`);
+        doc.text(`Supervisor: ${permit.supervisor_name}`);
+        if (permit.approved_by_name) {
+            doc.text(`Aprobado por: ${permit.approved_by_name}`);
+        }
+        doc.moveDown(0.5);
+        
+        // Ubicación y descripción
+        doc.fontSize(12).font('Helvetica-Bold').text('UBICACIÓN Y DESCRIPCIÓN');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Ubicación: ${permit.work_location}`);
+        doc.moveDown(0.3);
+        doc.text('Descripción:');
+        doc.text(permit.work_description, { width: 500, align: 'justify' });
+        doc.moveDown(0.5);
+        
+        // Lista de verificación
+        doc.fontSize(12).font('Helvetica-Bold').text('LISTA DE VERIFICACIÓN');
+        doc.moveDown(0.3);
+        
+        const checks = permit.safety_checks;
+        if (checks && typeof checks === 'object') {
+            Object.entries(checks).forEach(([key, value]) => {
+                const label = key.replace(/_/g, ' ').toUpperCase();
+                doc.fontSize(10).font('Helvetica').text(`${value ? '✓' : '✗'} ${label}: ${value ? 'SÍ' : 'NO'}`);
+            });
+        }
+        doc.moveDown(0.5);
+        
+        // Ubicación GPS del trabajo (Geocerca)
+        if (permit.work_latitude && permit.work_longitude) {
+            doc.fontSize(12).font('Helvetica-Bold').text('UBICACIÓN GPS DEL TRABAJO');
+            doc.moveDown(0.3);
+            doc.fontSize(10).font('Helvetica').text(`Coordenadas: ${parseFloat(permit.work_latitude).toFixed(6)}°, ${parseFloat(permit.work_longitude).toFixed(6)}°`);
+            doc.text(`Radio de tolerancia: ${permit.work_radius || 100} metros`);
+            doc.moveDown(0.5);
+        }
+        
+        // FIRMA DEL TÉCNICO
+        doc.fontSize(12).font('Helvetica-Bold').text('FIRMA DEL TÉCNICO');
+        doc.moveDown(0.3);
+        
+        // Procesar firma del técnico
+        let technicianSig = permit.technician_signature;
+        if (technicianSig && typeof technicianSig === 'string') {
+            try {
+                technicianSig = JSON.parse(technicianSig);
+            } catch (e) {
+                console.error('Error parsing technician signature:', e);
+                technicianSig = null;
+            }
+        }
+        
+        if (technicianSig) {
+            doc.fontSize(10).font('Helvetica').text(`Firmado por: ${technicianSig.signerName || 'Técnico'}`);
+            doc.text(`Fecha: ${technicianSig.timestamp ? new Date(technicianSig.timestamp).toLocaleString('es-ES') : 'Fecha no disponible'}`);
+            
+            // Ubicación de la firma
+            if (technicianSig.location) {
+                doc.text(`Ubicación GPS al firmar: ${technicianSig.location.latitude?.toFixed(6)}, ${technicianSig.location.longitude?.toFixed(6)}`);
+                if (technicianSig.location.accuracy) {
+                    doc.text(`Precisión: ±${Math.round(technicianSig.location.accuracy)}m`);
+                }
+            }
+            
+            // Validación de geocerca
+            if (technicianSig.is_within_geofence !== undefined) {
+                const statusText = technicianSig.is_within_geofence ? '✅ Dentro del área de trabajo' : '❌ Fuera del área de trabajo';
+                doc.text(statusText);
+                if (technicianSig.distance_to_work_meters) {
+                    doc.text(`Distancia al centro: ${Math.round(technicianSig.distance_to_work_meters)}m`);
+                }
+            }
+            
+            // Imagen de la firma
+            if (technicianSig.signatureData) {
+                try {
+                    const base64Data = technicianSig.signatureData.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    doc.image(imageBuffer, { width: 200, height: 80 });
+                } catch (err) {
+                    doc.text('(Imagen de firma disponible)');
+                }
+            }
+        } else {
+            doc.fontSize(10).text('Pendiente de firma');
+        }
+        doc.moveDown(0.5);
+        
+        // FIRMA DEL SUPERVISOR
+        doc.fontSize(12).font('Helvetica-Bold').text('FIRMA DEL SUPERVISOR');
+        doc.moveDown(0.3);
+        
+        // Procesar firma del supervisor
+        let supervisorSig = supervisor_signature || permit.supervisor_signature;
+        if (supervisorSig && typeof supervisorSig === 'string') {
+            try {
+                supervisorSig = JSON.parse(supervisorSig);
+            } catch (e) {
+                console.error('Error parsing supervisor signature:', e);
+                supervisorSig = null;
+            }
+        }
+        
+        if (supervisorSig) {
+            doc.fontSize(10).font('Helvetica').text(`Firmado por: ${supervisorSig.signerName || 'Supervisor'}`);
+            doc.text(`Fecha: ${supervisorSig.timestamp ? new Date(supervisorSig.timestamp).toLocaleString('es-ES') : 'Fecha no disponible'}`);
+            
+            // Ubicación de la firma
+            if (supervisorSig.location) {
+                doc.text(`Ubicación GPS al firmar: ${supervisorSig.location.latitude?.toFixed(6)}, ${supervisorSig.location.longitude?.toFixed(6)}`);
+                if (supervisorSig.location.accuracy) {
+                    doc.text(`Precisión: ±${Math.round(supervisorSig.location.accuracy)}m`);
+                }
+            }
+            
+            // Validación de geocerca
+            if (supervisorSig.is_within_geofence !== undefined) {
+                const statusText = supervisorSig.is_within_geofence ? '✅ Dentro del área de trabajo' : '❌ Fuera del área de trabajo';
+                doc.text(statusText);
+                if (supervisorSig.distance_to_work_meters) {
+                    doc.text(`Distancia al centro: ${Math.round(supervisorSig.distance_to_work_meters)}m`);
+                }
+            }
+            
+            // Imagen de la firma
+            if (supervisorSig.signatureData) {
+                try {
+                    const base64Data = supervisorSig.signatureData.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    doc.image(imageBuffer, { width: 200, height: 80 });
+                } catch (err) {
+                    doc.text('(Imagen de firma disponible)');
+                }
+            }
+        } else if (permit.status === 'PENDING') {
+            doc.fontSize(10).text('Pendiente de aprobación');
+        } else {
+            doc.fontSize(10).text('No firmado');
+        }
+        doc.moveDown(0.5);
+        
+        // EVIDENCIA FOTOGRÁFICA
+        doc.fontSize(12).font('Helvetica-Bold').text('EVIDENCIA FOTOGRÁFICA');
+        doc.moveDown(0.3);
+        
+        // Procesar fotos
+        let photosData = permit.photos;
+        if (photosData && typeof photosData === 'string') {
+            try {
+                photosData = JSON.parse(photosData);
+            } catch (e) {
+                console.error('Error parsing photos:', e);
+                photosData = [];
+            }
+        }
+        
+        if (photosData && Array.isArray(photosData) && photosData.length > 0) {
+            doc.fontSize(10).text(`${photosData.length} foto(s) adjunta(s) como evidencia del trabajo realizado:`);
+            doc.moveDown(0.3);
+            
+            photosData.forEach((photo, index) => {
+                if (index < 3 && photo.data) {
+                    try {
+                        const base64Data = photo.data.replace(/^data:image\/\w+;base64,/, '');
+                        const imageBuffer = Buffer.from(base64Data, 'base64');
+                        doc.image(imageBuffer, { width: 150, height: 100 });
+                        doc.text(`Foto ${index + 1}`, { continued: true });
+                        doc.moveDown(0.5);
+                    } catch (err) {
+                        doc.text(`Foto ${index + 1}: Imagen disponible`);
+                    }
+                }
+            });
+            if (photosData.length > 3) {
+                doc.text(`... y ${photosData.length - 3} foto(s) adicional(es)`);
+            }
+        } else {
+            doc.fontSize(10).text('No se adjuntaron fotos como evidencia');
+        }
+        doc.moveDown(0.5);
+        
+        // Código de verificación
+        doc.fontSize(8).fillColor('gray').text(`Código de verificación: ${permit.permit_number.split('-')[1]}`, { align: 'center' });
+        doc.moveDown(0.3);
+        
+        // Pie de página
+        doc.fontSize(8).fillColor('gray').text(
+            `Documento generado por Energy-Compliance - Sistema de Gestión de Permisos de Trabajo Seguro\n` +
+            `Este documento tiene validez legal y debe ser presentado en caso de auditoría.\n` +
+            `Fecha de emisión: ${new Date().toLocaleString('es-ES')}`,
+            { align: 'center', width: 500 }
+        );
+        
+        doc.end();
+    });
+}
+
+// ✅ NUEVA FUNCIÓN: Generar PDF de rechazo
+function generateRejectionPDF(permit) {
+    return new Promise((resolve) => {
+        const doc = new PDFDocument({ margin: 50, size: 'A4' });
+        const buffers = [];
+        
+        doc.on('data', buffers.push.bind(buffers));
+        doc.on('end', () => {
+            const pdfData = Buffer.concat(buffers);
+            resolve(pdfData);
+        });
+        
+        // Encabezado
+        doc.fontSize(20).font('Helvetica-Bold').text('ENERGY-COMPLIANCE', { align: 'center' });
+        doc.moveDown(0.5);
+        doc.fontSize(14).font('Helvetica').text('PERMISO DE TRABAJO SEGURO - RECHAZADO', { align: 'center' });
+        doc.moveDown(0.5);
+        
+        // Línea separadora
+        doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveDown(0.5);
+        
+        // Estado RECHAZADO en rojo
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('red').text('❌ PERMISO RECHAZADO', { align: 'center' });
+        doc.fillColor('black');
+        doc.moveDown(0.5);
+        
+        // Datos del permiso
+        doc.fontSize(10).font('Helvetica-Bold').text(`Número: ${permit.permit_number}`);
+        doc.font('Helvetica').text(`Fecha de creación: ${new Date(permit.created_at).toLocaleString('es-ES')}`);
+        doc.text(`Riesgo: ${permit.risk_type === 'ALTURA' ? 'Trabajo en Altura' : 
+                                 permit.risk_type === 'ELECTRICO' ? 'Riesgo Eléctrico' :
+                                 permit.risk_type === 'CONFINADO' ? 'Espacio Confinado' :
+                                 permit.risk_type === 'CALIENTE' ? 'Trabajo en Caliente' : permit.risk_type}`);
+        doc.moveDown(0.5);
+        
+        // Datos del personal
+        doc.fontSize(12).font('Helvetica-Bold').text('DATOS DEL PERSONAL');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Técnico: ${permit.technician_name}`);
+        doc.text(`Supervisor: ${permit.supervisor_name}`);
+        if (permit.rejected_by_name) {
+            doc.text(`Rechazado por: ${permit.rejected_by_name}`);
+            doc.text(`Fecha de rechazo: ${new Date(permit.rejected_at).toLocaleString('es-ES')}`);
+        }
+        doc.moveDown(0.5);
+        
+        // Ubicación y descripción
+        doc.fontSize(12).font('Helvetica-Bold').text('UBICACIÓN Y DESCRIPCIÓN');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(`Ubicación: ${permit.work_location}`);
+        doc.moveDown(0.3);
+        doc.text('Descripción:');
+        doc.text(permit.work_description, { width: 500, align: 'justify' });
+        doc.moveDown(0.5);
+        
+        // ✅ MOTIVO DEL RECHAZO - DESTACADO
+        doc.fontSize(12).font('Helvetica-Bold').fillColor('red').text('MOTIVO DEL RECHAZO');
+        doc.fillColor('black');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica').text(permit.rejection_reason || 'No se especificó motivo', {
+            width: 500,
+            align: 'left',
+            continued: false
+        });
+        doc.moveDown(0.5);
+        
+        // Lista de verificación
+        doc.fontSize(12).font('Helvetica-Bold').text('LISTA DE VERIFICACIÓN');
+        doc.moveDown(0.3);
+        
+        const checks = permit.safety_checks;
+        if (checks && typeof checks === 'object') {
+            Object.entries(checks).forEach(([key, value]) => {
+                const label = key.replace(/_/g, ' ').toUpperCase();
+                doc.fontSize(10).font('Helvetica').text(`${value ? '✓' : '✗'} ${label}: ${value ? 'SÍ' : 'NO'}`);
+            });
+        }
+        doc.moveDown(0.5);
+        
+        // FIRMA DEL TÉCNICO
+        doc.fontSize(12).font('Helvetica-Bold').text('FIRMA DEL TÉCNICO');
+        doc.moveDown(0.3);
+        
+        if (permit.technician_signature) {
+            const signature = permit.technician_signature;
+            doc.fontSize(10).font('Helvetica').text(`Firmado por: ${signature.signerName || 'Técnico'}`);
+            doc.text(`Fecha: ${new Date(signature.timestamp).toLocaleString('es-ES')}`);
+            if (signature.signatureData) {
+                try {
+                    const base64Data = signature.signatureData.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    doc.image(imageBuffer, { width: 200, height: 80 });
+                } catch (err) {
+                    doc.text('(Imagen de firma disponible)');
+                }
+            }
+        } else {
+            doc.fontSize(10).text('Pendiente de firma');
+        }
+        doc.moveDown(0.5);
+        
+        // Nota de rechazo
+        doc.fontSize(8).fillColor('gray').text(
+            `Este permiso ha sido RECHAZADO y no puede ser utilizado para realizar el trabajo.\n` +
+            `Se debe generar un nuevo permiso con las correcciones necesarias.\n` +
+            `Documento generado por Energy-Compliance - Sistema de Gestión de Permisos de Trabajo Seguro\n` +
+            `Fecha de emisión: ${new Date().toLocaleString('es-ES')}`,
+            { align: 'center', width: 500 }
+        );
+        
+        doc.end();
+    });
+}
+
+app.get('/api/dashboard/stats', authenticate, async (req, res) => {
+    let query;
+    let params;
+    
+    if (req.user.role === 'technician') {
+        query = 'SELECT * FROM permits WHERE created_by = $1';
+        params = [req.user.id];
+    } else {
+        query = 'SELECT * FROM permits WHERE company_id = $1';
+        params = [req.user.company_id];
+    }
+    
+    const result = await pool.query(query, params);
+    const permits = result.rows;
+    
+    res.json({ success: true, data: { 
+        total_permits: permits.length, 
+        approved_permits: permits.filter(p => p.status === 'APPROVED').length, 
+        rejected_permits: permits.filter(p => p.status === 'REJECTED').length, 
+        pending_permits: permits.filter(p => p.status === 'PENDING').length 
+    } });
+});
+
+app.get('/api/health', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT COUNT(*) FROM permits');
+        res.json({ status: 'OK', message: 'Energy-Compliance API running', permits: parseInt(result.rows[0].count) });
+    } catch (error) {
+        res.json({ status: 'OK', message: 'Energy-Compliance API running - DB error', error: error.message });
+    }
+});
+
+// server/server.js - Agregar endpoint de validación de geocerca
+
+app.post('/api/signatures/validate', authenticate, async (req, res) => {
+    const { permitId, location } = req.body;
+    
+    if (!permitId || !location) {
+        return res.status(400).json({ error: 'Permiso y ubicación son requeridos' });
+    }
+    
+    try {
+        // Usar la función de validación SQL
+        const result = await pool.query(
+            `SELECT * FROM check_geofence($1, $2, $3, $4)`,
+            [permitId, location.latitude, location.longitude, location.accuracy || 0]
+        );
+        
+        const validation = result.rows[0];
+        
+        res.json({ 
+            success: true, 
+            validation: {
+                within_geofence: validation.within_geofence,
+                distance_meters: validation.distance_meters,
+                effective_radius: validation.effective_radius,
+                work_radius: validation.work_radius,
+                work_latitude: validation.work_latitude,
+                work_longitude: validation.work_longitude,
+                message: validation.message
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error en validación de geocerca:', error);
+        res.status(500).json({ error: 'Error al validar ubicación' });
+    }
+});
+
+// server/server.js - Agregar después de las rutas de suscripción
+
+// ============ RUTAS DE SITIOS DE TRABAJO ============
+app.get('/api/work-locations', authenticate, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, name, description, latitude, longitude, default_radius, address, is_active, created_at
+             FROM work_locations 
+             WHERE company_id = $1 AND is_active = true
+             ORDER BY name`,
+            [req.user.company_id]
+        );
+        res.json({ success: true, locations: result.rows });
+    } catch (error) {
+        console.error('Error fetching work locations:', error);
+        res.status(500).json({ error: 'Error al cargar sitios de trabajo' });
+    }
+});
+
+app.post('/api/work-locations', authenticate, async (req, res) => {
+    const { name, description, latitude, longitude, default_radius, address } = req.body;
+    
+    if (!name || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Nombre y coordenadas son requeridos' });
+    }
+    
+    try {
+        const result = await pool.query(
+            `INSERT INTO work_locations (company_id, name, description, latitude, longitude, default_radius, address, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING *`,
+            [req.user.company_id, name, description, latitude, longitude, default_radius || 100, address, req.user.id]
+        );
+        res.json({ success: true, location: result.rows[0] });
+    } catch (error) {
+        console.error('Error creating work location:', error);
+        res.status(500).json({ error: 'Error al crear sitio de trabajo' });
+    }
+});
+
+// ✅ Exportar app para Vercel
+module.exports = app;
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor de Energy-Compliance activo en el puerto ${PORT}`);
+    console.log(`📋 Planes disponibles: Starter (10 usuarios/200 permisos), Business (50/2000), Enterprise (Ilimitado)`);
+});
+
+//signaturepad.jsx//
+
+// client/src/components/common/SignaturePad.jsx
+import React, { useRef, useState, useEffect } from 'react';
+import { PenTool, RotateCcw, Check, MapPin, Loader2, AlertCircle, Navigation } from 'lucide-react';
+import geofenceService from '../../services/geofenceService';
+
+const SignaturePad = ({ onSave, signerName, signerType, disabled, workLocationCoords, workRadius = 100, permitId }) => {
+    const canvasRef = useRef(null);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const [signatureData, setSignatureData] = useState(null);
+    const [location, setLocation] = useState(null);
+    const [gettingLocation, setGettingLocation] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [validation, setValidation] = useState(null);
+    const [validating, setValidating] = useState(false);
+    const [locationError, setLocationError] = useState(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        ctx.strokeStyle = '#1f2937';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        const resizeCanvas = () => {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = 150;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#1f2937';
+            ctx.lineWidth = 2;
+        };
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        return () => window.removeEventListener('resize', resizeCanvas);
+    }, []);
+
+    const getLocation = () => {
+        setGettingLocation(true);
+        setLocationError(null);
+        
+        if (!navigator.geolocation) {
+            setLocationError('GPS no disponible en este dispositivo');
+            setGettingLocation(false);
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                setLocation({
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude,
+                    accuracy: position.coords.accuracy,
+                    timestamp: position.timestamp
+                });
+                setGettingLocation(false);
+            },
+            (error) => {
+                let errorMsg = '';
+                switch(error.code) {
+                    case error.PERMISSION_DENIED:
+                        errorMsg = 'Permiso de ubicación denegado. Es obligatorio para firmar.';
+                        break;
+                    case error.POSITION_UNAVAILABLE:
+                        errorMsg = 'Ubicación no disponible. Verifica tu GPS.';
+                        break;
+                    case error.TIMEOUT:
+                        errorMsg = 'Tiempo de espera agotado. Reintenta.';
+                        break;
+                    default:
+                        errorMsg = 'Error al obtener ubicación.';
+                }
+                setLocationError(errorMsg);
+                setGettingLocation(false);
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 0
+            }
+        );
+    };
+
+    const validateLocationWithServer = async () => {
+        if (!location) return false;
+        
+        if (!workLocationCoords || !workLocationCoords.latitude) {
+            setValidation({
+                valid: true,  // ← Asegurar que existe 'valid'
+                within_geofence: true,  // ← También agregar para compatibilidad
+                distance: 0,
+                distance_meters: 0,
+                message: '⚠️ Sin geocerca configurada - no se valida ubicación',
+                canSign: true
+            });
+            return true;
+        }
+        
+        setValidating(true);
+        
+        try {
+            const result = await geofenceService.validateLocation(permitId, location);
+            
+            if (result.success && result.validation) {
+                const validationData = result.validation;
+                setValidation({
+                    valid: validationData.within_geofence,  // ← 'valid' para consistencia
+                    within_geofence: validationData.within_geofence,
+                    distance: validationData.distance_meters,
+                    distance_meters: validationData.distance_meters,
+                    message: validationData.message,
+                    canSign: validationData.within_geofence
+                });
+                return validationData.within_geofence;
+            } else {
+                // Fallback a cálculo local
+                const distance = geofenceService.calculateDistance(
+                    location.latitude,
+                    location.longitude,
+                    workLocationCoords.latitude,
+                    workLocationCoords.longitude
+                );
+                const effectiveRadius = workRadius + (location.accuracy || 0);
+                const isValid = distance <= effectiveRadius;
+                
+                setValidation({
+                    valid: isValid,  // ← 'valid' para consistencia
+                    within_geofence: isValid,
+                    distance: distance,
+                    distance_meters: distance,
+                    message: isValid 
+                        ? `✅ Dentro del área (${Math.round(distance)}m, tolerancia ${Math.round(effectiveRadius)}m)`
+                        : `❌ Fuera del área (${Math.round(distance)}m, máximo permitido ${Math.round(effectiveRadius)}m)`,
+                    canSign: isValid
+                });
+                return isValid;
+            }
+        } catch (error) {
+            console.error('Error validando geocerca:', error);
+            // Fallback a cálculo local
+            const distance = geofenceService.calculateDistance(
+                location.latitude,
+                location.longitude,
+                workLocationCoords.latitude,
+                workLocationCoords.longitude
+            );
+            const effectiveRadius = workRadius + (location.accuracy || 0);
+            const isValid = distance <= effectiveRadius;
+            
+            setValidation({
+                valid: isValid,  // ← 'valid' para consistencia
+                within_geofence: isValid,
+                distance: distance,
+                distance_meters: distance,
+                message: isValid 
+                    ? `✅ Dentro del área (${Math.round(distance)}m, tolerancia ${Math.round(effectiveRadius)}m)`
+                    : `❌ Fuera del área (${Math.round(distance)}m, máximo permitido ${Math.round(effectiveRadius)}m)`,
+                canSign: isValid
+            });
+            return isValid;
+        } finally {
+            setValidating(false);
+        }
+    };
+
+    const startDrawing = (e) => {
+        setIsDrawing(true);
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const point = getCoordinates(e);
+        ctx.beginPath();
+        ctx.moveTo(point.x, point.y);
+    };
+
+    const draw = (e) => {
+        if (!isDrawing) return;
+        e.preventDefault();
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const point = getCoordinates(e);
+        ctx.lineTo(point.x, point.y);
+        ctx.stroke();
+    };
+
+    const stopDrawing = () => {
+        setIsDrawing(false);
+        const canvas = canvasRef.current;
+        const signature = canvas.toDataURL();
+        setSignatureData(signature);
+    };
+
+    const getCoordinates = (e) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        let clientX, clientY;
+        
+        if (e.touches) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+        
+        return {
+            x: Math.max(0, Math.min(canvas.width, (clientX - rect.left) * scaleX)),
+            y: Math.max(0, Math.min(canvas.height, (clientY - rect.top) * scaleY))
+        };
+    };
+
+    const clearSignature = () => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        setSignatureData(null);
+        setSaved(false);
+        setValidation(null);
+    };
+
+    const handleSave = async () => {
+        if (!signatureData) {
+            alert('Por favor, firma antes de continuar');
+            return;
+        }
+        
+        if (!location && !locationError) {
+            await getLocation();
+            setTimeout(async () => {
+                if (location) {
+                    const isValid = await validateLocationWithServer();
+                    if (isValid) {
+                        saveSignature();
+                    } else {
+                        alert(validation?.message || 'No puedes firmar desde esta ubicación');
+                    }
+                } else {
+                    alert('Es necesario obtener la ubicación GPS para firmar');
+                }
+            }, 2000);
+        } else if (location) {
+            const isValid = await validateLocationWithServer();
+            if (isValid) {
+                saveSignature();
+            } else {
+                alert(validation?.message || 'No puedes firmar desde esta ubicación');
+            }
+        } else {
+            alert('Error de ubicación: ' + locationError);
+        }
+    };
+
+    const saveSignature = () => {
+        // Asegurar que validation tiene los valores correctos
+        let isWithinGeofence = null;
+        let distanceToWork = null;
+        
+        if (validation) {
+            // validation puede tener 'valid' o 'within_geofence' dependiendo de la fuente
+            isWithinGeofence = validation.valid !== undefined ? validation.valid : 
+                              (validation.within_geofence !== undefined ? validation.within_geofence : null);
+            distanceToWork = validation.distance !== undefined ? validation.distance :
+                            (validation.distance_meters !== undefined ? validation.distance_meters : null);
+        }
+        
+        const signaturePayload = {
+            signatureData: signatureData,
+            signerName: signerName,
+            signerType: signerType,
+            timestamp: new Date().toISOString(),
+            location: location || null,
+            is_within_geofence: isWithinGeofence,
+            distance_to_work_meters: distanceToWork
+        };
+        
+        // Log mejorado
+        console.log('💾 Guardando firma:', {
+            tieneImagen: !!signatureData,
+            tamanoImagen: signatureData?.length,
+            ubicacion: !!location,
+            dentroGeocerca: isWithinGeofence,
+            distancia: distanceToWork,
+            validationCompleta: validation
+        });
+        
+        onSave(signaturePayload);
+        setSaved(true);
+    };
+
+    return (
+        <div className="space-y-4">
+            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        <PenTool className="w-5 h-5 text-blue-600" />
+                        Firma de {signerType === 'TECHNICIAN' ? 'Técnico de Campo' : 'Supervisor de Seguridad'}
+                    </h3>
+                    {saved && (
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+                            ✓ Firmado
+                        </span>
+                    )}
+                </div>
+                
+                {/* Área de firma */}
+                <div className="border-2 border-gray-300 rounded-lg bg-white overflow-hidden">
+                    <canvas
+                        ref={canvasRef}
+                        style={{ width: '100%', height: '150px', touchAction: 'none' }}
+                        onMouseDown={startDrawing}
+                        onMouseMove={draw}
+                        onMouseUp={stopDrawing}
+                        onMouseLeave={stopDrawing}
+                        onTouchStart={startDrawing}
+                        onTouchMove={draw}
+                        onTouchEnd={stopDrawing}
+                    />
+                </div>
+                
+                {/* Botones */}
+                <div className="flex gap-2 mt-3">
+                    <button
+                        type="button"
+                        onClick={clearSignature}
+                        disabled={saved}
+                        className="flex-1 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <RotateCcw className="w-4 h-4" />
+                        Limpiar
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSave}
+                        disabled={disabled || saved || validating}
+                        className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {validating ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                            <Check className="w-4 h-4" />
+                        )}
+                        {saved ? 'Firmado' : 'Firmar'}
+                    </button>
+                </div>
+                
+                {/* Estado de ubicación */}
+                <div className="mt-3 text-sm">
+                    {gettingLocation && (
+                        <div className="flex items-center gap-2 text-yellow-600">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Obteniendo ubicación GPS...</span>
+                        </div>
+                    )}
+                    {location && !gettingLocation && (
+                        <div className="flex items-center gap-2 text-green-600">
+                            <MapPin className="w-4 h-4" />
+                            <span>
+                                Ubicación: {location.latitude.toFixed(6)}°, {location.longitude.toFixed(6)}°
+                                {location.accuracy && ` (±${Math.round(location.accuracy)}m)`}
+                            </span>
+                        </div>
+                    )}
+                    {validating && (
+                        <div className="flex items-center gap-2 text-blue-600 mt-2">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Validando ubicación con el servidor...</span>
+                        </div>
+                    )}
+                    {validation && !validating && !gettingLocation && (
+                        <div className={`mt-2 p-2 rounded ${validation.valid ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                            {validation.message}
+                        </div>
+                    )}
+                    {locationError && !gettingLocation && (
+                        <div className="flex items-center gap-2 text-red-600">
+                            <AlertCircle className="w-4 h-4" />
+                            <span>{locationError}</span>
+                            <button
+                                onClick={getLocation}
+                                className="ml-2 text-blue-600 underline"
+                            >
+                                Reintentar
+                            </button>
+                        </div>
+                    )}
+                </div>
+                
+                {/* Indicador de geocerca configurada */}
+                {workLocationCoords && workLocationCoords.latitude && (
+                    <div className="mt-2 text-xs text-gray-500 flex items-center gap-1">
+                        <Navigation className="w-3 h-3" />
+                        <span>Área de trabajo configurada: radio {workRadius}m</span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default SignaturePad;
+
+
+//dashboard.jsx//
+
+// client/src/components/dashboard/Dashboard.jsx
+import React, { useState, useEffect } from 'react';
+import { 
+    BarChart3, CheckCircle, XCircle, FileText, RefreshCw, Calendar, 
+    TrendingUp, Camera, PenTool, MapPin, Image, Clock, UserCheck, UserX,
+    Navigation, AlertCircle, Globe
+} from 'lucide-react';
+import SignaturePad from '../common/SignaturePad';
+
+const API_BASE_URL = 'https://petrolink-backend-production.up.railway.app/api';
+
+const Dashboard = ({ token, userRole, currentUser }) => {
+  const [stats, setStats] = useState(null);
+  const [permits, setPermits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPermit, setSelectedPermit] = useState(null);
+  const [expandedPhoto, setExpandedPhoto] = useState(null);
+  const [processingAction, setProcessingAction] = useState(false);
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [selectedPermitForAction, setSelectedPermitForAction] = useState(null);
+  const [supervisorSignature, setSupervisorSignature] = useState(null);
+
+  const fetchData = async () => {
+    if (!token) return;
+    
+    setLoading(true);
+    try {
+      const statsResponse = await fetch(`${API_BASE_URL}/dashboard/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const statsData = await statsResponse.json();
+      if (statsData.success) {
+        setStats(statsData.data);
+      }
+
+      const permitsResponse = await fetch(`${API_BASE_URL}/permits`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const permitsData = await permitsResponse.json();
+      if (permitsData.success) {
+        setPermits(permitsData.permits || []);
+      }
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (token) {
+      fetchData();
+    }
+  }, [token]);
+
+  // Función para renderizar firmas con ubicación y validación
+  const renderSignature = (signature, title, icon) => {
+    if (!signature) return null;
+    
+    // Verificar si signature es un objeto válido
+    let signatureObj = signature;
+    if (typeof signature === 'string') {
+      try {
+        signatureObj = JSON.parse(signature);
+      } catch (e) {
+        console.error('Error parsing signature:', e);
+        return null;
+      }
+    }
+    
+    return (
+      <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+        <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
+          {icon}
+          {title}
+        </h4>
+        <div className="border rounded-lg p-3 bg-white">
+          <p className="text-sm font-medium">{signatureObj.signerName || 'No especificado'}</p>
+          <p className="text-xs text-gray-500 mt-1">
+            {signatureObj.timestamp ? formatDate(signatureObj.timestamp) : 'Fecha no disponible'}
+          </p>
+          
+          {/* Ubicación de la firma */}
+          {signatureObj.location && (
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                <MapPin className="w-3 h-3" />
+                Ubicación al firmar:
+              </p>
+              <p className="text-xs font-mono">
+                {signatureObj.location.latitude?.toFixed(6)}, {signatureObj.location.longitude?.toFixed(6)}
+              </p>
+              {signatureObj.location.accuracy && (
+                <p className="text-xs text-gray-400">
+                  Precisión: ±{Math.round(signatureObj.location.accuracy)}m
+                </p>
+              )}
+              
+              {/* Validación de geocerca */}
+              {signatureObj.is_within_geofence !== undefined && (
+                <div className={`mt-2 text-xs ${signatureObj.is_within_geofence ? 'text-green-600' : 'text-red-600'}`}>
+                  {signatureObj.is_within_geofence ? (
+                    <div className="flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" />
+                      <span>✅ Dentro del área de trabajo</span>
+                      {signatureObj.distance_to_work_meters && (
+                        <span className="text-gray-500 ml-1">
+                          (a {Math.round(signatureObj.distance_to_work_meters)}m)
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <XCircle className="w-3 h-3" />
+                      <span>❌ Fuera del área de trabajo</span>
+                      {signatureObj.distance_to_work_meters && (
+                        <span className="text-gray-500 ml-1">
+                          (a {Math.round(signatureObj.distance_to_work_meters)}m)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Imagen de la firma */}
+          {signatureObj.signatureData && (
+            <div className="mt-2 flex justify-center">
+              <img 
+                src={signatureObj.signatureData} 
+                alt={`Firma ${title}`} 
+                className="h-16 object-contain border rounded p-1 bg-gray-50"
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  e.target.parentElement.innerHTML += '<p class="text-xs text-gray-400">(Imagen de firma no disponible)</p>';
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const handleApprove = async () => {
+    if (!supervisorSignature) {
+      alert('Por favor, firma para aprobar el permiso');
+      return;
+    }
+    
+    setProcessingAction(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/permits/${selectedPermitForAction}/approve`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ 
+          action: 'approve',
+          supervisor_signature: supervisorSignature
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        if (data.pdf) {
+          const link = document.createElement('a');
+          link.href = 'data:application/pdf;base64,' + data.pdf;
+          link.download = 'permiso-aprobado-' + data.permit.permit_number + '.pdf';
+          link.click();
+        }
+        fetchData();
+        setShowApproveModal(false);
+        setSupervisorSignature(null);
+        setSelectedPermitForAction(null);
+        alert('Permiso aprobado correctamente');
+      } else {
+        alert(data.error || 'Error al aprobar');
+      }
+    } catch (error) {
+      alert('Error al aprobar el permiso');
+    } finally {
+      setProcessingAction(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectionReason.trim()) {
+        alert('Por favor ingresa un motivo de rechazo');
+        return;
+    }
+    
+    setProcessingAction(true);
+    try {
+        const response = await fetch(`${API_BASE_URL}/permits/${selectedPermitForAction}/approve`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ 
+                action: 'reject',
+                rejection_reason: rejectionReason 
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            // ✅ DESCARGAR PDF DE RECHAZO
+            if (data.pdf) {
+                const link = document.createElement('a');
+                link.href = 'data:application/pdf;base64,' + data.pdf;
+                link.download = 'permiso-rechazado-' + data.permit.permit_number + '.pdf';
+                link.click();
+            }
+            fetchData();
+            setShowRejectModal(false);
+            setRejectionReason('');
+            setSelectedPermitForAction(null);
+            alert('Permiso rechazado');
+        } else {
+            alert(data.error || 'Error al rechazar');
+        }
+    } catch (error) {
+        alert('Error al rechazar el permiso');
+    } finally {
+        setProcessingAction(false);
+    }
+  };
+
+  const getRiskIcon = (riskType) => {
+    const icons = { ALTURA: '📈', ELECTRICO: '⚡', CONFINADO: '🚪', CALIENTE: '🔥' };
+    return icons[riskType] || '📋';
+  };
+
+  const getRiskLabel = (riskType) => {
+    const labels = { 
+      ALTURA: 'Trabajo en Altura', 
+      ELECTRICO: 'Riesgo Eléctrico', 
+      CONFINADO: 'Espacio Confinado', 
+      CALIENTE: 'Trabajo en Caliente' 
+    };
+    return labels[riskType] || riskType;
+  };
+
+  const getRiskColor = (riskType) => {
+    const colors = {
+      ALTURA: 'bg-orange-100 text-orange-800',
+      ELECTRICO: 'bg-yellow-100 text-yellow-800',
+      CONFINADO: 'bg-blue-100 text-blue-800',
+      CALIENTE: 'bg-red-100 text-red-800'
+    };
+    return colors[riskType] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getStatusColor = (status) => {
+    switch(status) {
+      case 'APPROVED': return 'bg-green-100 text-green-800';
+      case 'REJECTED': return 'bg-red-100 text-red-800';
+      case 'PENDING': return 'bg-yellow-100 text-yellow-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getStatusIcon = (status) => {
+    switch(status) {
+      case 'APPROVED': return <CheckCircle className="w-3 h-3" />;
+      case 'REJECTED': return <XCircle className="w-3 h-3" />;
+      case 'PENDING': return <Clock className="w-3 h-3" />;
+      default: return null;
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch(status) {
+      case 'APPROVED': return 'Aprobado';
+      case 'REJECTED': return 'Rechazado';
+      case 'PENDING': return 'Pendiente';
+      default: return status;
+    }
+  };
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleString('es-ES');
+  };
+
+  const canApprove = (userRole === 'admin' || userRole === 'supervisor');
+
+  const getRejectionReasonDisplay = (permit) => {
+    if (permit.status !== 'REJECTED') return null;
+    
+    return (
+        <div className="mt-4 p-3 bg-red-50 rounded-lg border border-red-200">
+            <h4 className="font-semibold text-sm mb-2 flex items-center gap-2 text-red-800">
+                <XCircle className="w-4 h-4" />
+                Motivo del Rechazo
+            </h4>
+            <div className="bg-white rounded-lg p-3 border border-red-100">
+                <p className="text-sm text-red-700">{permit.rejection_reason || 'No se especificó motivo'}</p>
+                {permit.rejected_by_name && (
+                    <p className="text-xs text-gray-500 mt-2">
+                        Rechazado por: {permit.rejected_by_name} el {formatDate(permit.rejected_at)}
+                    </p>
+                )}
+            </div>
+        </div>
+    );
+  };
+
+  if (!token) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Verificando autenticación...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Cargando dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const selectedPermitData = selectedPermitForAction ? permits.find(p => p.id === selectedPermitForAction) : null;
+
+  return (
+    <div className="max-w-7xl mx-auto p-4">
+      <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-6">
+        <div className="bg-green-800 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-xl font-bold text-white">Energy-Compliance</h1>
+              <p className="text-green-200 text-sm">Dashboard de Permisos</p>
+            </div>
+            <button
+              onClick={fetchData}
+              className="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Actualizar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 text-sm">Total Permisos</p>
+              <p className="text-3xl font-bold text-gray-800">{stats?.total_permits || 0}</p>
+            </div>
+            <div className="bg-blue-100 p-3 rounded-full">
+              <FileText className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 text-sm">Aprobados</p>
+              <p className="text-3xl font-bold text-green-600">{stats?.approved_permits || 0}</p>
+            </div>
+            <div className="bg-green-100 p-3 rounded-full">
+              <CheckCircle className="w-6 h-6 text-green-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 text-sm">Rechazados</p>
+              <p className="text-3xl font-bold text-red-600">{stats?.rejected_permits || 0}</p>
+            </div>
+            <div className="bg-red-100 p-3 rounded-full">
+              <XCircle className="w-6 h-6 text-red-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-gray-500 text-sm">Pendientes</p>
+              <p className="text-3xl font-bold text-yellow-600">{stats?.pending_permits || 0}</p>
+            </div>
+            <div className="bg-yellow-100 p-3 rounded-full">
+              <Clock className="w-6 h-6 text-yellow-600" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {stats?.total_permits > 0 && (
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-lg flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-green-600" />
+              Tasa de Aprobación
+            </h3>
+            <span className="text-2xl font-bold text-green-600">
+              {((stats.approved_permits / stats.total_permits) * 100).toFixed(1)}%
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-3">
+            <div
+              className="bg-green-600 h-3 rounded-full transition-all"
+              style={{ width: `${(stats.approved_permits / stats.total_permits) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+        <div className="p-4 border-b border-gray-200">
+          <h3 className="font-bold text-lg flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-gray-600" />
+            Historial de Permisos
+          </h3>
+        </div>
+
+        {permits.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p>No hay permisos generados aún</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200">
+            {permits.map((permit) => (
+              <div
+                key={permit.id}
+                className="p-4 hover:bg-gray-50 cursor-pointer"
+                onClick={() => setSelectedPermit(selectedPermit?.id === permit.id ? null : permit)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{getRiskIcon(permit.risk_type)}</span>
+                    <div>
+                      <p className="font-semibold text-gray-800">{permit.permit_number}</p>
+                      <p className="text-sm text-gray-500">{permit.technician_name}</p>
+                      <p className="text-xs text-gray-400">Creado por: {permit.created_by_name}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1 text-xs text-gray-500">
+                      {permit.photos_count > 0 && <Image className="w-3 h-3 text-purple-500" />}
+                      {permit.technician_signature && <PenTool className="w-3 h-3 text-blue-500" />}
+                      {permit.supervisor_signature && <CheckCircle className="w-3 h-3 text-green-500" />}
+                      {permit.work_latitude && <MapPin className="w-3 h-3 text-cyan-500" />}
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRiskColor(permit.risk_type)}`}>
+                      {getRiskLabel(permit.risk_type)}
+                    </span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${getStatusColor(permit.status)}`}>
+                      {getStatusIcon(permit.status)}
+                      {getStatusText(permit.status)}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedPermit?.id === permit.id && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-gray-500">Supervisor</p>
+                        <p className="font-medium">{permit.supervisor_name}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Ubicación</p>
+                        <p className="font-medium">{permit.work_location}</p>
+                      </div>
+                      <div className="md:col-span-2">
+                        <p className="text-sm text-gray-500">Descripción</p>
+                        <p className="text-gray-700">{permit.work_description}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Fecha de Creación</p>
+                        <p className="text-sm flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {formatDate(permit.created_at)}
+                        </p>
+                      </div>
+                    </div>
+
+                    {(permit.work_latitude || permit.work_longitude) && (
+                      <div className="mt-4 p-3 bg-cyan-50 rounded-lg border border-cyan-200">
+                        <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                          <Globe className="w-4 h-4 text-cyan-600" />
+                          Ubicación del Trabajo (Geocerca)
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <p className="text-gray-500 text-xs">Coordenadas</p>
+                            <p className="font-mono text-xs">
+                              📍 {parseFloat(permit.work_latitude).toFixed(6)}°, {parseFloat(permit.work_longitude).toFixed(6)}°
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500 text-xs">Radio de tolerancia</p>
+                            <p className="font-medium">📏 {permit.work_radius || 100} metros</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ✅ Firma del Técnico con renderSignature */}
+                    {permit.technician_signature && renderSignature(
+                      permit.technician_signature,
+                      'Firma del Técnico',
+                      <PenTool className="w-4 h-4 text-blue-600" />
+                    )}
+
+                    {/* ✅ Firma del Supervisor con renderSignature */}
+                    {permit.supervisor_signature && renderSignature(
+                      permit.supervisor_signature,
+                      'Firma del Supervisor',
+                      <UserCheck className="w-4 h-4 text-green-600" />
+                    )}
+
+                    {/* Motivo de rechazo */}
+                    {permit.status === 'REJECTED' && getRejectionReasonDisplay(permit)}
+
+                    {/* Fotos */}
+                    {permit.photos && permit.photos.length > 0 && (
+                      <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                        <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                          <Camera className="w-4 h-4" />
+                          Evidencia Fotográfica ({permit.photos.length} foto(s))
+                        </h4>
+                        <div className="grid grid-cols-3 gap-2">
+                          {permit.photos.map((photo, idx) => (
+                            <img
+                              key={photo.id || idx}
+                              src={photo.data}
+                              alt={`Evidencia ${idx + 1}`}
+                              className="w-full h-24 object-cover rounded-lg cursor-pointer border-2 hover:border-purple-400"
+                              onClick={(e) => { e.stopPropagation(); setExpandedPhoto(photo); }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Botones de aprobación - solo para pendientes */}
+                    {canApprove && permit.status === 'PENDING' && (
+                      <div className="mt-4 flex gap-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPermitForAction(permit.id);
+                            setShowApproveModal(true);
+                          }}
+                          disabled={processingAction}
+                          className="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 flex items-center justify-center gap-2"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          Aprobar y Firmar
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPermitForAction(permit.id);
+                            setShowRejectModal(true);
+                          }}
+                          disabled={processingAction}
+                          className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 flex items-center justify-center gap-2"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          Rechazar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Modal de Aprobación con SignaturePad */}
+      {showApproveModal && selectedPermitData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-bold mb-2">Aprobar Permiso</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Firma como supervisor para aprobar este permiso
+            </p>
+            
+            {/* Detalles del permiso */}
+            <div className="bg-gray-50 p-3 rounded-lg mb-4 text-sm">
+              <p><strong>Permiso:</strong> {selectedPermitData.permit_number}</p>
+              <p><strong>Técnico:</strong> {selectedPermitData.technician_name}</p>
+              <p><strong>Ubicación:</strong> {selectedPermitData.work_location}</p>
+            </div>
+            
+            {/* Componente de firma */}
+            <SignaturePad
+              signerName={currentUser?.full_name || 'Supervisor'}
+              signerType="SUPERVISOR"
+              onSave={(data) => setSupervisorSignature(data)}
+              workLocationCoords={
+                selectedPermitData.work_latitude && selectedPermitData.work_longitude
+                  ? { latitude: selectedPermitData.work_latitude, longitude: selectedPermitData.work_longitude }
+                  : null
+              }
+              workRadius={selectedPermitData.work_radius || 100}
+              permitId={selectedPermitData.id}
+            />
+            
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={handleApprove}
+                disabled={!supervisorSignature || processingAction}
+                className="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {processingAction ? 'Procesando...' : 'Firmar y Aprobar'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowApproveModal(false);
+                  setSupervisorSignature(null);
+                  setSelectedPermitForAction(null);
+                }}
+                className="flex-1 border border-gray-300 py-2 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Rechazo */}
+      {showRejectModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-bold mb-4">Rechazar Permiso</h3>
+            <textarea
+              placeholder="Motivo del rechazo..."
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              className="w-full p-3 border rounded-lg mb-4"
+              rows="4"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={handleReject}
+                disabled={processingAction}
+                className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700"
+              >
+                Rechazar
+              </button>
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setRejectionReason('');
+                  setSelectedPermitForAction(null);
+                }}
+                className="flex-1 border border-gray-300 py-2 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de foto expandida */}
+      {expandedPhoto && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4" onClick={() => setExpandedPhoto(null)}>
+          <div className="max-w-3xl max-h-screen">
+            <img src={expandedPhoto.data} alt="Foto expandida" className="max-w-full max-h-screen object-contain" />
+            <button className="absolute top-4 right-4 bg-white rounded-full p-2" onClick={() => setExpandedPhoto(null)}>✕</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Dashboard;

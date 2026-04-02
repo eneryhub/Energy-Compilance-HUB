@@ -1,0 +1,322 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENERGY-COMPLIANCE HUB - UNIFIED SCHEMA
+// Fusion: Energy-Compliance (Operations) + HSE Guard (Compliance)
+// All IDs use CUID for unified identification
+// ============================================================
+
+// ============ COMPANY / TENANCY ============
+model Company {
+  id                   String   @id @default(cuid())
+  name                 String
+  taxId                String?  @unique
+  email                String   @unique
+  phone                String?
+  address              String?
+  logo                 String?
+  subscriptionPlan     String   @default("starter") // starter, business, enterprise
+  subscriptionStatus   String   @default("TRIAL")   // TRIAL, ACTIVE, PAST_DUE, CANCELLED
+  subscriptionExpiresAt DateTime?
+  maxUsers             Int      @default(10)
+  maxPermitsPerMonth   Int      @default(200)
+  isActive             Boolean  @default(true)
+
+  // Stripe integration
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  billingEmail         String?
+  trialEndsAt          DateTime?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  users        User[]
+  permits      Permit[]
+  documents    HseDocument[]
+  alertConfigs AlertConfig[]
+  workLocations WorkLocation[]
+  auditLogs    AuditLog[]
+  riskTypes          RiskTypeConfig[]
+  checklistItems     ChecklistItemConfig[]
+  invoices           SubscriptionInvoice[]
+}
+
+// ============ USER / RBAC ============
+model User {
+  id            String    @id @default(cuid())
+  companyId     String
+  email         String
+  passwordHash  String?
+  name          String
+  role          String    @default("TECHNICIAN") // ADMIN, SUPERVISOR, TECHNICIAN, MANAGER, VIEWER
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  avatarUrl     String?
+  phone         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permitsCreated Permit[] @relation("CreatedBy")
+  permitsApproved Permit[] @relation("ApprovedBy")
+  permitsRejected Permit[] @relation("RejectedBy")
+  signatures   Signature[]
+  auditLogs    AuditLog[]
+  documents    HseDocument[]
+  reviewedDocuments HseDocument[] @relation("DocumentReviewer")
+
+  @@unique([email, companyId])
+}
+
+// ============ PERMITS (Operations) ============
+model Permit {
+  id                String    @id @default(cuid())
+  companyId         String
+  permitNumber      String    @unique
+  riskType          String    // ALTURA, ELECTRICO, CONFINADO, CALIENTE
+  status            String    @default("PENDING") // PENDING, APPROVED, REJECTED, CANCELLED
+  safetyChecks      String    @default("{}") // JSON string of checklist responses
+  technicianName    String
+  supervisorName    String
+  workLocation      String
+  workDescription   String
+  rejectionReason   String?
+  technicianSignature String? // JSON string with signature data + GPS
+  supervisorSignature String? // JSON string with signature data + GPS
+  photos            String?   // JSON string array of photos
+  photosCount       Int       @default(0)
+  createdById       String?
+  createdByName     String?
+  createdByRole     String?
+  approvedById      String?
+  approvedByName    String?
+  rejectedById      String?
+  rejectedByName    String?
+
+  // GPS / Geofence fields
+  workLatitude      Float?
+  workLongitude     Float?
+  workRadius        Int       @default(100) // meters
+  workLocationId    String?
+  locationSource    String    @default("manual") // gps, manual, saved
+
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company           Company       @relation(fields: [companyId], references: [id])
+  createdBy         User?         @relation("CreatedBy", fields: [createdById], references: [id])
+  approvedBy        User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
+  rejectedBy        User?         @relation("RejectedBy", fields: [rejectedById], references: [id])
+  workLocationRef   WorkLocation? @relation(fields: [workLocationId], references: [id])
+  signatures        Signature[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([createdById])
+}
+
+// ============ WORK LOCATIONS (GPS / Geofence) ============
+model WorkLocation {
+  id                String   @id @default(cuid())
+  companyId         String
+  name              String
+  address           String?
+  latitude          Float
+  longitude         Float
+  radiusMeters      Int      @default(100)
+  verificationMethod String?  // GPS, QR_CODE, BEACON
+  verifiedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permits  Permit[]
+
+  @@index([latitude, longitude])
+}
+
+// ============ DIGITAL SIGNATURES ============
+model Signature {
+  id              String   @id @default(cuid())
+  permitId        String
+  signerType      String   // TECHNICIAN, SUPERVISOR
+  signerName      String
+  signerId        String?
+  signatureData   String   // Base64 PNG image
+  signatureHash   String   @unique // SHA256 for integrity
+  signedAt        DateTime @default(now())
+
+  // GPS at signing time
+  latitude        Float?
+  longitude       Float?
+  accuracyMeters  Float?
+
+  // Geofence validation
+  isWithinGeofence      Boolean?
+  distanceToWorkMeters  Float?
+
+  // Device info
+  deviceInfo      String?  // JSON string
+  ipAddress       String?
+
+  createdAt       DateTime @default(now())
+
+  permit Permit @relation(fields: [permitId], references: [id], onDelete: Cascade)
+  signer User?   @relation(fields: [signerId], references: [id])
+
+  @@index([permitId])
+}
+
+// ============ HSE DOCUMENTS (Compliance Module) ============
+model HseDocument {
+  id            String   @id @default(cuid())
+  companyId     String
+  userId        String?  // assigned user
+  title         String
+  documentType  String   // certificado_medico, licencia_operativa, permiso_ambiental, etc.
+  category      String   // PERSONAL, EQUIPOS, LEGAL, AMBIENTAL
+  criticality   String   @default("NORMAL") // CRITICAL, NORMAL, LOW
+  status        String   @default("ACTIVE") // ACTIVE, EXPIRED, REVOKED, PENDING_RENEWAL
+  issueDate     DateTime?
+  expiryDate    DateTime?
+  holderName    String?
+  description   String?
+  fileUrl       String?
+  fileName      String?
+  fileSize      Int?
+  mimeType      String?
+  aiExtractedData String? // JSON string with AI-extracted data
+  aiConfidence  Float?
+  tags          String?  // JSON array string
+
+  reviewedById  String?
+  reviewedAt    DateTime?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignedUser User?   @relation(fields: [userId], references: [id])
+  reviewedBy   User?   @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  alertConfigs AlertConfig[]
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([expiryDate])
+  @@index([criticality])
+  @@index([status])
+}
+
+// ============ CUSTOM RISK TYPES (per company) ============
+model RiskTypeConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  key           String   // unique key like ALTURA, ELECTRICO, or custom: EXCAVACION
+  label         String
+  color         String   @default("#6366f1")
+  description   String?
+  icon          String   @default("AlertTriangle")
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  checklist ChecklistItemConfig[]
+
+  @@unique([companyId, key])
+  @@index([companyId])
+}
+
+// ============ CUSTOM CHECKLIST ITEMS (per risk type) ============
+model ChecklistItemConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  riskTypeKey   String
+  itemKey       String   // unique key like has_harness
+  label         String
+  required      Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  riskType RiskTypeConfig   @relation(fields: [riskTypeKey, companyId], references: [key, companyId], onDelete: Cascade)
+
+  @@unique([companyId, riskTypeKey, itemKey])
+  @@index([companyId])
+  @@index([riskTypeKey])
+}
+
+// ============ ALERT CONFIGS ============
+model AlertConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  documentId    String?
+  name          String
+  alertType     String   // EMAIL, IN_APP, WHATSAPP
+  triggerDaysBefore Int @default(30) // days before expiry
+  isActive      Boolean  @default(true)
+  lastTriggeredAt DateTime?
+  message       String?  // AI-generated alert message
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  document HseDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+}
+
+// ============ AUDIT LOG ============
+model AuditLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  action      String   // LOGIN, LOGOUT, CREATE, APPROVE, REJECT, VIEW, UPDATE, DELETE
+  entityType  String   // USER, PERMIT, DOCUMENT, COMPANY, SIGNATURE
+  entityId    String?
+  details     String?  // JSON string with additional context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?    @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ============ SUBSCRIPTION INVOICE HISTORY ============
+model SubscriptionInvoice {
+  id              String   @id @default(cuid())
+  companyId       String
+  stripeInvoiceId String?  @unique
+  amount          Float
+  currency        String   @default("usd")
+  status          String   @default("paid") // paid, pending, failed, refunded
+  planName        String
+  description     String?
+  invoicePdfUrl   String?
+  paidAt          DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([paidAt])
+}
