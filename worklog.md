@@ -1,112 +1,148 @@
-# Energy-Compliance Hub — Work Log
-
 ---
 Task ID: 1
-Agent: Main
-Task: Fix subscription API 500 error — "Error al obtener suscripción"
+Agent: main
+Task: Implement SCADA Telemetry Module (Dual Mode: Real + Demo)
 
 Work Log:
-- Read dev.log and found the actual Prisma error: `Unknown field 'invoices' for include statement on model 'Company'`
-- Root cause: Turbopack cached old Prisma client that didn't have the new `invoices` (SubscriptionInvoice) relation
-- Ran `rm -rf .next && bunx prisma generate` to regenerate Prisma client from scratch
-- Killed stuck dev server process, let auto-restart pick up the clean state
-- Verified schema was already in sync with database (`db:push` confirmed)
+- Explored existing codebase architecture (schema, routes, components, lib)
+- Updated Prisma schema with Sensor and SensorReading models (related to Company and WorkLocation)
+- Created SCADA telemetry engine (/src/lib/scada/engine.ts) with:
+  - Sensor profiles for 4 types: PRESION, TEMPERATURA, GAS, VOLTAJE
+  - Brownian motion simulation with mean reversion and occasional spikes
+  - Interlock logic: isSiteSafe() and isCompanySafe() for Security Gate
+  - Webhook ingestion placeholder for real sensor data
+  - Demo mode state management
+  - Auto-cleanup of old readings (keep last 200 per sensor)
+- Created 6 API routes:
+  - GET/POST /api/sensors (list + create)
+  - GET/PUT/DELETE /api/sensors/[id] (single sensor CRUD)
+  - GET /api/sensors/[id]/readings (historical data for charts)
+  - GET /api/sensors/telemetry (real-time data with simulation tick)
+  - GET/POST /api/sensors/simulation (toggle demo mode)
+  - GET /api/sensors/site-safe (Security Gate check)
+- Created TelemetryBoard frontend component with:
+  - Dark "Control Room" aesthetic with LED indicators (green/amber/red)
+  - Real-time polling every 3 seconds
+  - Gauge bars with color-coded progress (green → amber → red)
+  - Recharts AreaChart for historical trends with reference lines
+  - Simulation toggle switch (admin/supervisor/manager)
+  - Add/Delete sensor management
+  - Site safety banner with critical sensor alerts
+- Added SCADA navigation entry (Activity icon) visible to all roles
+- Integrated Security Gate into approval-panel.tsx:
+  - Polls /api/sensors/site-safe every 5 seconds
+  - Shows dark "BLOQUEADO: Alerta SCADA Detectada" banner when critical
+  - Disables approve/reject buttons when SCADA alert active
+  - Updated compliance OK message to include "SCADA: OK"
+- Seeded 6 demo sensors across 3 work locations with 30+ historical readings each
+- All linting passes cleanly
 
 Stage Summary:
-- Fixed: Subscription API GET route now works — Prisma client recognizes `invoices`, `riskTypes`, `checklistItems` relations
-- The `db:push` had said "already in sync" but the Turbopack module cache was stale
+- Complete SCADA telemetry module with dual-mode (Demo/Real) architecture
+- Frontend: Reactive TelemetryBoard with 3-second polling, LED indicators, Recharts
+- Security Gate: Blocks permit signing when any sensor is CRITICO
+- 6 demo sensors seeded: Presión, Temperatura, Gas, Voltaje across 3 locations
+- Key files: src/lib/scada/engine.ts, src/components/scada/telemetry-board.tsx, 6 API routes
 
 ---
 Task ID: 2
-Agent: Main
-Task: Verify risk types CRUD functionality
+Agent: main
+Task: Fix SCADA Runtime Errors (500s, locations.map, chart dimensions)
 
 Work Log:
-- Reviewed `src/app/api/risk-types/route.ts` — GET/POST with auto-seeding of default risk types
-- Reviewed `src/app/api/risk-types/[id]/route.ts` — PUT/DELETE with permit usage protection
-- Reviewed `src/app/api/risk-types/[id]/items/route.ts` — POST/DELETE checklist items
-- Reviewed `src/components/risk-types/risk-type-manager.tsx` — Full CRUD UI with color presets, icons, checklist management
-- All routes correctly use `getSession` from auth.ts
+- Diagnosed root cause: Prisma client cached in globalThis without Sensor model after schema changes
+- Fixed `src/lib/db.ts`: Added PRISMA_SCHEMA_VERSION tracking to force client regeneration in dev
+- Regenerated Prisma client (`bunx prisma generate`) and pushed schema (`bunx prisma db push --force-reset`)
+- Re-seeded database with 6 demo sensors and 186 historical readings
+- Fixed `src/components/scada/telemetry-board.tsx`:
+  - Added `Array.isArray(locations)` guard before `.map()` to prevent TypeError
+  - Added explicit `catch { setLocations([]) }` in loadLocations
+  - Fixed Recharts width/height(0) warning: set explicit height={256} on ResponsiveContainer
+- Verified all endpoints via curl:
+  - GET /api/sensors -> 200 (returns 6 sensors with locations)
+  - GET /api/sensors/telemetry -> 200 (returns simulated points with safety status)
+  - GET /api/locations -> 200 (returns 3 locations in expected format)
+  - GET /api/sensors/site-safe -> 200 (returns isSafe: true)
+- ESLint passes cleanly
 
 Stage Summary:
-- Risk types CRUD is complete and functional
-- Default 4 risk types (ALTURA, ELECTRICO, CONFINADO, CALIENTE) auto-seed on first access
-- Checklist items per risk type with required/optional toggle
+- Root cause of 500s: globalThis-cached PrismaClient missing Sensor model
+- Solution: Schema version tracking in db.ts forces fresh client when schema changes
+- Defensive checks added to prevent `locations.map is not a function` TypeError
+- Chart dimension warning resolved with explicit height prop
+- All 6 demo sensors operational with live simulation
 
 ---
-Task ID: 3a
-Agent: Main
-Task: Fix DeepSeek AI URL double-path bug
+Task ID: 3
+Agent: main
+Task: Fix all API 500 errors after context restart / database reset
 
 Work Log:
-- Found `.env` had `DEEPSEEK_API_URL=https://api.deepseek.com/v1/chat/completions`
-- `ai.ts` appends `/chat/completions` to this URL, resulting in double path
-- Fixed `.env` to `DEEPSEEK_API_URL=https://api.deepseek.com/v1`
-- Note: `DEEPSEEK_API_KEY` is still empty — AI falls back to rule-based review
+- Diagnosed cascade: Prisma client stale after context restart + DB had no data after reset
+- Bumped PRISMA_SCHEMA_VERSION from 2 to 3 in src/lib/db.ts to force fresh client
+- Ran `npx prisma generate` + `prisma db push` + `prisma db seed` (6 sensors, 186 readings)
+- Fixed /api/compliance/check: Added company existence check, returns 401 if company not found (forces re-login)
+- Fixed /api/risk-types: Added company existence check before seeding defaults, wrapped seed in try-catch for race conditions
+- Fixed Recharts width(0)/height(0): Removed AnimatePresence height animation that caused 0-dimension container during transition, replaced with fixed 280px inline style
+- All fixes pass ESLint
 
 Stage Summary:
-- Fixed URL bug that would cause 404 when API key is provided
-- AI permit review works in fallback mode (rule-based) when no key is configured
+- Root cause: stale Prisma client + DB reset without re-seed + old JWT with non-existent companyId
+- User needs to re-login after DB reset (admin@energy.com / admin123)
+- 4 files modified: db.ts, compliance/check/route.ts, risk-types/route.ts, telemetry-board.tsx
 
 ---
-Task ID: 3b
-Agent: Main
-Task: Add photo evidence display to permit detail and approval views
+Task ID: 4
+Agent: main
+Task: Build Energy-Compliance Hub landing page
 
 Work Log:
-- Added `Camera` icon import to both `permit-list.tsx` and `approval-panel.tsx`
-- Added photo gallery section to permit detail dialog (permit-list.tsx) — 3-column grid with timestamps
-- Added photo gallery section to approval panel (approval-panel.tsx) — 4-column grid
-- Both use inline IIFE to safely parse `selectedPermit.photos` JSON string
-- Click to open full-size photo in new tab
-- Graceful fallback if photos are null or parse fails
+- Created `/src/components/landing/landing-page.tsx` — a self-contained `'use client'` component
+- Implemented 7 sections: Navbar, Hero, Features, How It Works, Pricing, Testimonial, Footer
+- Framer Motion animations: FadeIn, StaggerContainer/StaggerItem
+- Dark mode default with next-themes toggle
+- Responsive mobile-first design
+- Color palette: emerald + slate, no blue/indigo
 
 Stage Summary:
-- Photos are now visible to reviewers in both the permit detail dialog and approval panel
-- Gallery shows thumbnails with timestamps, clickable for full view
-
----
-Task ID: 3c
-Agent: Main + Subagent
-Task: Create centralized audit log helper with IP/userAgent capture
-
-Work Log:
-- Created `src/lib/audit.ts` with `createAuditLog()` function
-- Helper auto-extracts IP from `x-forwarded-for` or `x-real-ip` headers
-- Helper auto-extracts User-Agent from request headers
-- Accepts `details` as plain object (handles JSON.stringify internally)
-- Updated all 11 API route files (13 total audit log calls) to use the helper
-
-Stage Summary:
-- Created `src/lib/audit.ts` with centralized audit logging
-- Zero remaining `db.auditLog.create` calls in API routes
-- All audit entries now capture IP address and user agent
-
----
-Task ID: 3d
-Agent: Main
-Task: Add missing audit entries for permit creation and document creation
-
-Work Log:
-- Added audit log to `POST /api/permits` (permit creation) with permitNumber, riskType, photosCount
-- Added audit log to `POST /api/documents` (document creation) with title, documentType, category
-
-Stage Summary:
-- All major CRUD operations now have audit trail coverage
+- Created production-ready landing page at `src/components/landing/landing-page.tsx`
 
 ---
 Task ID: 5
-Agent: Main
-Task: Fix old auth helper in permits/documents routes (JWT migration missed)
+Agent: main
+Task: Build 3 modules — AI Predictive Dashboard, Super Admin Panel, API Routes
 
 Work Log:
-- Discovered 3 routes still used old `getUserFromRequest()` that parsed tokens as `token_<userId>_<timestamp>`
-- This was the pre-JWT auth format — these routes returned 401 for all JWT-authenticated requests
-- Fixed `src/app/api/permits/route.ts` — replaced with `getSession` from auth.ts
-- Fixed `src/app/api/permits/[id]/route.ts` — replaced with `getSession` from auth.ts
-- Fixed `src/app/api/documents/route.ts` — replaced with `getSession` from auth.ts
-- The separate approve/reject routes already used `getSession` correctly
+- Created PredictiveDashboard component with AI analysis UI
+- Created SuperAdminPanel component with company management
+- Created 5 API routes: predictive/insights, admin/companies, admin/activate-enterprise, admin/audit-logs, v1/external/stats
+- Added PAPERCLIP_API_KEY to .env
+- All linting passes cleanly
 
 Stage Summary:
-- Critical auth bug fixed: permits and documents API routes now accept JWT tokens
-- This was causing permits list, permit creation, and document management to fail with 401
+- Predictive Dashboard: AI-powered sensor analysis with DeepSeek fallback
+- Super Admin Panel: Full company management with enterprise activation
+- API routes: Predictive insights, admin CRUD, external stats endpoint
+
+---
+Task ID: 6
+Agent: main
+Task: Consolidate & Launch — Wire all modules into unified platform
+
+Work Log:
+- Updated plans.ts: Enterprise price=null ("Contactar Ventas"), trialDays=7, SCADA/IA features
+- Created subscription-guard.ts: Trial period based on company.createdAt + 7 days
+- Created /api/subscription/status for lightweight trial check
+- Updated app-shell.tsx: Added predictive + admin views, SUPER_ADMIN nav, role badge
+- Updated page.tsx: Landing -> Login -> Register -> App flow, subscription block banner
+- Updated seed.ts: Added SUPER_ADMIN user
+- SCADA multi-tenancy audit: All queries confirmed to have companyId filter
+- Re-seeded database
+
+Stage Summary:
+- 6 modules fully integrated
+- Landing Page -> Login -> App flow complete
+- Trial: 7-day from company.createdAt, blocks access when expired
+- Enterprise: Only activatable by SUPER_ADMIN via "Centro de Mando"
+- AI Predictive: Mock data with DeepSeek fallback
+- Demo accounts: admin@energy.com/admin123, superadmin@energycompliance.com/admin123

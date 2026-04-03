@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   MapPin,
@@ -465,6 +465,9 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Permiso Creado Exitosamente</DialogTitle>
+            <DialogDescription className="sr-only">
+              El permiso de trabajo ha sido creado y se muestra el documento PDF generado para descarga.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">

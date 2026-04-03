@@ -57,19 +57,29 @@ export async function GET(request: NextRequest) {
       orderBy: { sortOrder: 'asc' },
     })
 
-    // Seed defaults if none exist
+    // Seed defaults if none exist (verify company exists first)
     if (riskTypes.length === 0) {
-      for (const rt of DEFAULT_RISK_TYPES) {
-        await db.riskTypeConfig.create({
-          data: { companyId: session.companyId, ...rt },
-        })
-        if (DEFAULT_CHECKLISTS[rt.key]) {
-          for (const item of DEFAULT_CHECKLISTS[rt.key]) {
-            await db.checklistItemConfig.create({
-              data: { companyId: session.companyId, riskTypeKey: rt.key, ...item },
-            })
+      const companyExists = await db.company.count({ where: { id: session.companyId } })
+      if (companyExists === 0) {
+        return NextResponse.json({ error: 'Empresa no encontrada' }, { status: 401 })
+      }
+
+      try {
+        for (const rt of DEFAULT_RISK_TYPES) {
+          await db.riskTypeConfig.create({
+            data: { companyId: session.companyId, ...rt },
+          })
+          if (DEFAULT_CHECKLISTS[rt.key]) {
+            for (const item of DEFAULT_CHECKLISTS[rt.key]) {
+              await db.checklistItemConfig.create({
+                data: { companyId: session.companyId, riskTypeKey: rt.key, ...item },
+              })
+            }
           }
         }
+      } catch (seedErr: unknown) {
+        // FK constraint or unique violation — another request may have seeded concurrently
+        console.warn('[GET /api/risk-types] Seed error (may be a race condition):', seedErr)
       }
       const seeded = await db.riskTypeConfig.findMany({
         where,

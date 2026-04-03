@@ -8,6 +8,8 @@ async function main() {
 
   // Clean existing data
   await prisma.auditLog.deleteMany()
+  await prisma.sensorReading.deleteMany()
+  await prisma.sensor.deleteMany()
   await prisma.signature.deleteMany()
   await prisma.permit.deleteMany()
   await prisma.hseDocument.deleteMany()
@@ -88,6 +90,19 @@ async function main() {
       name: 'María García',
       role: 'MANAGER',
       phone: '+506 8888-0005',
+    },
+  })
+
+  // SUPER_ADMIN (not tied to any company — uses the same company for demo)
+  // In production, SUPER_ADMIN would have its own tenant or be platform-level
+  const superAdmin = await prisma.user.create({
+    data: {
+      companyId: company.id,
+      email: 'superadmin@energycompliance.com',
+      passwordHash: adminPass,
+      name: 'Platform Admin',
+      role: 'SUPER_ADMIN',
+      phone: '+506 8888-0000',
     },
   })
 
@@ -330,7 +345,73 @@ async function main() {
     ],
   })
 
-  // 6. Create Audit Logs
+  // 6. Create SCADA Sensors
+  const sensorData = [
+    // Plataforma Principal - Area A
+    {
+      companyId: company.id, locationId: loc1.id,
+      name: 'Presión Línea Principal A', type: 'PRESION', unit: 'psi',
+      thresholdCritical: 100, thresholdWarning: 80,
+      currentValue: 45.2, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+    {
+      companyId: company.id, locationId: loc1.id,
+      name: 'Temperatura Plataforma A', type: 'TEMPERATURA', unit: '°C',
+      thresholdCritical: 90, thresholdWarning: 78,
+      currentValue: 62.5, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+    // Subestación Eléctrica B
+    {
+      companyId: company.id, locationId: loc2.id,
+      name: 'Voltaje Bus Principal', type: 'VOLTAJE', unit: 'V',
+      thresholdCritical: 250, thresholdWarning: 240,
+      currentValue: 221.0, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+    {
+      companyId: company.id, locationId: loc2.id,
+      name: 'Detector Gas CH4 - Subestación', type: 'GAS', unit: '%LEL',
+      thresholdCritical: 5.0, thresholdWarning: 3.5,
+      currentValue: 0.8, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+    // Taller de Soldadura
+    {
+      companyId: company.id, locationId: loc3.id,
+      name: 'Gas LEL - Taller Soldadura', type: 'GAS', unit: '%LEL',
+      thresholdCritical: 5.0, thresholdWarning: 3.5,
+      currentValue: 1.2, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+    {
+      companyId: company.id, locationId: loc3.id,
+      name: 'Temperatura Ambiente Taller', type: 'TEMPERATURA', unit: '°C',
+      thresholdCritical: 90, thresholdWarning: 78,
+      currentValue: 38.0, isSimulated: true, isActive: true, lastReadingAt: new Date(),
+    },
+  ]
+  const createdSensors = await prisma.sensor.createMany({ data: sensorData })
+
+  // 7. Create initial sensor readings (last 30 data points for each sensor)
+  const allSensors = await prisma.sensor.findMany({ where: { companyId: company.id } })
+  const readingsData: Array<{ sensorId: string; value: number; status: string; timestamp: Date }> = []
+
+  for (const sensor of allSensors) {
+    let prevValue = sensor.currentValue ?? 45
+    for (let i = 30; i >= 0; i--) {
+      const noise = (Math.random() - 0.5) * 10
+      const meanRev = ((sensor.type === 'PRESION' ? 45 : sensor.type === 'TEMPERATURA' ? 65 : sensor.type === 'GAS' ? 1.5 : 220) - prevValue) * 0.05
+      prevValue = Math.max(0, prevValue + noise + meanRev)
+      const status = prevValue >= sensor.thresholdCritical ? 'CRITICO' : prevValue >= sensor.thresholdWarning ? 'WARNING' : 'NORMAL'
+      readingsData.push({
+        sensorId: sensor.id,
+        value: Math.round(prevValue * 10) / 10,
+        status,
+        timestamp: new Date(Date.now() - i * 3000), // 3 second intervals
+      })
+    }
+  }
+
+  await prisma.sensorReading.createMany({ data: readingsData })
+
+  // 8. Create Audit Logs
   await prisma.auditLog.createMany({
     data: [
       { companyId: company.id, userId: admin.id, action: 'LOGIN', entityType: 'USER', entityId: admin.id, details: JSON.stringify({ method: 'credentials' }) },
@@ -342,12 +423,13 @@ async function main() {
     ],
   })
 
-  console.log('✅ Seed completed successfully!')
+  console.log(`✅ Seed completed successfully! (${createdSensors.count} sensors created)`)
   console.log('📋 Demo accounts:')
-  console.log('   Admin:     admin@energy.com / admin123')
-  console.log('   Supervisor: ana@energy.com / user123')
-  console.log('   Technician: carlos@energy.com / user123')
-  console.log('   Manager:   maria@energy.com / user123')
+  console.log('   Admin:       admin@energy.com / admin123')
+  console.log('   Supervisor:  ana@energy.com / user123')
+  console.log('   Technician:  carlos@energy.com / user123')
+  console.log('   Manager:     maria@energy.com / user123')
+  console.log('   Super Admin: superadmin@energycompliance.com / admin123')
 }
 
 main()

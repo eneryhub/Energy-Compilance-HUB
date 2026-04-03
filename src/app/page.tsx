@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import LoginForm, { RegisterForm } from '@/components/auth/login-form'
 import AppShell, { type ViewType } from '@/components/layout/app-shell'
@@ -13,21 +13,28 @@ import AuditTrail from '@/components/audit/audit-trail'
 import DocumentManager from '@/components/documents/document-manager'
 import SubscriptionManager from '@/components/subscription/subscription-manager'
 import RiskTypeManager from '@/components/risk-types/risk-type-manager'
+import TelemetryBoard from '@/components/scada/telemetry-board'
+import UserManager from '@/components/users/user-manager'
+import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
+import SuperAdminPanel from '@/components/admin/super-admin-panel'
+import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
-import { PlusCircle, List } from 'lucide-react'
+import { PlusCircle, List, Crown } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
 
-type AppState = 'login' | 'register' | 'app' | 'mounting'
+type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting'
 
 export default function Home() {
   // Always start as 'mounting' to prevent hydration mismatch.
-  // Server renders login form (no localStorage), client detects token in useEffect.
+  // Server renders landing (no localStorage), client detects token in useEffect.
   const [appState, setAppState] = useState<AppState>('mounting')
   const [currentView, setCurrentView] = useState<ViewType>('dashboard')
   const [user, setUserState] = useState<LoginResponse['user'] | null>(null)
   const [complianceStatus, setComplianceStatus] = useState<'COMPLIANT' | 'NON_COMPLIANT'>('NON_COMPLIANT')
   const [permitView, setPermitView] = useState<'list' | 'form'>('list')
+  const [subscriptionBlocked, setSubscriptionBlocked] = useState(false)
+  const [subscriptionMessage, setSubscriptionMessage] = useState('')
 
   // Detect token on client-side only (after mount) to prevent SSR hydration mismatch.
   // Server renders login (no localStorage), client detects saved token.
@@ -37,7 +44,7 @@ export default function Home() {
 
     if (!token || !savedUser) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- client-side init from localStorage
-      setAppState('login')
+      setAppState('landing')
       return
     }
 
@@ -60,6 +67,18 @@ export default function Home() {
           const data = await res.json()
           setComplianceStatus(data.isCompliant ? 'COMPLIANT' : 'NON_COMPLIANT')
         }
+
+        // Check subscription status
+        const subRes = await fetch('/api/subscription/status', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (subRes.ok) {
+          const subData = await subRes.json()
+          if (subData.blockAccess) {
+            setSubscriptionBlocked(true)
+            setSubscriptionMessage(subData.message || 'Suscripción expirada. Actualice su plan.')
+          }
+        }
         // Other errors (500, etc.) — keep user logged in, skip compliance data
       } catch {
         // Network error — ignore, user is already logged in
@@ -75,6 +94,8 @@ export default function Home() {
     setAppState('login')
     setCurrentView('dashboard')
     setPermitView('list')
+    setSubscriptionBlocked(false)
+    setSubscriptionMessage('')
   }, [])
 
   const checkCompliance = useCallback(() => {
@@ -101,6 +122,8 @@ export default function Home() {
     setUserState(userData)
     setUser(userData)
     setAppState('app')
+    setSubscriptionBlocked(false)
+    setSubscriptionMessage('')
     checkCompliance()
   }
 
@@ -121,6 +144,15 @@ export default function Home() {
   }
 
   // Login/Register views
+  if (appState === 'landing') {
+    return (
+      <LandingPage
+        onLogin={() => setAppState('login')}
+        onRegister={() => setAppState('register')}
+      />
+    )
+  }
+
   if (appState === 'login') {
     return (
       <LoginForm
@@ -151,6 +183,29 @@ export default function Home() {
       complianceStatus={complianceStatus}
       onLogout={handleLogout}
     >
+      {/* Subscription Block Banner */}
+      {subscriptionBlocked && currentView !== 'subscription' && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 flex items-center justify-between"
+        >
+          <div className="flex items-center gap-3">
+            <Crown className="w-6 h-6 text-amber-600" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">Acceso Limitado</p>
+              <p className="text-xs text-amber-600">{subscriptionMessage}</p>
+            </div>
+          </div>
+          <Button
+            onClick={() => setCurrentView('subscription')}
+            className="bg-amber-600 hover:bg-amber-700 text-white text-sm gap-1.5"
+          >
+            Actualizar Plan
+          </Button>
+        </motion.div>
+      )}
+
       <AnimatePresence mode="wait">
         <motion.div
           key={currentView}
@@ -160,6 +215,10 @@ export default function Home() {
           transition={{ duration: 0.2 }}
         >
           {currentView === 'dashboard' && <StatsCards />}
+
+          {currentView === 'users' && (
+            <UserManager />
+          )}
 
           {currentView === 'permits' && (
             <div className="space-y-4">
@@ -211,6 +270,28 @@ export default function Home() {
 
           {currentView === 'risk-types' && (
             <RiskTypeManager />
+          )}
+
+          {currentView === 'scada' && (
+            <TelemetryBoard />
+          )}
+
+          {currentView === 'predictive' && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-slate-800">Análisis Predictivo con IA</h2>
+              <PredictiveDashboard />
+            </div>
+          )}
+
+          {currentView === 'admin-portal-hq' && (
+            user?.role === 'SUPER_ADMIN' ? (
+              <SuperAdminPanel />
+            ) : (
+              <div className="py-20 text-center text-slate-400">
+                <Crown className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Acceso restringido</p>
+              </div>
+            )
           )}
 
           {currentView === 'subscription' && (

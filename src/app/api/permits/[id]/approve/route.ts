@@ -18,9 +18,10 @@ export async function POST(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    // Only ADMIN and SUPERVISOR can approve/reject
-    if (session.role !== 'ADMIN' && session.role !== 'SUPERVISOR') {
-      return NextResponse.json({ error: 'Solo administradores y supervisores pueden aprobar o rechazar permisos' }, { status: 403 })
+    // Only ADMIN, SUPERVISOR, GERENTE, MANAGER can approve/reject
+    const canApproveRoles = ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER']
+    if (!canApproveRoles.includes(session.role)) {
+      return NextResponse.json({ error: 'Solo supervisores, gerentes o administradores pueden aprobar o rechazar permisos' }, { status: 403 })
     }
 
     const { id } = await params
@@ -51,16 +52,14 @@ export async function POST(
     await enforceCompliance(session.userId, session.companyId)
 
     if (action === 'approve') {
-      // Validate supervisor GPS is within geofence
-      if (permit.workLatitude && permit.workLongitude) {
-        if (!gpsLatitude || !gpsLongitude) {
-          return NextResponse.json(
-            { error: 'Coordenadas GPS del supervisor son requeridas para la aprobación. Active su ubicación.' },
-            { status: 400 }
-          )
-        }
+      // Validate supervisor GPS is within geofence (only if GPS is available)
+      const hasGps = gpsLatitude != null && gpsLongitude != null
+      const hasWorkCoords = permit.workLatitude != null && permit.workLongitude != null
 
-        const geoResult = checkGeofence(
+      let geoResult: ReturnType<typeof checkGeofence> | null = null
+
+      if (hasGps && hasWorkCoords) {
+        geoResult = checkGeofence(
           { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy },
           { latitude: permit.workLatitude, longitude: permit.workLongitude },
           permit.workRadius
@@ -77,164 +76,109 @@ export async function POST(
             { status: 403 }
           )
         }
+      }
 
-        // Save signature with GPS validation
-        const signatureData = JSON.stringify({
+      // Save signature with GPS data if available
+      const signatureData = JSON.stringify({
+        signerName: session.name,
+        timestamp: new Date().toISOString(),
+        ...(hasGps ? { location: { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy } } : {}),
+        signatureData: signature || null,
+        is_within_geofence: geoResult?.isWithinRadius ?? null,
+        distance_to_work_meters: geoResult?.distanceMeters ?? null
+      })
+
+      // Hash signature for integrity
+      const sigHash = await hashSignature(signatureData)
+
+      // Create signature record
+      await db.signature.create({
+        data: {
+          permitId: permit.id,
+          signerType: 'SUPERVISOR',
           signerName: session.name,
-          timestamp: new Date().toISOString(),
-          location: { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy },
-          signatureData: signature || null,
-          is_within_geofence: true,
-          distance_to_work_meters: geoResult.distanceMeters
-        })
-
-        // Hash signature for integrity
-        const sigHash = await hashSignature(signatureData)
-
-        // Create signature record
-        await db.signature.create({
-          data: {
-            permitId: permit.id,
-            signerType: 'SUPERVISOR',
-            signerName: session.name,
-            signerId: session.userId,
-            signatureData: signature || '',
-            signatureHash: sigHash,
-            signedAt: new Date(),
+          signerId: session.userId,
+          signatureData: signature || '',
+          signatureHash: sigHash,
+          signedAt: new Date(),
+          ...(hasGps ? {
             latitude: gpsLatitude,
             longitude: gpsLongitude,
             accuracyMeters: gpsAccuracy || null,
-            isWithinGeofence: true,
-            distanceToWorkMeters: geoResult.distanceMeters,
-            deviceInfo: deviceInfo ? JSON.stringify(deviceInfo) : null
-          }
-        })
-
-        // Update permit
-        const updatedPermit = await db.permit.update({
-          where: { id: permit.id },
-          data: {
-            status: 'APPROVED',
-            approvedById: session.userId,
-            approvedByName: session.name,
-            approvedAt: new Date(),
-            supervisorSignature: signatureData
-          },
-          include: {
-            createdBy: { select: { id: true, name: true, email: true } },
-            approvedBy: { select: { id: true, name: true } }
-          }
-        })
-
-        // Generate APPROVED PDF
-        const pdfData = {
-          permitNumber: updatedPermit.permitNumber,
-          status: 'APPROVED',
-          riskType: updatedPermit.riskType,
-          createdAt: updatedPermit.createdAt.toISOString(),
-          technicianName: updatedPermit.technicianName,
-          supervisorName: updatedPermit.supervisorName,
-          approvedByName: updatedPermit.approvedByName || undefined,
-          workLocation: updatedPermit.workLocation,
-          workDescription: updatedPermit.workDescription,
-          safetyChecks: JSON.parse(updatedPermit.safetyChecks || '{}'),
-          technicianSignature: updatedPermit.technicianSignature ? JSON.parse(updatedPermit.technicianSignature) : null,
-          supervisorSignature: { signerName: session.name, timestamp: new Date().toISOString(), location: { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy }, signatureData: signature || undefined, is_within_geofence: true, distance_to_work_meters: geoResult.distanceMeters },
-          photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
-          workLatitude: updatedPermit.workLatitude,
-          workLongitude: updatedPermit.workLongitude,
-          workRadius: updatedPermit.workRadius
+          } : {}),
+          isWithinGeofence: geoResult?.isWithinRadius ?? null,
+          distanceToWorkMeters: geoResult?.distanceMeters ?? null,
+          deviceInfo: deviceInfo ? JSON.stringify(deviceInfo) : null
         }
+      })
 
-        const pdfBuffer = await generatePermitPDF(pdfData)
-        const pdfBase64 = pdfBuffer.toString('base64')
-
-        // Audit log
-        await createAuditLog({
-          companyId: session.companyId, userId: session.userId,
-          action: 'APPROVE', entityType: 'PERMIT', entityId: permit.id,
-          details: { permitNumber: permit.permitNumber, gpsWithinGeofence: true, distanceMeters: geoResult.distanceMeters },
-        }, request)
-
-        return NextResponse.json({
-          permit: updatedPermit,
-          pdf: pdfBase64,
-          geofence: geoResult
-        })
-
-      } else {
-        // No GPS required (manual location)
-        const signatureData = JSON.stringify({
-          signerName: session.name,
-          timestamp: new Date().toISOString(),
-          signatureData: signature || null,
-          is_within_geofence: null,
-          distance_to_work_meters: null
-        })
-
-        const sigHash = await hashSignature(signatureData)
-
-        await db.signature.create({
-          data: {
-            permitId: permit.id,
-            signerType: 'SUPERVISOR',
-            signerName: session.name,
-            signerId: session.userId,
-            signatureData: signature || '',
-            signatureHash: sigHash,
-            signedAt: new Date()
-          }
-        })
-
-        const updatedPermit = await db.permit.update({
-          where: { id: permit.id },
-          data: {
-            status: 'APPROVED',
-            approvedById: session.userId,
-            approvedByName: session.name,
-            approvedAt: new Date(),
-            supervisorSignature: signatureData
-          },
-          include: {
-            createdBy: { select: { id: true, name: true, email: true } },
-            approvedBy: { select: { id: true, name: true } }
-          }
-        })
-
-        // Generate PDF
-        const pdfData = {
-          permitNumber: updatedPermit.permitNumber,
+      // Update permit
+      const updatedPermit = await db.permit.update({
+        where: { id: permit.id },
+        data: {
           status: 'APPROVED',
-          riskType: updatedPermit.riskType,
-          createdAt: updatedPermit.createdAt.toISOString(),
-          technicianName: updatedPermit.technicianName,
-          supervisorName: updatedPermit.supervisorName,
-          approvedByName: updatedPermit.approvedByName || undefined,
-          workLocation: updatedPermit.workLocation,
-          workDescription: updatedPermit.workDescription,
-          safetyChecks: JSON.parse(updatedPermit.safetyChecks || '{}'),
-          technicianSignature: updatedPermit.technicianSignature ? JSON.parse(updatedPermit.technicianSignature) : null,
-          supervisorSignature: { signerName: session.name, timestamp: new Date().toISOString(), signatureData: signature || undefined },
-          photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
-          workLatitude: updatedPermit.workLatitude,
-          workLongitude: updatedPermit.workLongitude,
-          workRadius: updatedPermit.workRadius
+          approvedById: session.userId,
+          approvedByName: session.name,
+          approvedAt: new Date(),
+          supervisorSignature: signatureData
+        },
+        include: {
+          createdBy: { select: { id: true, name: true, email: true } },
+          approvedBy: { select: { id: true, name: true } }
         }
+      })
 
-        const pdfBuffer = await generatePermitPDF(pdfData)
-        const pdfBase64 = pdfBuffer.toString('base64')
-
-        await createAuditLog({
-          companyId: session.companyId, userId: session.userId,
-          action: 'APPROVE', entityType: 'PERMIT', entityId: permit.id,
-          details: { permitNumber: permit.permitNumber, gpsNotRequired: true },
-        }, request)
-
-        return NextResponse.json({
-          permit: updatedPermit,
-          pdf: pdfBase64
-        })
+      // Normalize technician signature for PDF (technician uses {data, gps} format)
+      let normalizedTechSigForPdf = null
+      if (updatedPermit.technicianSignature) {
+        try {
+          const raw = JSON.parse(updatedPermit.technicianSignature)
+          normalizedTechSigForPdf = {
+            signerName: raw.signerName || updatedPermit.technicianName,
+            timestamp: raw.timestamp || updatedPermit.createdAt.toISOString(),
+            location: raw.location || raw.gps || null,
+            signatureData: raw.signatureData || raw.data || null,
+            is_within_geofence: raw.is_within_geofence,
+            distance_to_work_meters: raw.distance_to_work_meters,
+          }
+        } catch { normalizedTechSigForPdf = null }
       }
+
+      // Generate APPROVED PDF
+      const pdfData = {
+        permitNumber: updatedPermit.permitNumber,
+        status: 'APPROVED',
+        riskType: updatedPermit.riskType,
+        createdAt: updatedPermit.createdAt.toISOString(),
+        technicianName: updatedPermit.technicianName,
+        supervisorName: updatedPermit.supervisorName,
+        approvedByName: updatedPermit.approvedByName || undefined,
+        workLocation: updatedPermit.workLocation,
+        workDescription: updatedPermit.workDescription,
+        safetyChecks: JSON.parse(updatedPermit.safetyChecks || '{}'),
+        technicianSignature: normalizedTechSigForPdf,
+        supervisorSignature: { signerName: session.name, timestamp: new Date().toISOString(), ...(hasGps ? { location: { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy } } : {}), signatureData: signature || undefined, is_within_geofence: geoResult?.isWithinRadius ?? null, distance_to_work_meters: geoResult?.distanceMeters ?? null },
+        photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
+        workLatitude: updatedPermit.workLatitude,
+        workLongitude: updatedPermit.workLongitude,
+        workRadius: updatedPermit.workRadius
+      }
+
+      const pdfBuffer = await generatePermitPDF(pdfData)
+      const pdfBase64 = pdfBuffer.toString('base64')
+
+      // Audit log
+      await createAuditLog({
+        companyId: session.companyId, userId: session.userId,
+        action: 'APPROVE', entityType: 'PERMIT', entityId: permit.id,
+        details: { permitNumber: permit.permitNumber, gpsAvailable: hasGps, gpsWithinGeofence: geoResult?.isWithinRadius ?? null, distanceMeters: geoResult?.distanceMeters ?? null },
+      }, request)
+
+      return NextResponse.json({
+        permit: updatedPermit,
+        pdf: pdfBase64,
+        ...(geoResult ? { geofence: geoResult } : {})
+      })
 
     } else {
       // REJECT action

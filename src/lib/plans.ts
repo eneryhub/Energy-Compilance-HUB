@@ -1,6 +1,7 @@
 export interface Plan {
   name: string
-  price: number
+  price: number | null // null = "Contactar con Ventas"
+  priceLabel: string // display label
   maxUsers: number
   maxPermitsPerMonth: number
   features: string[]
@@ -8,14 +9,18 @@ export interface Plan {
   description: string
   icon: string
   popular?: boolean
+  enterprise?: boolean // special handling for Enterprise
+  trialDays: number // trial period in days
 }
 
 export const PLANS: Record<string, Plan> = {
   starter: {
     name: 'Starter',
     price: 149,
+    priceLabel: '$149',
     maxUsers: 10,
     maxPermitsPerMonth: 200,
+    trialDays: 7,
     description: 'Ideal para pequeñas empresas que inician en gestión de permisos y cumplimiento HSE.',
     icon: 'Rocket',
     features: ['firma_basica', 'dashboard_basico', 'soporte_email', 'gps_basico', 'offline', 'pdf_basico'],
@@ -31,12 +36,14 @@ export const PLANS: Record<string, Plan> = {
   business: {
     name: 'Business',
     price: 499,
+    priceLabel: '$499',
     maxUsers: 50,
     maxPermitsPerMonth: 2000,
+    trialDays: 7,
     description: 'Para empresas en crecimiento que necesitan geocerca, IA y analíticas avanzadas.',
     icon: 'TrendingUp',
     popular: true,
-    features: ['firma_avanzada', 'dashboard_avanzado', 'soporte_prioritario', 'geocerca', 'offline', 'api_access', 'reportes_analitica'],
+    features: ['firma_avanzada', 'dashboard_avanzado', 'soporte_prioritario', 'geocerca', 'offline', 'api_access', 'reportes_analitica', 'scada_basico', 'ia_predictiva'],
     featureLabels: {
       firma_avanzada: 'Firma digital avanzada con GPS',
       dashboard_avanzado: 'Dashboard analítico',
@@ -45,16 +52,21 @@ export const PLANS: Record<string, Plan> = {
       offline: 'Modo offline completo',
       api_access: 'Acceso a API',
       reportes_analitica: 'Reportes y analíticas',
+      scada_basico: 'SCADA Telemetría en tiempo real',
+      ia_predictiva: 'Análisis predictivo con IA',
     },
   },
   enterprise: {
     name: 'Enterprise',
-    price: 9999,
+    price: null,
+    priceLabel: 'Contactar Ventas',
     maxUsers: 999999,
     maxPermitsPerMonth: 999999,
+    trialDays: 0,
     description: 'Solución completa para grandes corporaciones con ERP, auditoría regulatoria y gerente dedicado.',
     icon: 'Building2',
-    features: ['firma_legal', 'dashboard_personalizado', 'soporte_247', 'mapas_calor', 'integracion_erp', 'auditoria_entes', 'gerente_cuenta'],
+    enterprise: true,
+    features: ['firma_legal', 'dashboard_personalizado', 'soporte_247', 'mapas_calor', 'integracion_erp', 'auditoria_entes', 'gerente_cuenta', 'scada_avanzado', 'ia_avanzada', 'api_full'],
     featureLabels: {
       firma_legal: 'Firma con validez legal',
       dashboard_personalizado: 'Dashboard personalizable',
@@ -63,6 +75,9 @@ export const PLANS: Record<string, Plan> = {
       integracion_erp: 'Integración ERP',
       auditoria_entes: 'Auditoría para entes reguladores',
       gerente_cuenta: 'Gerente de cuenta dedicado',
+      scada_avanzado: 'SCADA avanzado con ML',
+      ia_avanzada: 'IA predictiva avanzada',
+      api_full: 'API completa + Webhooks',
     },
   },
 }

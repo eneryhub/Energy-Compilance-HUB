@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { checkUserCompliance } from '@/lib/compliance'
 import { createAuditLog } from '@/lib/audit'
+import { generatePermitPDF } from '@/lib/pdf-generator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -116,11 +117,49 @@ export async function POST(request: NextRequest) {
       details: { permitNumber, riskType, technicianName, workLocation, photosCount: photos?.length || 0 },
     }, request)
 
+    // Generate PDF for the new permit
+    const pdfData = {
+      permitNumber: permit.permitNumber,
+      status: 'PENDING',
+      riskType: permit.riskType,
+      createdAt: permit.createdAt.toISOString(),
+      technicianName: permit.technicianName,
+      supervisorName: permit.supervisorName,
+      workLocation: permit.workLocation,
+      workDescription: permit.workDescription,
+      safetyChecks: JSON.parse(permit.safetyChecks || '{}'),
+      technicianSignature: permit.technicianSignature ? (() => {
+        try {
+          const sig = JSON.parse(permit.technicianSignature)
+          return {
+            signerName: session.name,
+            timestamp: permit.createdAt.toISOString(),
+            location: sig.gps || null,
+            signatureData: sig.data || null,
+          }
+        } catch { return null }
+      })() : null,
+      supervisorSignature: null,
+      photos: permit.photos ? JSON.parse(permit.photos) : null,
+      workLatitude: permit.workLatitude,
+      workLongitude: permit.workLongitude,
+      workRadius: permit.workRadius,
+    }
+
+    let pdfBase64: string | null = null
+    try {
+      const pdfBuffer = await generatePermitPDF(pdfData)
+      pdfBase64 = pdfBuffer.toString('base64')
+    } catch (pdfError) {
+      console.error('PDF generation error on create:', pdfError)
+      // Don't block the response if PDF fails
+    }
+
     return NextResponse.json({
       permitNumber: permit.permitNumber,
       permitId: permit.id,
       message: 'Permiso creado exitosamente. Pendiente de aprobación.',
-      pdf: null,
+      pdf: pdfBase64,
     })
   } catch (error: any) {
     console.error('Create permit error:', error)

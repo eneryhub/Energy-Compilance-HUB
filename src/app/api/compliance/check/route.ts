@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
+import { db } from '@/lib/db'
 import { checkUserCompliance } from '@/lib/compliance'
 
 export async function GET(request: NextRequest) {
@@ -7,6 +8,12 @@ export async function GET(request: NextRequest) {
     const session = await getSession(request)
     if (!session) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+    }
+
+    // Verify the company still exists (database may have been reset/reseeded)
+    const companyExists = await db.company.count({ where: { id: session.companyId } })
+    if (companyExists === 0) {
+      return NextResponse.json({ error: 'Sesión inválida — empresa no encontrada' }, { status: 401 })
     }
 
     const compliance = await checkUserCompliance(session.userId, session.companyId)

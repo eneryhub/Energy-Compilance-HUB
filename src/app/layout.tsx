@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   keywords: ["HSE", "seguridad", "permisos", "compliance", "energía", "SaaS"],
   authors: [{ name: "Energy-Compliance Hub" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.jpeg",
   },
   openGraph: {
     title: "Energy-Compliance Hub",

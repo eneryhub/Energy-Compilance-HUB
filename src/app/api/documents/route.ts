@@ -40,6 +40,10 @@ export async function POST(request: NextRequest) {
       expiryDate,
       holderName,
       description,
+      fileUrl,
+      fileName,
+      fileSize,
+      mimeType,
     } = body
 
     if (!title || !documentType || !category) {
@@ -80,6 +84,10 @@ export async function POST(request: NextRequest) {
         expiryDate: expiryDate ? new Date(expiryDate) : null,
         holderName: holderName || null,
         description: description || null,
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
+        fileSize: fileSize || null,
+        mimeType: mimeType || null,
       },
     })
 

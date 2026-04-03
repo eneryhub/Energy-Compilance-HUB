@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Table,
@@ -27,9 +27,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Camera,
+  Loader2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { apiFetch, type Permit } from '@/lib/api'
+import { apiFetch, downloadPdfFromBase64, type Permit } from '@/lib/api'
 import { RISK_TYPES } from '@/lib/plans'
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
@@ -51,6 +52,7 @@ export default function PermitList({ userRole, onRefresh }: PermitListProps) {
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [selectedPermit, setSelectedPermit] = useState<Permit | null>(null)
   const [page, setPage] = useState(1)
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null)
   const pageSize = 10
 
   useEffect(() => {
@@ -128,6 +130,22 @@ export default function PermitList({ userRole, onRefresh }: PermitListProps) {
       month: 'short',
       year: 'numeric',
     })
+  }
+
+  const handleDownloadPdf = async (permit: Permit) => {
+    setDownloadingPdf(permit.id)
+    try {
+      const data = await apiFetch<{ pdf: string }>('/permits/' + permit.id + '/pdf')
+      if (data.pdf) {
+        const statusLabel = permit.status === 'APPROVED' ? 'Aprobado' : permit.status === 'REJECTED' ? 'Rechazado' : 'Pendiente'
+        downloadPdfFromBase64(data.pdf, `Permiso_${permit.permitNumber}_${statusLabel}.pdf`)
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al generar PDF'
+      alert(message)
+    } finally {
+      setDownloadingPdf(null)
+    }
   }
 
   return (
@@ -231,15 +249,32 @@ export default function PermitList({ userRole, onRefresh }: PermitListProps) {
                         {formatDate(permit.createdAt)}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSelectedPermit(permit)}
-                          className="h-7 gap-1 text-xs text-slate-600 hover:text-emerald-600"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Ver
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadPdf(permit)}
+                            disabled={downloadingPdf === permit.id}
+                            className="h-7 gap-1 text-xs text-slate-600 hover:text-blue-600"
+                            title="Descargar PDF"
+                          >
+                            {downloadingPdf === permit.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <FileDown className="w-3.5 h-3.5" />
+                            )}
+                            <span className="hidden sm:inline">PDF</span>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSelectedPermit(permit)}
+                            className="h-7 gap-1 text-xs text-slate-600 hover:text-emerald-600"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Ver
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -291,6 +326,9 @@ export default function PermitList({ userRole, onRefresh }: PermitListProps) {
                 </Badge>
               )}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Detalles completos del permiso de trabajo seleccionado
+            </DialogDescription>
           </DialogHeader>
           {selectedPermit && (
             <ScrollArea className="max-h-[400px]">

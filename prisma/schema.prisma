@@ -49,6 +49,7 @@ model Company {
   riskTypes          RiskTypeConfig[]
   checklistItems     ChecklistItemConfig[]
   invoices           SubscriptionInvoice[]
+  sensors            Sensor[]
 }
 
 // ============ USER / RBAC ============
@@ -143,6 +144,7 @@ model WorkLocation {
 
   company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   permits  Permit[]
+  sensors  Sensor[]
 
   @@index([latitude, longitude])
 }
@@ -301,12 +303,53 @@ model AuditLog {
   @@index([createdAt])
 }
 
+// ============ SCADA SENSORS (Telemetry) ============
+model Sensor {
+  id                String   @id @default(cuid())
+  companyId         String
+  locationId        String?
+  name              String
+  type              String   // PRESION, TEMPERATURA, GAS, VOLTAJE
+  currentValue      Float?
+  unit              String   // psi, °C, %LEL, V
+  thresholdCritical Float
+  thresholdWarning  Float    @default(0)
+  isSimulated       Boolean  @default(true)
+  isActive          Boolean  @default(true)
+  lastReadingAt     DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  WorkLocation?    @relation(fields: [locationId], references: [id])
+  readings  SensorReading[]
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([type])
+  @@index([isActive])
+}
+
+// ============ SENSOR READINGS (Historical Telemetry) ============
+model SensorReading {
+  id        String   @id @default(cuid())
+  sensorId  String
+  value     Float
+  status    String   // NORMAL, WARNING, CRITICO
+  timestamp DateTime @default(now())
+
+  sensor    Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+
+  @@index([sensorId, timestamp])
+  @@index([sensorId])
+}
+
 // ============ SUBSCRIPTION INVOICE HISTORY ============
 model SubscriptionInvoice {
   id              String   @id @default(cuid())
   companyId       String
   stripeInvoiceId String?  @unique
-  amount          Float
+  amount          Float?
   currency        String   @default("usd")
   status          String   @default("paid") // paid, pending, failed, refunded
   planName        String

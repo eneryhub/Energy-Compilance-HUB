@@ -16,6 +16,9 @@ import {
   History,
   CreditCard,
   AlertTriangle,
+  Activity,
+  Brain,
+  Crown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -27,7 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { removeToken } from '@/lib/api'
 
-export type ViewType = 'dashboard' | 'permits' | 'documents' | 'approval' | 'system' | 'audit' | 'subscription' | 'risk-types'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq'
 
 interface AppShellProps {
   currentView: ViewType
@@ -43,15 +46,19 @@ interface AppShellProps {
   onLogout: () => void
 }
 
-const navItems: { id: ViewType; label: string; icon: React.ComponentType<any> }[] = [
+const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; roles?: string[] }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'permits', label: 'Permisos', icon: FileText },
   { id: 'documents', label: 'Documentos HSE', icon: FolderOpen },
-  { id: 'approval', label: 'Aprobaciones', icon: CheckCircle },
-  { id: 'risk-types', label: 'Riesgos', icon: AlertTriangle },
-  { id: 'subscription', label: 'Suscripción', icon: CreditCard },
-  { id: 'audit', label: 'Auditoría', icon: History },
-  { id: 'system', label: 'Plataforma', icon: Layers },
+  { id: 'approval', label: 'Aprobaciones', icon: CheckCircle, roles: ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER'] },
+  { id: 'risk-types', label: 'Riesgos', icon: AlertTriangle, roles: ['ADMIN', 'SUPERVISOR'] },
+  { id: 'scada', label: 'SCADA', icon: Activity, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
+  { id: 'predictive', label: 'IA Predictiva', icon: Brain, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
+  { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },
+  { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
+  { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
+  { id: 'system', label: 'Plataforma', icon: Layers, roles: ['ADMIN'] },
+  // Hidden: only SUPER_ADMIN sees this (not in the visible nav, accessed via URL)
 ]
 
 function getInitials(name: string) {
@@ -65,6 +72,8 @@ function getInitials(name: string) {
 
 function getRoleBadgeColor(role: string) {
   switch (role) {
+    case 'SUPER_ADMIN':
+      return 'bg-red-100 text-red-700'
     case 'ADMIN':
       return 'bg-emerald-100 text-emerald-700'
     case 'SUPERVISOR':
@@ -90,8 +99,8 @@ function SidebarContent({
     <div className="flex flex-col h-full bg-slate-900">
       {/* Logo */}
       <div className="p-4 flex items-center gap-3">
-        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-emerald-500/20">
-          <Shield className="w-5 h-5 text-emerald-400" />
+        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-emerald-500/20 overflow-hidden">
+          <img src="/logo.jpeg" alt="ECH Logo" className="w-7 h-7 object-cover rounded" />
         </div>
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-bold text-white truncate">Energy-Compliance</h2>
@@ -106,7 +115,7 @@ function SidebarContent({
         <p className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold px-3 mb-2">
           Navegación
         </p>
-        {navItems.map((item) => {
+        {navItems.filter((item) => !item.roles || item.roles.includes(user.role)).map((item) => {
           const Icon = item.icon
           const isActive = currentView === item.id
           return (
@@ -126,11 +135,6 @@ function SidebarContent({
                 >
                   <Icon className={cn('w-4.5 h-4.5', isActive && 'text-emerald-400')} />
                   <span>{item.label}</span>
-                  {item.id === 'approval' && (
-                    <Badge className="ml-auto bg-amber-500 text-white text-[10px] px-1.5 py-0">
-                      3
-                    </Badge>
-                  )}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" className="hidden lg:block">
@@ -139,6 +143,38 @@ function SidebarContent({
             </Tooltip>
           )
         })}
+
+        {/* Hidden SUPER_ADMIN portal — only visible to SUPER_ADMIN role */}
+        {user.role === 'SUPER_ADMIN' && (
+          <>
+            <Separator className="bg-slate-800 my-2" />
+            <p className="text-[10px] uppercase tracking-wider text-red-500/60 font-semibold px-3 mb-2">
+              Super Admin
+            </p>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    onViewChange('admin-portal-hq')
+                    onNavigate?.()
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
+                    currentView === 'admin-portal-hq'
+                      ? 'bg-red-500/15 text-red-400'
+                      : 'text-slate-500 hover:bg-slate-800 hover:text-red-400'
+                  )}
+                >
+                  <Crown className="w-4.5 h-4.5" />
+                  <span>Centro de Mando</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="hidden lg:block">
+                Centro de Mando
+              </TooltipContent>
+            </Tooltip>
+          </>
+        )}
       </nav>
 
       {/* Compliance Status */}
@@ -225,14 +261,14 @@ export default function AppShell(props: AppShellProps) {
             <div className="p-3 flex justify-center">
               <button
                 onClick={() => setCollapsed(false)}
-                className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center"
+                className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center overflow-hidden"
               >
-                <Shield className="w-5 h-5 text-emerald-400" />
+                <img src="/logo.jpeg" alt="ECH" className="w-7 h-7 object-cover rounded" />
               </button>
             </div>
             <Separator className="bg-slate-800" />
             <nav className="flex-1 p-2 space-y-1 flex flex-col items-center">
-              {navItems.map((item) => {
+              {navItems.filter((item) => !item.roles || item.roles.includes(user.role)).map((item) => {
                 const Icon = item.icon
                 const isActive = props.currentView === item.id
                 return (

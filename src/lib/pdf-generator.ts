@@ -102,8 +102,8 @@ export async function generatePermitPDF(permit: PermitPDFData): Promise<Buffer> 
       doc.moveDown(0.3)
 
       // GPS
-      if (permit.workLatitude && permit.workLongitude) {
-        doc.fontSize(10).text(`Coordenadas GPS: ${permit.workLatitude.toFixed(6)}, ${permit.workLongitude.toFixed(6)}`)
+      if (permit.workLatitude != null && permit.workLongitude != null) {
+        doc.fontSize(10).text(`Coordenadas GPS: ${Number(permit.workLatitude).toFixed(6)}, ${Number(permit.workLongitude).toFixed(6)}`)
         doc.text(`Radio de tolerancia: ${permit.workRadius || 100} metros`)
         doc.moveDown(0.3)
       }
@@ -130,10 +130,10 @@ export async function generatePermitPDF(permit: PermitPDFData): Promise<Buffer> 
       if (techSig) {
         doc.fontSize(10).font('Helvetica').text(`Firmado por: ${techSig.signerName || 'Tecnico'}`)
         doc.text(`Fecha: ${techSig.timestamp ? new Date(techSig.timestamp).toLocaleString('es-ES') : 'N/A'}`)
-        if (techSig.location) {
-          doc.text(`GPS al firmar: ${techSig.location.latitude?.toFixed(6)}, ${techSig.location.longitude?.toFixed(6)}`)
-          if (techSig.location.accuracy) {
-            doc.text(`Precision: +/-${Math.round(techSig.location.accuracy)}m`)
+        if (techSig.location && techSig.location.latitude != null && techSig.location.longitude != null) {
+          doc.text(`GPS al firmar: ${Number(techSig.location.latitude).toFixed(6)}, ${Number(techSig.location.longitude).toFixed(6)}`)
+          if (techSig.location.accuracy != null) {
+            doc.text(`Precision: +/-${Math.round(Number(techSig.location.accuracy))}m`)
           }
         }
         if (techSig.is_within_geofence !== undefined) {
@@ -163,8 +163,8 @@ export async function generatePermitPDF(permit: PermitPDFData): Promise<Buffer> 
       if (supSig) {
         doc.fontSize(10).font('Helvetica').text(`Firmado por: ${supSig.signerName || 'Supervisor'}`)
         doc.text(`Fecha: ${supSig.timestamp ? new Date(supSig.timestamp).toLocaleString('es-ES') : 'N/A'}`)
-        if (supSig.location) {
-          doc.text(`GPS al firmar: ${supSig.location.latitude?.toFixed(6)}, ${supSig.location.longitude?.toFixed(6)}`)
+        if (supSig.location && supSig.location.latitude != null && supSig.location.longitude != null) {
+          doc.text(`GPS al firmar: ${Number(supSig.location.latitude).toFixed(6)}, ${Number(supSig.location.longitude).toFixed(6)}`)
         }
         if (supSig.signatureData) {
           try {

@@ -50,8 +50,8 @@ export default function LoginForm({ onLogin, onSwitchToRegister }: LoginFormProp
         className="w-full max-w-md"
       >
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-500/20 mb-4">
-            <Shield className="w-8 h-8 text-emerald-400" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden">
+            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
           </div>
           <h1 className="text-2xl font-bold text-white">Energy-Compliance Hub</h1>
           <p className="text-slate-400 mt-1">Plataforma de gestión HSE y permisos de trabajo</p>
@@ -186,8 +186,8 @@ export function RegisterForm({ onRegister, onSwitchToLogin }: RegisterFormProps)
         className="w-full max-w-md"
       >
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-500/20 mb-4">
-            <Shield className="w-8 h-8 text-emerald-400" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden">
+            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
           </div>
           <h1 className="text-2xl font-bold text-white">Energy-Compliance Hub</h1>
           <p className="text-slate-400 mt-1">Crear una nueva cuenta</p>

@@ -585,6 +585,9 @@ export default function RiskTypeManager() {
               <Edit3 className="w-5 h-5 text-emerald-600" />
               Editar Tipo de Riesgo
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Modifica los datos del tipo de riesgo seleccionado, incluyendo nombre, color, icono y estado.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">

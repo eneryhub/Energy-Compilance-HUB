@@ -86,6 +86,10 @@ export interface HseDocument {
   expiryDate?: string | null
   holderName?: string | null
   description?: string | null
+  fileUrl?: string | null
+  fileName?: string | null
+  fileSize?: number | null
+  mimeType?: string | null
   createdAt: string
   updatedAt?: string
 }
@@ -130,6 +134,10 @@ export interface CreateDocumentRequest {
   expiryDate?: string
   holderName?: string
   description?: string
+  fileUrl?: string
+  fileName?: string
+  fileSize?: number
+  mimeType?: string
 }
 
 export interface DashboardStats {
@@ -180,6 +188,26 @@ export function getUser(): LoginResponse['user'] | null {
 
 export function setUser(user: LoginResponse['user']): void {
   localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+// ============ PDF Download ============
+
+export function downloadPdfFromBase64(base64Data: string, filename: string): void {
+  const byteCharacters = atob(base64Data)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  const blob = new Blob([byteArray], { type: 'application/pdf' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 // ============ API Fetch ============

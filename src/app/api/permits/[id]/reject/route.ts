@@ -16,8 +16,9 @@ export async function POST(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    if (session.role !== 'ADMIN' && session.role !== 'SUPERVISOR') {
-      return NextResponse.json({ error: 'Solo administradores y supervisores pueden rechazar permisos' }, { status: 403 })
+    const canApproveRoles = ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER']
+    if (!canApproveRoles.includes(session.role)) {
+      return NextResponse.json({ error: 'Solo supervisores, gerentes o administradores pueden rechazar permisos' }, { status: 403 })
     }
 
     const { id } = await params
@@ -50,6 +51,22 @@ export async function POST(
       },
     })
 
+    // Normalize technician signature for PDF (technician uses {data, gps} format)
+    let normalizedTechSigForPdf = null
+    if (updatedPermit.technicianSignature) {
+      try {
+        const raw = JSON.parse(updatedPermit.technicianSignature)
+        normalizedTechSigForPdf = {
+          signerName: raw.signerName || updatedPermit.technicianName,
+          timestamp: raw.timestamp || updatedPermit.createdAt.toISOString(),
+          location: raw.location || raw.gps || null,
+          signatureData: raw.signatureData || raw.data || null,
+          is_within_geofence: raw.is_within_geofence,
+          distance_to_work_meters: raw.distance_to_work_meters,
+        }
+      } catch { normalizedTechSigForPdf = null }
+    }
+
     // Generate rejection PDF
     const pdfData = {
       permitNumber: updatedPermit.permitNumber,
@@ -61,7 +78,7 @@ export async function POST(
       workLocation: updatedPermit.workLocation,
       workDescription: updatedPermit.workDescription,
       safetyChecks: JSON.parse(updatedPermit.safetyChecks || '{}'),
-      technicianSignature: updatedPermit.technicianSignature ? JSON.parse(updatedPermit.technicianSignature) : null,
+      technicianSignature: normalizedTechSigForPdf,
       supervisorSignature: null,
       photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
       workLatitude: updatedPermit.workLatitude,

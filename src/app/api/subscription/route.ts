@@ -105,7 +105,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { planKey } = body
 
-    if (!planKey || !['starter', 'business', 'enterprise'].includes(planKey)) {
+    // Enterprise plan must go through contact sales form, not API
+    if (planKey === 'enterprise') {
+      return NextResponse.json(
+        { error: 'El plan Enterprise requiere contacto comercial. Usa el formulario de contacto.' },
+        { status: 400 }
+      )
+    }
+
+    if (!planKey || !['starter', 'business'].includes(planKey)) {
       return NextResponse.json({ error: 'Plan inválido' }, { status: 400 })
     }
 
@@ -123,6 +131,7 @@ export async function POST(req: NextRequest) {
     const periodEnd = new Date(now)
     periodEnd.setMonth(periodEnd.getMonth() + 1)
 
+    // ============ DEMO MODE: instant activation (no Stripe) ============
     if (isDemoMode()) {
       // Demo mode: instant upgrade
       await db.company.update({
@@ -138,16 +147,18 @@ export async function POST(req: NextRequest) {
         },
       })
 
-      // Create demo invoice
-      await db.subscriptionInvoice.create({
-        data: {
-          companyId: payload.companyId,
-          amount: plan.price,
-          status: 'paid',
-          planName: plan.name,
-          description: `Upgrade a plan ${plan.name} (Demo)`,
-        },
-      })
+      // Create demo invoice (skip for Enterprise which has no price)
+      if (plan.price != null && plan.price > 0) {
+        await db.subscriptionInvoice.create({
+          data: {
+            companyId: payload.companyId,
+            amount: plan.price,
+            status: 'paid',
+            planName: plan.name,
+            description: `Upgrade a plan ${plan.name} (Demo)`,
+          },
+        })
+      }
 
       // Audit log
       await createAuditLog({
@@ -168,7 +179,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // Real Stripe mode
+    // ============ PRODUCTION MODE: redirect to Stripe Checkout ============
     const result = await createStripeCheckoutSession(
       payload.companyId,
       company.email,

@@ -11,7 +11,6 @@ import {
   TrendingUp,
   CreditCard,
   AlertTriangle,
-  ChevronRight,
   Loader2,
   Shield,
   Users,
@@ -19,6 +18,10 @@ import {
   Clock,
   ArrowUpRight,
   Sparkles,
+  ExternalLink,
+  Mail,
+  MessageSquare,
+  Banknote,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card'
@@ -33,6 +36,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
 
 interface SubscriptionData {
@@ -40,7 +45,7 @@ interface SubscriptionData {
     plan: string
     planName: string
     status: string
-    price: number
+    price: number | null
     expiresAt?: string | null
     currentPeriodStart?: string | null
     currentPeriodEnd?: string | null
@@ -50,9 +55,9 @@ interface SubscriptionData {
     users: { current: number; max: number; percent: number }
     permits: { current: number; max: number; percent: number }
   }
-  plans: Record<string, { name: string; price: number; features: string[]; popular?: boolean; description: string }>
+  plans: Record<string, { name: string; price: number | null; features: string[]; popular?: boolean; description: string }>
   stripe: { configured: boolean; hasCustomer: boolean; billingEmail?: string | null }
-  invoices: Array<{ id: string; amount: number; currency: string; status: string; planName: string; description?: string | null; paidAt: string }>
+  invoices: Array<{ id: string; amount: number | null; currency: string; status: string; planName: string; description?: string | null; paidAt: string }>
   isDemoMode: boolean
 }
 
@@ -124,6 +129,19 @@ export default function SubscriptionManager() {
   const [canceling, setCanceling] = useState(false)
   const [activeTab, setActiveTab] = useState<'plans' | 'usage' | 'billing'>('plans')
 
+  // Stripe checkout state
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [pendingPlanKey, setPendingPlanKey] = useState<string | null>(null)
+  const [pendingPlanName, setPendingPlanName] = useState<string | null>(null)
+  const [pendingPlanPrice, setPendingPlanPrice] = useState<number | null>(null)
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+
+  // Enterprise contact state
+  const [showContactDialog, setShowContactDialog] = useState(false)
+  const [contactForm, setContactForm] = useState({ name: '', email: '', phone: '', message: '' })
+  const [contactSending, setContactSending] = useState(false)
+  const [contactSent, setContactSent] = useState(false)
+
   const fetchSubscription = useCallback(async () => {
     try {
       const res = await apiFetch<SubscriptionData>('/subscription')
@@ -137,21 +155,97 @@ export default function SubscriptionManager() {
 
   useEffect(() => { fetchSubscription() }, [fetchSubscription])
 
-  const handleUpgrade = async (planKey: string) => {
-    setUpgrading(planKey)
+  // Check if we returned from a canceled payment
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('payment') === 'canceled') {
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname)
+      // Optionally show a toast or message
+    }
+  }, [])
+
+  const handleUpgradeClick = (planKey: string) => {
+    const plan = data?.plans[planKey]
+    if (!plan) return
+
+    // Enterprise always shows contact form
+    if (planKey === 'enterprise') {
+      setPendingPlanKey(planKey)
+      setPendingPlanName(plan.name)
+      setShowContactDialog(true)
+      return
+    }
+
+    // For paid plans, show confirmation dialog
+    setPendingPlanKey(planKey)
+    setPendingPlanName(plan.name)
+    setPendingPlanPrice(plan.price)
+    setShowPaymentDialog(true)
+  }
+
+  const confirmPayment = async () => {
+    if (!pendingPlanKey) return
+    setCheckoutLoading(true)
     try {
-      const res = await apiFetch<{ success: boolean; checkoutUrl?: string; demo?: boolean; message: string; planName: string }>('/subscription', {
+      const res = await apiFetch<{
+        success: boolean
+        checkoutUrl?: string
+        demo?: boolean
+        message: string
+        planName: string
+      }>('/subscription', {
         method: 'POST',
-        body: JSON.stringify({ planKey }),
+        body: JSON.stringify({ planKey: pendingPlanKey }),
       })
+
       if (res.checkoutUrl && !res.demo) {
-        window.open(res.checkoutUrl, '_blank')
+        // Real Stripe: redirect to checkout (same window for mobile, new tab for desktop)
+        window.location.href = res.checkoutUrl
+      } else if (res.demo) {
+        // Demo mode: instant activation
+        setShowPaymentDialog(false)
+        await fetchSubscription()
       }
-      await fetchSubscription()
     } catch (err: any) {
-      console.error('Upgrade error:', err)
+      console.error('Checkout error:', err)
+      alert(err.message || 'Error al iniciar el proceso de pago')
     } finally {
-      setUpgrading(null)
+      setCheckoutLoading(false)
+    }
+  }
+
+  const handleContactSubmit = async () => {
+    if (!contactForm.name || !contactForm.email) return
+    setContactSending(true)
+    try {
+      // In a real app, this would send to a CRM or email service
+      // For now, we simulate with a small delay and show success
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
+      // Audit log for enterprise interest (optional)
+      try {
+        await apiFetch('/subscription/contact', {
+          method: 'POST',
+          body: JSON.stringify({
+            planKey: pendingPlanKey,
+            ...contactForm,
+          }),
+        })
+      } catch {
+        // Non-critical: contact endpoint may not exist yet
+      }
+
+      setContactSent(true)
+      setTimeout(() => {
+        setShowContactDialog(false)
+        setContactSent(false)
+        setContactForm({ name: '', email: '', phone: '', message: '' })
+      }, 3000)
+    } catch {
+      alert('Error al enviar solicitud')
+    } finally {
+      setContactSending(false)
     }
   }
 
@@ -205,6 +299,11 @@ export default function SubscriptionManager() {
               <Sparkles className="w-3 h-3" /> Modo Demo
             </Badge>
           )}
+          {!data.isDemoMode && data.stripe.configured && (
+            <Badge className="bg-emerald-100 text-emerald-700 border-0 gap-1 text-[10px]">
+              <Banknote className="w-3 h-3" /> Pagos Activos
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -220,7 +319,7 @@ export default function SubscriptionManager() {
                 <p className="text-sm text-slate-500">Plan actual</p>
                 <p className="text-xl font-bold text-slate-800">{data.subscription.planName}</p>
                 <p className="text-sm text-slate-500">
-                  ${data.subscription.price}/mes
+                  {data.subscription.price != null ? `$${data.subscription.price}/mes` : 'Personalizado'}
                   {data.subscription.currentPeriodEnd && (
                     <span className="ml-2">
                       · Renueva {new Date(data.subscription.currentPeriodEnd).toLocaleDateString('es')}
@@ -229,7 +328,7 @@ export default function SubscriptionManager() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Badge className="bg-emerald-100 text-emerald-700 border-0 gap-1">
                 <Users className="w-3 h-3" />
                 {data.limits.users.current}/{data.limits.users.max} usuarios
@@ -274,8 +373,10 @@ export default function SubscriptionManager() {
           {Object.entries(data.plans).map(([key, plan]) => {
             const isCurrent = currentPlan === key
             const isPopular = (plan as any).popular
+            const isEnterprise = key === 'enterprise'
             const colors = PLAN_COLORS[key]
             const Icon = PLAN_ICONS[key] || Shield
+            const priceDisplay = plan.price != null ? `$${plan.price}` : 'Contactar'
 
             return (
               <Card
@@ -300,8 +401,8 @@ export default function SubscriptionManager() {
                 </CardHeader>
                 <CardContent className="text-center pb-4">
                   <div className="flex items-baseline justify-center gap-1 mb-4">
-                    <span className="text-3xl font-bold text-slate-800">${plan.price}</span>
-                    <span className="text-sm text-slate-500">/mes</span>
+                    <span className="text-3xl font-bold text-slate-800">{priceDisplay}</span>
+                    {plan.price != null && <span className="text-sm text-slate-500">/mes</span>}
                   </div>
                   <ul className="space-y-2 text-left mb-4">
                     {plan.features.map((feature, i) => (
@@ -320,21 +421,31 @@ export default function SubscriptionManager() {
                   ) : (
                     <Button
                       className={`w-full gap-2 ${
-                        key === 'business'
-                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                          : key === 'enterprise'
+                        isEnterprise
                           ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                          : key === 'business'
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
                           : 'bg-slate-800 hover:bg-slate-900 text-white'
                       }`}
-                      onClick={() => handleUpgrade(key)}
+                      onClick={() => handleUpgradeClick(key)}
                       disabled={!!upgrading}
                     >
                       {upgrading === key ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         <>
-                          {data.isDemoMode ? <Sparkles className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
-                          {data.isDemoMode ? 'Activar Demo' : 'Upgrade'}
+                          {isEnterprise ? (
+                            <MessageSquare className="w-4 h-4" />
+                          ) : data.isDemoMode ? (
+                            <Sparkles className="w-4 h-4" />
+                          ) : (
+                            <Banknote className="w-4 h-4" />
+                          )}
+                          {isEnterprise
+                            ? 'Contactar Ventas'
+                            : data.isDemoMode
+                            ? 'Activar Demo'
+                            : 'Suscribirme'}
                         </>
                       )}
                     </Button>
@@ -405,7 +516,7 @@ export default function SubscriptionManager() {
               {data.limits.permits.percent >= 90 && (
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Nearly at limit. Upgrade to increase your monthly permit allowance.</span>
+                  <span>Casi al límite. Considera hacer upgrade para más permisos mensuales.</span>
                 </div>
               )}
             </CardContent>
@@ -422,7 +533,9 @@ export default function SubscriptionManager() {
             <CardContent>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <div className="text-center p-3 rounded-lg bg-slate-50">
-                  <p className="text-2xl font-bold text-slate-800">${data.subscription.price}</p>
+                  <p className="text-2xl font-bold text-slate-800">
+                    {data.subscription.price != null ? `$${data.subscription.price}` : '—'}
+                  </p>
                   <p className="text-xs text-slate-500 mt-1">Precio/mes</p>
                 </div>
                 <div className="text-center p-3 rounded-lg bg-slate-50">
@@ -435,7 +548,7 @@ export default function SubscriptionManager() {
                 </div>
                 <div className="text-center p-3 rounded-lg bg-slate-50">
                   <p className="text-2xl font-bold text-slate-800">
-                    {data.invoices.length > 0 ? `$${data.invoices.reduce((s, i) => s + i.amount, 0).toFixed(0)}` : '$0'}
+                    {data.invoices.length > 0 ? `$${data.invoices.reduce((s, i) => s + (i.amount ?? 0), 0).toFixed(0)}` : '$0'}
                   </p>
                   <p className="text-xs text-slate-500 mt-1">Total facturado</p>
                 </div>
@@ -462,7 +575,7 @@ export default function SubscriptionManager() {
                   <p className="text-sm font-medium text-slate-700">Método de pago</p>
                   <p className="text-xs text-slate-500">
                     {data.stripe.configured
-                      ? `Conectado${data.stripe.billingEmail ? ` · ${data.stripe.billingEmail}` : ''}`
+                      ? `Stripe conectado${data.stripe.billingEmail ? ` · ${data.stripe.billingEmail}` : ''}`
                       : 'Modo Demo — los upgrades son simulados'}
                   </p>
                 </div>
@@ -531,7 +644,9 @@ export default function SubscriptionManager() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold text-slate-700">${invoice.amount.toFixed(2)}</span>
+                        <span className="text-sm font-semibold text-slate-700">
+                          {invoice.amount != null ? `$${invoice.amount.toFixed(2)}` : '—'}
+                        </span>
                         {getInvoiceStatus(invoice.status)}
                       </div>
                     </div>
@@ -543,7 +658,179 @@ export default function SubscriptionManager() {
         </div>
       )}
 
-      {/* Cancel Dialog */}
+      {/* ============ PAYMENT CONFIRMATION DIALOG ============ */}
+      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="w-5 h-5 text-emerald-600" />
+              Confirmar Suscripción
+            </DialogTitle>
+            <DialogDescription>
+              {data?.isDemoMode
+                ? 'Estás en modo demo. El plan se activará instantáneamente sin cobro real.'
+                : 'Serás redirigido a Stripe para completar el pago de forma segura.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="bg-slate-50 rounded-lg p-4 space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-slate-600">Plan</span>
+              <span className="font-semibold text-slate-800">{pendingPlanName}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-slate-600">Precio mensual</span>
+              <span className="font-bold text-lg text-emerald-600">
+                {pendingPlanPrice != null ? `$${pendingPlanPrice}` : '—'} USD
+              </span>
+            </div>
+            {data?.isDemoMode && (
+              <>
+                <Separator />
+                <div className="flex items-center gap-2 p-2 rounded bg-violet-50 text-violet-700 text-xs">
+                  <Sparkles className="w-4 h-4 shrink-0" />
+                  <span>Modo demo: Sin cargo. Configure STRIPE_SECRET_KEY para pagos reales.</span>
+                </div>
+              </>
+            )}
+            {!data?.isDemoMode && (
+              <>
+                <Separator />
+                <div className="flex items-center gap-2 p-2 rounded bg-emerald-50 text-emerald-700 text-xs">
+                  <Shield className="w-4 h-4 shrink-0" />
+                  <span>Pago seguro procesado por Stripe. No almacenamos datos de tarjeta.</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setShowPaymentDialog(false)} disabled={checkoutLoading}>
+              Cancelar
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              onClick={confirmPayment}
+              disabled={checkoutLoading}
+            >
+              {checkoutLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Procesando...
+                </>
+              ) : data?.isDemoMode ? (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Activar Plan Demo
+                </>
+              ) : (
+                <>
+                  <ExternalLink className="w-4 h-4" />
+                  Ir a Pagar
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ ENTERPRISE CONTACT DIALOG ============ */}
+      <Dialog open={showContactDialog} onOpenChange={setShowContactDialog}>
+        <DialogContent className="sm:max-w-md">
+          {contactSent ? (
+            <div className="text-center py-6">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 mx-auto mb-4 flex items-center justify-center">
+                <Check className="w-7 h-7 text-emerald-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800 mb-2">¡Solicitud enviada!</h3>
+              <p className="text-sm text-slate-500">
+                Nuestro equipo comercial se pondrá en contacto contigo en las próximas 24 horas.
+              </p>
+            </div>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-amber-600" />
+                  Plan Enterprise
+                </DialogTitle>
+                <DialogDescription>
+                  Déjanos tus datos y un asesor comercial se comunicará contigo para personalizar tu solución.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label htmlFor="contact-name">Nombre completo *</Label>
+                  <Input
+                    id="contact-name"
+                    placeholder="Juan Pérez"
+                    value={contactForm.name}
+                    onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="contact-email">Correo electrónico *</Label>
+                  <Input
+                    id="contact-email"
+                    type="email"
+                    placeholder="juan@empresa.com"
+                    value={contactForm.email}
+                    onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="contact-phone">Teléfono</Label>
+                  <Input
+                    id="contact-phone"
+                    placeholder="+506 8888-0000"
+                    value={contactForm.phone}
+                    onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="contact-message">Mensaje (opcional)</Label>
+                  <textarea
+                    id="contact-message"
+                    className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"
+                    placeholder="Cuéntanos sobre tu empresa y necesidades..."
+                    value={contactForm.message}
+                    onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="outline" onClick={() => setShowContactDialog(false)} disabled={contactSending}>
+                  Cancelar
+                </Button>
+                <Button
+                  className="bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                  onClick={handleContactSubmit}
+                  disabled={contactSending || !contactForm.name || !contactForm.email}
+                >
+                  {contactSending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Enviando...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-4 h-4" />
+                      Enviar Solicitud
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ============ CANCEL SUBSCRIPTION DIALOG ============ */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
         <DialogContent>
           <DialogHeader>

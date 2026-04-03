@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   CheckCircle2,
@@ -26,7 +26,7 @@ import {
   Camera,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { apiFetch, type ComplianceCheck, type Permit } from '@/lib/api'
+import { apiFetch, downloadPdfFromBase64, type ComplianceCheck, type Permit } from '@/lib/api'
 import { RISK_TYPES } from '@/lib/plans'
 import SignaturePad from '@/components/signature/signature-pad'
 
@@ -46,10 +46,27 @@ export default function ApprovalPanel() {
   const [aiReview, setAiReview] = useState<any>(null)
   const [aiReviewing, setAiReviewing] = useState(false)
   const [showAiReview, setShowAiReview] = useState(false)
+  const [scadaSafety, setScadaSafety] = useState<{
+    isSafe: boolean
+    criticalSensors: Array<{ id: string; name: string; type: string; value: number; unit: string; threshold: number }>
+  } | null>(null)
 
   useEffect(() => {
     loadData()
+    // Check SCADA safety every 5 seconds
+    const scadaInterval = setInterval(checkScadaSafety, 5000)
+    return () => clearInterval(scadaInterval)
   }, [])
+
+  const checkScadaSafety = async () => {
+    try {
+      const data = await apiFetch<{ isSafe: boolean; criticalSensors: any[] }>('/sensors/site-safe')
+      setScadaSafety(data)
+    } catch {
+      // If SCADA check fails, allow operations (don't block on error)
+      setScadaSafety({ isSafe: true, criticalSensors: [] })
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -60,6 +77,7 @@ export default function ApprovalPanel() {
       ])
       setPendingPermits(permitsData)
       setCompliance(complianceData)
+      checkScadaSafety()
     } catch {
       setPendingPermits([
         {
@@ -131,20 +149,30 @@ export default function ApprovalPanel() {
     if (!selectedPermit || !signatureData) return
     setApproving(true)
     try {
-      await apiFetch(`/permits/${selectedPermit.id}/approve`, {
+      const body: Record<string, unknown> = {
+        action: 'approve',
+        signature: signatureData,
+        gpsLatitude: signatureGps?.latitude,
+        gpsLongitude: signatureGps?.longitude,
+        gpsAccuracy: signatureGps?.accuracy,
+      }
+      const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit.id}/approve`, {
         method: 'POST',
-        body: JSON.stringify({
-          signatureData,
-          gpsCoordinates: signatureGps,
-        }),
+        body: JSON.stringify(body),
       })
+      // Download PDF if returned
+      if (result.pdf) {
+        downloadPdfFromBase64(result.pdf, `Permiso_${selectedPermit.permitNumber}_Aprobado.pdf`)
+      }
       setSuccessMessage(`Permiso ${selectedPermit.permitNumber} aprobado exitosamente`)
       setShowSuccessDialog(true)
       setSelectedPermit(null)
       setSignatureData(null)
+      setSignatureGps(null)
       loadData()
-    } catch (err: any) {
-      alert(err.message || 'Error al aprobar permiso')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al aprobar permiso'
+      alert(message)
     } finally {
       setApproving(false)
     }
@@ -154,24 +182,29 @@ export default function ApprovalPanel() {
     if (!selectedPermit || !rejectReason.trim()) return
     setRejecting(true)
     try {
-      await apiFetch(`/permits/${selectedPermit.id}/reject`, {
+      const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit.id}/reject`, {
         method: 'POST',
-        body: JSON.stringify({ reason: rejectReason }),
+        body: JSON.stringify({ reason: rejectReason.trim() }),
       })
+      // Download PDF if returned
+      if (result.pdf) {
+        downloadPdfFromBase64(result.pdf, `Permiso_${selectedPermit.permitNumber}_Rechazado.pdf`)
+      }
       setSuccessMessage(`Permiso ${selectedPermit.permitNumber} rechazado`)
       setShowSuccessDialog(true)
       setSelectedPermit(null)
       setRejectReason('')
       setShowRejectDialog(false)
       loadData()
-    } catch (err: any) {
-      alert(err.message || 'Error al rechazar permiso')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al rechazar permiso'
+      alert(message)
     } finally {
       setRejecting(false)
     }
   }
 
-  const isBlocked = compliance && !compliance.isCompliant
+  const isBlocked = (compliance && !compliance.isCompliant) || (scadaSafety && !scadaSafety.isSafe)
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('es', {
@@ -195,7 +228,7 @@ export default function ApprovalPanel() {
     <div className="space-y-6">
       {/* Compliance Gate */}
       <AnimatePresence>
-        {isBlocked && compliance && (
+        {compliance && !compliance.isCompliant && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
@@ -228,14 +261,59 @@ export default function ApprovalPanel() {
         )}
       </AnimatePresence>
 
-      {compliance && compliance.isCompliant && (
+      {/* SCADA Security Gate */}
+      <AnimatePresence>
+        {scadaSafety && !scadaSafety.isSafe && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="rounded-xl border-2 border-red-400 bg-gradient-to-r from-slate-900 to-slate-950 p-5 text-white"
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-red-500/30">
+                <Shield className="w-5 h-5 text-red-400 animate-pulse" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                  BLOQUEADO: Alerta SCADA Detectada
+                </h3>
+                <p className="text-sm text-red-200 mt-1">
+                  El sistema SCADA ha detectado sensores fuera de rango. Las firmas están bloqueadas por seguridad.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {scadaSafety.criticalSensors.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between p-2.5 rounded-lg bg-red-500/20 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-pulse" />
+                        <span className="font-medium text-red-100">{s.name}</span>
+                        <span className="text-red-300 text-xs">({s.type})</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-red-100">{s.value} {s.unit}</span>
+                        <Badge className="bg-red-600 text-white text-[10px]">Límite: {s.threshold} {s.unit}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-3">
+                  Verifique el panel SCADA → Telemetría para monitorear los sensores en tiempo real.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {compliance && compliance.isCompliant && (!scadaSafety || scadaSafety.isSafe) && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200"
         >
           <ShieldCheck className="w-5 h-5 text-emerald-600" />
-          <span className="text-sm font-medium text-emerald-700">Cumplimiento HSE: OK — Puede aprobar permisos</span>
+          <span className="text-sm font-medium text-emerald-700">Cumplimiento HSE + SCADA: OK — Puede aprobar permisos</span>
         </motion.div>
       )}
 
@@ -558,6 +636,9 @@ export default function ApprovalPanel() {
               <XCircle className="w-5 h-5 text-red-500" />
               Rechazar Permiso
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Indique el motivo del rechazo del permiso
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
@@ -588,6 +669,10 @@ export default function ApprovalPanel() {
       {/* Success Dialog */}
       <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
         <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="sr-only">Operación completada</DialogTitle>
+            <DialogDescription className="sr-only">Resultado de la operación sobre el permiso</DialogDescription>
+          </DialogHeader>
           <div className="text-center py-4">
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
             <p className="text-sm text-slate-700">{successMessage}</p>
