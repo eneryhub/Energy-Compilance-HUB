@@ -158,6 +158,7 @@ export default function Home() {
       <LoginForm
         onLogin={handleLogin}
         onSwitchToRegister={() => setAppState('register')}
+        onBackToHome={() => setAppState('landing')}
       />
     )
   }
@@ -167,6 +168,7 @@ export default function Home() {
       <RegisterForm
         onRegister={() => setAppState('login')}
         onSwitchToLogin={() => setAppState('login')}
+        onBackToHome={() => setAppState('landing')}
       />
     )
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
+import { checkSubscription } from '@/lib/subscription-guard'
 
 export async function GET(request: NextRequest) {
   try {
@@ -28,6 +29,15 @@ export async function POST(request: NextRequest) {
     const session = await getSession(request)
     if (!session) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+    }
+
+    // Enforce subscription for write operations
+    const subStatus = await checkSubscription(session.companyId)
+    if (subStatus.blockAccess) {
+      return NextResponse.json(
+        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
+        { status: 403 }
+      )
     }
 
     const body = await request.json()

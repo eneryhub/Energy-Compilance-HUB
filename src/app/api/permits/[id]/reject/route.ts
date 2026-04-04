@@ -4,6 +4,7 @@ import { getSession } from '@/lib/auth'
 import { enforceCompliance } from '@/lib/compliance'
 import { generatePermitPDF } from '@/lib/pdf-generator'
 import { createAuditLog } from '@/lib/audit'
+import { checkSubscription } from '@/lib/subscription-guard'
 
 // POST /api/permits/[id]/reject - Reject a permit
 export async function POST(
@@ -19,6 +20,15 @@ export async function POST(
     const canApproveRoles = ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER']
     if (!canApproveRoles.includes(session.role)) {
       return NextResponse.json({ error: 'Solo supervisores, gerentes o administradores pueden rechazar permisos' }, { status: 403 })
+    }
+
+    // Enforce subscription for write operations
+    const subStatus = await checkSubscription(session.companyId)
+    if (subStatus.blockAccess) {
+      return NextResponse.json(
+        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
+        { status: 403 }
+      )
     }
 
     const { id } = await params

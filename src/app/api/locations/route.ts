@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
+import { checkSubscription } from '@/lib/subscription-guard'
 
 // GET /api/locations - List work locations
 export async function GET(request: NextRequest) {
@@ -53,6 +54,15 @@ export async function POST(request: NextRequest) {
     // Only ADMIN and SUPERVISOR can create locations
     if (session.role !== 'ADMIN' && session.role !== 'SUPERVISOR' && session.role !== 'MANAGER') {
       return NextResponse.json({ error: 'Solo administradores, supervisores y gerentes pueden crear ubicaciones' }, { status: 403 })
+    }
+
+    // Enforce subscription for write operations
+    const subStatus = await checkSubscription(session.companyId)
+    if (subStatus.blockAccess) {
+      return NextResponse.json(
+        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
+        { status: 403 }
+      )
     }
 
     const body = await request.json()

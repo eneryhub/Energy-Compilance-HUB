@@ -3,6 +3,7 @@ import { getTokenPayload } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { getSensorProfileDefaults, generateSimulatedValue } from '@/lib/scada/engine'
 import { createAuditLog } from '@/lib/audit'
+import { checkSubscription } from '@/lib/subscription-guard'
 import type { SensorType } from '@/lib/scada/engine'
 
 // GET /api/sensors - List all sensors
@@ -51,6 +52,15 @@ export async function POST(req: NextRequest) {
 
     if (!['ADMIN', 'SUPERVISOR', 'MANAGER'].includes(payload.role)) {
       return NextResponse.json({ error: 'Sin permisos' }, { status: 403 })
+    }
+
+    // Enforce subscription for write operations
+    const subStatus = await checkSubscription(payload.companyId)
+    if (subStatus.blockAccess) {
+      return NextResponse.json(
+        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
+        { status: 403 }
+      )
     }
 
     const body = await req.json()

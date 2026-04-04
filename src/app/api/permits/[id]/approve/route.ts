@@ -6,6 +6,7 @@ import { generatePermitPDF } from '@/lib/pdf-generator'
 import { checkGeofence } from '@/lib/gps'
 import { hashSignature } from '@/lib/gps'
 import { createAuditLog } from '@/lib/audit'
+import { checkSubscription } from '@/lib/subscription-guard'
 
 // POST /api/permits/[id]/approve - Approve or reject a permit
 export async function POST(
@@ -22,6 +23,15 @@ export async function POST(
     const canApproveRoles = ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER']
     if (!canApproveRoles.includes(session.role)) {
       return NextResponse.json({ error: 'Solo supervisores, gerentes o administradores pueden aprobar o rechazar permisos' }, { status: 403 })
+    }
+
+    // Enforce subscription for write operations
+    const subStatus = await checkSubscription(session.companyId)
+    if (subStatus.blockAccess) {
+      return NextResponse.json(
+        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
+        { status: 403 }
+      )
     }
 
     const { id } = await params
