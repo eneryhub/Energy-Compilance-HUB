@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getPlan, isDemoMode } from '@/lib/plans'
 import { createStripeCheckoutSession, cancelSubscription, isStripeConfigured } from '@/lib/stripe'
-import { getTokenPayload } from '@/lib/auth'
+import { getTokenPayload, createSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 
 // GET /api/subscription - Get current subscription details
@@ -49,15 +49,6 @@ export async function GET(req: NextRequest) {
     const usagePercentUsers = maxUsers > 0 ? Math.round((userCount / maxUsers) * 100) : 0
     const usagePercentPermits = maxPermits > 0 ? Math.round((permitsThisMonth / maxPermits) * 100) : 0
 
-    // Calculate trial info
-    const planTrialDays = plan.trialDays
-    const created = new Date(company.createdAt)
-    const trialEnd = new Date(created.getTime() + planTrialDays * 24 * 60 * 60 * 1000)
-    const now = new Date()
-    const trialMsRemaining = trialEnd.getTime() - now.getTime()
-    const trialDaysRemaining = Math.ceil(trialMsRemaining / (24 * 60 * 60 * 1000))
-    const isTrial = company.subscriptionStatus === 'TRIAL' && trialDaysRemaining > 0
-
     return NextResponse.json({
       subscription: {
         plan: company.subscriptionPlan || 'starter',
@@ -67,10 +58,7 @@ export async function GET(req: NextRequest) {
         expiresAt: company.subscriptionExpiresAt,
         currentPeriodStart: company.currentPeriodStart,
         currentPeriodEnd: company.currentPeriodEnd,
-        trialEndsAt: trialEnd.toISOString(),
-        trialDaysRemaining: isTrial ? trialDaysRemaining : 0,
-        isTrial,
-        trialTotalDays: planTrialDays,
+        trialEndsAt: company.trialEndsAt,
       },
       limits: {
         users: { current: userCount, max: maxUsers, percent: usagePercentUsers },
@@ -182,12 +170,23 @@ export async function POST(req: NextRequest) {
         details: { field: 'subscriptionPlan', from: company.subscriptionPlan, to: planKey },
       }, req)
 
+      // Generate new JWT with updated plan so modules unlock instantly
+      const newToken = await createSession({
+        id: payload.userId,
+        companyId: payload.companyId,
+        role: payload.role,
+        email: payload.email,
+        name: payload.name,
+        subscriptionPlan: planKey,
+      })
+
       return NextResponse.json({
         success: true,
         message: `Plan actualizado a ${plan.name} (Modo Demo)`,
         plan: planKey,
         planName: plan.name,
         demo: true,
+        newToken, // Client should replace stored token with this
       })
     }
 

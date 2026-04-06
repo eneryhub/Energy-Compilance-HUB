@@ -12,20 +12,51 @@ import SystemOverview from '@/components/dashboard/system-overview'
 import AuditTrail from '@/components/audit/audit-trail'
 import DocumentManager from '@/components/documents/document-manager'
 import SubscriptionManager from '@/components/subscription/subscription-manager'
+import UpgradeModal from '@/components/subscription/upgrade-modal'
 import RiskTypeManager from '@/components/risk-types/risk-type-manager'
 import TelemetryBoard from '@/components/scada/telemetry-board'
+import LocationsManager from '@/components/scada/locations-manager'
+import LocationImport from '@/components/import/location-import'
 import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
-import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
 import ReportsDashboard from '@/components/reports/reports-dashboard'
-import TechnicalManual from '@/components/manuals/technical-manual'
 import UserManual from '@/components/manuals/user-manual'
+import TechnicalManual from '@/components/manuals/technical-manual'
+import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
-import { PlusCircle, List, Crown } from 'lucide-react'
+import { PlusCircle, List, Crown, Lock } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
+
+// Plan-gated modules mirror (must match app-shell.tsx PLAN_GATES)
+const PLAN_GATES: Record<string, { minPlan: string; upsellMessage: string }> = {
+  scada: {
+    minPlan: 'business',
+    upsellMessage: 'Pásate al plan Business para monitorear tus sensores en tiempo real con telemetría SCADA.',
+  },
+  predictive: {
+    minPlan: 'business',
+    upsellMessage: 'Pásate al plan Business para acceder al análisis predictivo con Inteligencia Artificial.',
+  },
+  reports: {
+    minPlan: 'business',
+    upsellMessage: 'Pásate al plan Business para generar reportes analíticos avanzados de tu operación.',
+  },
+}
+
+const PLAN_PRIORITY: Record<string, number> = {
+  starter: 0,
+  business: 1,
+  enterprise: 2,
+}
+
+function isModuleAccessible(moduleId: string, plan: string): boolean {
+  const gate = PLAN_GATES[moduleId]
+  if (!gate) return true
+  return (PLAN_PRIORITY[plan] ?? 0) >= (PLAN_PRIORITY[gate.minPlan] ?? 0)
+}
 
 type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting'
 
@@ -39,6 +70,11 @@ export default function Home() {
   const [permitView, setPermitView] = useState<'list' | 'form'>('list')
   const [subscriptionBlocked, setSubscriptionBlocked] = useState(false)
   const [subscriptionMessage, setSubscriptionMessage] = useState('')
+
+  // Upgrade modal state
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false)
+  const [upgradeModuleName, setUpgradeModuleName] = useState('')
+  const [upgradeMessage, setUpgradeMessage] = useState('')
 
   // Detect token on client-side only (after mount) to prevent SSR hydration mismatch.
   // Server renders login (no localStorage), client detects saved token.
@@ -92,6 +128,20 @@ export default function Home() {
     restoreSession()
   }, [])
 
+  // Listen for plan updates from SubscriptionManager (no full reload needed)
+  useEffect(() => {
+    const handlePlanUpdated = ((e: CustomEvent) => {
+      const newPlan = (e as CustomEvent<{ plan: string }>).detail.plan
+      if (newPlan && user) {
+        setUserState({ ...user, subscriptionPlan: newPlan })
+        setUser({ ...user, subscriptionPlan: newPlan })
+      }
+    }) as EventListener
+
+    window.addEventListener('plan-updated', handlePlanUpdated)
+    return () => window.removeEventListener('plan-updated', handlePlanUpdated)
+  }, [user])
+
   const handleLogout = useCallback(() => {
     removeToken()
     setUserState(null)
@@ -135,6 +185,34 @@ export default function Home() {
     checkCompliance()
   }
 
+  // Handle upgrade request from sidebar (candado clic)
+  const handleUpgradeRequest = useCallback((moduleId: string, moduleName: string, upsellMessage: string) => {
+    setUpgradeModuleName(moduleName)
+    setUpgradeMessage(upsellMessage)
+    setUpgradeModalOpen(true)
+  }, [])
+
+  // Navigate to subscription page
+  const handleUpgradeToSubscription = useCallback(() => {
+    setCurrentView('subscription')
+  }, [])
+
+  // Handle view change: block if plan-gated module and user doesn't have access
+  const handleViewChange = useCallback((view: ViewType) => {
+    const userPlan = user?.subscriptionPlan || 'starter'
+    if (!isModuleAccessible(view, userPlan)) {
+      const gate = PLAN_GATES[view]
+      if (gate) {
+        setUpgradeModuleName(gate.upsellMessage.includes('SCADA') ? 'SCADA' : gate.upsellMessage.includes('IA') ? 'IA Predictiva' : 'Reportes')
+        setUpgradeMessage(gate.upsellMessage)
+        setUpgradeModalOpen(true)
+        return
+      }
+    }
+    setCurrentView(view)
+    if (view !== 'permits') setPermitView('list')
+  }, [user?.subscriptionPlan])
+
   // Show nothing while mounting (prevents hydration mismatch flash)
   if (appState === 'mounting') {
     return (
@@ -162,7 +240,6 @@ export default function Home() {
       <LoginForm
         onLogin={handleLogin}
         onSwitchToRegister={() => setAppState('register')}
-        onBackToHome={() => setAppState('landing')}
       />
     )
   }
@@ -172,23 +249,32 @@ export default function Home() {
       <RegisterForm
         onRegister={() => setAppState('login')}
         onSwitchToLogin={() => setAppState('login')}
-        onBackToHome={() => setAppState('landing')}
       />
     )
   }
+
+  const userPlan = user?.subscriptionPlan || 'starter'
 
   // App views
   return (
     <AppShell
       currentView={currentView}
-      onViewChange={(view) => {
-        setCurrentView(view)
-        if (view !== 'permits') setPermitView('list')
-      }}
+      onViewChange={handleViewChange}
       user={user!}
       complianceStatus={complianceStatus}
       onLogout={handleLogout}
+      onUpgradeRequest={handleUpgradeRequest}
     >
+      {/* Upgrade Modal */}
+      <UpgradeModal
+        open={upgradeModalOpen}
+        onOpenChange={setUpgradeModalOpen}
+        moduleName={upgradeModuleName}
+        upsellMessage={upgradeMessage}
+        currentPlan={userPlan}
+        onUpgrade={handleUpgradeToSubscription}
+      />
+
       {/* Subscription Block Banner */}
       {subscriptionBlocked && currentView !== 'subscription' && (
         <motion.div
@@ -278,6 +364,13 @@ export default function Home() {
             <RiskTypeManager />
           )}
 
+          {currentView === 'locations' && (
+            <div className="space-y-4">
+              <LocationsManager />
+              <LocationImport />
+            </div>
+          )}
+
           {currentView === 'scada' && (
             <TelemetryBoard />
           )}
@@ -311,27 +404,28 @@ export default function Home() {
             </div>
           )}
 
+          {currentView === 'reports' && (
+            <ReportsDashboard />
+          )}
+
           {currentView === 'system' && (
             <SystemOverview />
           )}
 
-          {currentView === 'diagnostics' && (
-            <DiagnosticDashboard />
-          )}
-
-          {currentView === 'reports' && (
-            <ReportsDashboard />
+          {currentView === 'user-manual' && (
+            <UserManual />
           )}
 
           {currentView === 'technical-manual' && (
             <TechnicalManual />
           )}
 
-          {currentView === 'user-manual' && (
-            <UserManual />
+          {currentView === 'diagnostics' && (
+            <DiagnosticDashboard />
           )}
         </motion.div>
       </AnimatePresence>
     </AppShell>
   )
 }
+

@@ -13,6 +13,7 @@ export interface LoginResponse {
     role: string
     companyId: string
     companyName?: string
+    subscriptionPlan?: string
   }
 }
 
@@ -213,54 +214,6 @@ export function downloadPdfFromBase64(base64Data: string, filename: string): voi
 
 // ============ API Fetch ============
 
-export interface FetchMeta {
-  offline: boolean
-  fromCache: boolean
-  status: number
-  offlineWarning?: string
-}
-
-export interface FetchResult<T = unknown> {
-  data: T
-  meta: FetchMeta
-}
-
-/**
- * Enhanced fetch that detects offline/cache data from Service Worker.
- * Returns { data, meta } where meta.offline is true when data came from cache.
- */
-export async function apiFetchWithMeta<T = unknown>(
-  path: string,
-  options?: RequestInit
-): Promise<FetchResult<T>> {
-  const token = getToken()
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  })
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
-    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
-  }
-
-  const data = await res.json()
-
-  return {
-    data: data as T,
-    meta: {
-      offline: res.headers.get('X-Offline-Data') === 'true',
-      fromCache: res.headers.get('X-Offline-Data') === 'true',
-      status: res.status,
-      offlineWarning: res.headers.get('X-Offline-Warning') || undefined,
-    },
-  }
-}
-
 export async function apiFetch<T = unknown>(
   path: string,
   options?: RequestInit
@@ -281,4 +234,51 @@ export async function apiFetch<T = unknown>(
   }
 
   return res.json()
+}
+
+// ============ API Fetch with Meta (offline detection) ============
+
+export async function apiFetchWithMeta<T = unknown>(
+  path: string,
+  options?: RequestInit
+): Promise<{ data: T; meta: { offline: boolean; cached: boolean } }> {
+  const token = getToken()
+  const url = `${API_BASE}${path}`
+
+  // Try to detect if we're offline
+  const offline = typeof navigator !== 'undefined' && !navigator.onLine
+
+  if (offline) {
+    // Try Service Worker cache
+    try {
+      const cache = await caches.open('ech-api-cache')
+      const cachedResponse = await cache.match(new Request(url, { method: 'GET' }))
+      if (cachedResponse) {
+        const data = await cachedResponse.json()
+        return { data: data as T, meta: { offline: true, cached: true } }
+      }
+    } catch {
+      // Cache not available
+    }
+    throw new Error('Sin conexión a internet')
+  }
+
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  })
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
+    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
+  }
+
+  const data = await res.json()
+  // Check if response came from cache (Service Worker)
+  const cached = res.headers.get('x-sw-cache') === 'HIT'
+  return { data: data as T, meta: { offline: false, cached } }
 }

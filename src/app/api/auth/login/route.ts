@@ -49,13 +49,14 @@ export async function POST(request: NextRequest) {
       details: { method: 'credentials' },
     }, request)
 
-    // Create session token using auth helper
+    // Create session token using auth helper (includes subscriptionPlan for instant gating)
     const token = await createSession({
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
       companyId: user.companyId,
+      subscriptionPlan: user.company?.subscriptionPlan || 'starter',
     })
 
     return NextResponse.json({
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
         role: user.role,
         companyId: user.companyId,
         companyName: user.company?.name || '',
+        subscriptionPlan: user.company?.subscriptionPlan || 'starter',
       },
     })
   } catch (error: unknown) {
