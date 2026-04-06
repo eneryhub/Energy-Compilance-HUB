@@ -21,9 +21,11 @@ import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
 import ReportsDashboard from '@/components/reports/reports-dashboard'
+import RiskHeatMap from '@/components/risk/risk-heatmap'
 import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
+import SupportChat from '@/components/support/support-chat'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown, Lock } from 'lucide-react'
@@ -43,6 +45,10 @@ const PLAN_GATES: Record<string, { minPlan: string; upsellMessage: string }> = {
   reports: {
     minPlan: 'business',
     upsellMessage: 'Pásate al plan Business para generar reportes analíticos avanzados de tu operación.',
+  },
+  'risk-map': {
+    minPlan: 'enterprise',
+    upsellMessage: 'Pásate al plan Enterprise para acceder a los mapas de calor de riesgo con análisis avanzado.',
   },
 }
 
@@ -213,9 +219,15 @@ export default function Home() {
     setUpgradeModalOpen(true)
   }, [])
 
-  // Navigate to subscription page
   const handleUpgradeToSubscription = useCallback(() => {
     setCurrentView('subscription')
+  }, [])
+
+  // Handle upgrade request for Enterprise features
+  const handleEnterpriseUpgrade = useCallback(() => {
+    setUpgradeModuleName('Mapa de Riesgo')
+    setUpgradeMessage('Pásate al plan Enterprise para acceder a mapas de calor de riesgo, chat de soporte y recursos ilimitados.')
+    setUpgradeModalOpen(true)
   }, [])
 
   // Handle view change: block if plan-gated module and user doesn't have access
@@ -429,6 +441,10 @@ export default function Home() {
             <ReportsDashboard />
           )}
 
+          {currentView === 'risk-map' && (
+            <RiskHeatMap />
+          )}
+
           {currentView === 'system' && (
             <SystemOverview />
           )}
@@ -446,7 +462,11 @@ export default function Home() {
           )}
         </motion.div>
       </AnimatePresence>
+
+      {/* Support Chat Widget — Enterprise only */}
+      <SupportChat plan={userPlan} onUpgradeRequest={handleEnterpriseUpgrade} />
     </AppShell>
   )
 }
+
 

@@ -26,6 +26,7 @@ import {
   Lock,
   Sparkles,
   MapPin,
+  Flame,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -37,7 +38,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { removeToken } from '@/lib/api'
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'user-manual' | 'technical-manual' | 'diagnostics'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics'
 
 interface AppShellProps {
   currentView: ViewType
@@ -69,6 +70,10 @@ const PLAN_GATES: Record<string, { minPlan: string; upsellMessage: string }> = {
     minPlan: 'business',
     upsellMessage: 'Pásate al plan Business para generar reportes analíticos avanzados de tu operación.',
   },
+  'risk-map': {
+    minPlan: 'enterprise',
+    upsellMessage: 'Pásate al plan Enterprise para acceder a los mapas de calor de riesgo con análisis avanzado.',
+  },
 }
 
 const PLAN_PRIORITY: Record<string, number> = {
@@ -93,6 +98,7 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'scada', label: 'SCADA', icon: Activity, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
   { id: 'predictive', label: 'IA Predictiva', icon: Brain, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'reports', label: 'Reportes', icon: BarChart3, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
+  { id: 'risk-map', label: 'Mapa de Riesgo', icon: Flame, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
@@ -198,14 +204,19 @@ function SidebarContent({
                   )}
                   <span className="flex-1 text-left">{item.label}</span>
                   {locked && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 font-semibold uppercase tracking-wide">
-                      Pro
+                    <span className={cn(
+                      'text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide',
+                      gated?.minPlan === 'enterprise'
+                        ? 'bg-amber-500/15 text-amber-500'
+                        : 'bg-amber-500/15 text-amber-500'
+                    )}>
+                      {gated?.minPlan === 'enterprise' ? 'Ent' : 'Pro'}
                     </span>
                   )}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" className="hidden lg:block">
-                {locked ? `${item.label} — Plan Business` : item.label}
+                {locked ? `${item.label} — Plan ${gated?.minPlan === 'enterprise' ? 'Enterprise' : 'Business'}` : item.label}
               </TooltipContent>
             </Tooltip>
           )
@@ -368,7 +379,7 @@ export default function AppShell(props: AppShellProps) {
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="right">
-                      {locked ? `${item.label} — Plan Business` : item.label}
+                      {locked ? `${item.label} — Plan ${gated?.minPlan === 'enterprise' ? 'Enterprise' : 'Business'}` : item.label}
                     </TooltipContent>
                   </Tooltip>
                 )

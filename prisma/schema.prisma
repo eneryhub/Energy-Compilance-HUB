@@ -28,7 +28,6 @@ model Company {
   maxUsers             Int      @default(10)
   maxPermitsPerMonth   Int      @default(200)
   isActive             Boolean  @default(true)
-  scadaDemoMode        Boolean  @default(true) // true = simulated data, false = real hardware mode
 
   // Stripe integration
   stripeCustomerId     String?  @unique
@@ -52,27 +51,8 @@ model Company {
   invoices           SubscriptionInvoice[]
   sensors            Sensor[]
   apiKeys            ApiKey[]
-}
-
-// ============ API KEYS (External Integration) ============
-model ApiKey {
-  id          String   @id @default(cuid())
-  companyId   String
-  name        String
-  keyHash     String   // SHA-256 hash of the API key
-  keyPrefix   String   // First 8 chars for identification (e.g., "ech_a1b2c3d4")
-  permissions String   @default("read") // read, write, admin
-  isActive    Boolean  @default(true)
-  lastUsedAt  DateTime?
-  expiresAt   DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-
-  @@index([companyId])
-  @@index([keyPrefix])
-  @@index([isActive])
+  supportMessages    SupportMessage[]
+  scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
 }
 
 // ============ USER / RBAC ============
@@ -114,9 +94,10 @@ model Permit {
   supervisorName    String
   workLocation      String
   workDescription   String
-  rejectionReason   String?
-  technicianSignature String? // JSON string with signature data + GPS
-  supervisorSignature String? // JSON string with signature data + GPS
+  rejectionReason       String?
+  approveJustification  String?  // Supervisor justification when approving outside geofence
+  technicianSignature   String? // JSON string with signature data + GPS
+  supervisorSignature   String? // JSON string with signature data + GPS
   photos            String?   // JSON string array of photos
   photosCount       Int       @default(0)
   createdById       String?
@@ -161,15 +142,19 @@ model WorkLocation {
   longitude         Float
   radiusMeters      Int      @default(100)
   verificationMethod String?  // GPS, QR_CODE, BEACON
-  qrCodeSecret      String?  @unique
-  qrCodeData        String?  // JSON string
-  beaconUuid        String?  @unique
-  beaconMajor       Int?
-  beaconMinor       Int?
-  beaconRssi        Int      @default(-70)
   verifiedAt        DateTime @default(now())
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  // QR Code verification
+  qrCodeSecret      String?  @unique // Auto-generated secret used in QR token
+  qrCodeData        String?  // Full QR payload JSON stored for download
+
+  // Beacon BLE verification
+  beaconUuid        String?  @unique // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
+  beaconMajor       Int?     // Major value (0-65535)
+  beaconMinor       Int?     // Minor value (0-65535)
+  beaconRssi        Int      @default(-70) // Signal strength threshold (dBm)
 
   company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   permits  Permit[]
@@ -373,6 +358,27 @@ model SensorReading {
   @@index([sensorId])
 }
 
+// ============ API KEYS (Sensor Integrations) ============
+model ApiKey {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String   // Who created the key
+  name        String   // Label like "Gateway Planta Norte"
+  keyPrefix   String   // First 8 chars shown in UI: "ech_live_abc12345"
+  keyHash     String   @unique // SHA-256 hash of the full key (never stored plain)
+  permissions String   @default("sensor:ingest") // Comma-separated permissions
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([keyHash])
+  @@index([isActive])
+}
+
 // ============ SUBSCRIPTION INVOICE HISTORY ============
 model SubscriptionInvoice {
   id              String   @id @default(cuid())
@@ -391,4 +397,20 @@ model SubscriptionInvoice {
 
   @@index([companyId])
   @@index([paidAt])
+}
+
+// ============ SUPPORT MESSAGES (Chat / Tickets) ============
+model SupportMessage {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  userName    String?
+  message     String
+  senderType  String   @default("USER") // USER, SYSTEM, SUPPORT
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
 }
