@@ -488,15 +488,71 @@ export async function getSensorReadings(
   }))
 }
 
-// ── Demo Mode State (in-memory) ────────────────────────────
+// ── Demo Mode State (persisted per-company in DB) ─────────
 
-let demoModeEnabled = true
+// In-memory cache to avoid hitting the DB on every request
+const companyDemoModeCache = new Map<string, boolean>()
 
-export function isDemoMode(): boolean {
-  return demoModeEnabled
+export async function isDemoMode(companyId?: string): Promise<boolean> {
+  // If no companyId (legacy call), default to true
+  if (!companyId) return true
+
+  // Check cache first
+  if (companyDemoModeCache.has(companyId)) {
+    return companyDemoModeCache.get(companyId)!
+  }
+
+  // Read from DB
+  try {
+    const { db } = await import('@/lib/db')
+    const company = await db.company.findUnique({
+      where: { id: companyId },
+      select: { scadaDemoMode: true },
+    })
+    const mode = company?.scadaDemoMode ?? true
+    companyDemoModeCache.set(companyId, mode)
+    return mode
+  } catch {
+    return true
+  }
 }
 
-export function setDemoMode(enabled: boolean): boolean {
-  demoModeEnabled = enabled
-  return demoModeEnabled
+export async function setDemoMode(enabled: boolean, companyId?: string): Promise<boolean> {
+  if (!companyId) return enabled
+
+  // Update DB
+  try {
+    const { db } = await import('@/lib/db')
+    await db.company.update({
+      where: { id: companyId },
+      data: { scadaDemoMode: enabled },
+    })
+  } catch {
+    // Continue even if DB update fails
+  }
+
+  // Update cache
+  companyDemoModeCache.set(companyId, enabled)
+  return enabled
+}
+
+// Synchronous version for internal engine use (uses cached value only)
+export function isDemoModeCached(companyId?: string): boolean {
+  if (!companyId) return true
+  return companyDemoModeCache.get(companyId) ?? true
+}
+
+// Warm cache for a company (call on startup/login)
+export async function warmDemoModeCache(companyId: string): Promise<void> {
+  try {
+    const { db } = await import('@/lib/db')
+    const company = await db.company.findUnique({
+      where: { id: companyId },
+      select: { scadaDemoMode: true },
+    })
+    const mode = company?.scadaDemoMode ?? true
+    companyDemoModeCache.set(companyId, mode)
+  } catch {
+    // Ignore
+  }
 }

@@ -19,6 +19,10 @@ import {
   Activity,
   Brain,
   Crown,
+  Stethoscope,
+  BarChart3,
+  BookOpen,
+  Wrench,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -29,8 +33,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { removeToken } from '@/lib/api'
+import { OfflineIndicator } from '@/components/layout/offline-indicator'
+import { InstallPrompt } from '@/components/layout/install-prompt'
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'diagnostics' | 'reports' | 'technical-manual' | 'user-manual'
 
 interface AppShellProps {
   currentView: ViewType
@@ -58,6 +64,10 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
   { id: 'system', label: 'Plataforma', icon: Layers, roles: ['ADMIN'] },
+  { id: 'diagnostics', label: 'Diagnostico', icon: Stethoscope, roles: ['ADMIN', 'SUPER_ADMIN'] },
+  { id: 'reports', label: 'Reportes', icon: BarChart3 },
+  { id: 'technical-manual', label: 'Manual Técnico', icon: Wrench },
+  { id: 'user-manual', label: 'Manual de Usuario', icon: BookOpen },
   // Hidden: only SUPER_ADMIN sees this (not in the visible nav, accessed via URL)
 ]
 
@@ -324,6 +334,9 @@ export default function AppShell(props: AppShellProps) {
         </SheetContent>
       </Sheet>
 
+      {/* PWA Install Prompt — shows when app is not yet installed */}
+      <InstallPrompt />
+
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Header */}
@@ -380,6 +393,9 @@ export default function AppShell(props: AppShellProps) {
           {props.children}
         </main>
       </div>
+
+      {/* Offline Status Indicator — shows when offline or syncing */}
+      <OfflineIndicator />
     </div>
   )
 }

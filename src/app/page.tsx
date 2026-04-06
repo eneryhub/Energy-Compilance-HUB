@@ -17,6 +17,10 @@ import TelemetryBoard from '@/components/scada/telemetry-board'
 import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
+import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
+import ReportsDashboard from '@/components/reports/reports-dashboard'
+import TechnicalManual from '@/components/manuals/technical-manual'
+import UserManual from '@/components/manuals/user-manual'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown } from 'lucide-react'
@@ -309,6 +313,22 @@ export default function Home() {
 
           {currentView === 'system' && (
             <SystemOverview />
+          )}
+
+          {currentView === 'diagnostics' && (
+            <DiagnosticDashboard />
+          )}
+
+          {currentView === 'reports' && (
+            <ReportsDashboard />
+          )}
+
+          {currentView === 'technical-manual' && (
+            <TechnicalManual />
+          )}
+
+          {currentView === 'user-manual' && (
+            <UserManual />
           )}
         </motion.div>
       </AnimatePresence>

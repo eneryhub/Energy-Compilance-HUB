@@ -28,6 +28,7 @@ import {
 import { cn } from '@/lib/utils'
 import { apiFetch, downloadPdfFromBase64, type ComplianceCheck, type Permit } from '@/lib/api'
 import { RISK_TYPES } from '@/lib/plans'
+import { calculateDistance } from '@/lib/gps'
 import SignaturePad from '@/components/signature/signature-pad'
 
 export default function ApprovalPanel() {
@@ -50,6 +51,9 @@ export default function ApprovalPanel() {
     isSafe: boolean
     criticalSensors: Array<{ id: string; name: string; type: string; value: number; unit: string; threshold: number }>
   } | null>(null)
+  const [approveJustification, setApproveJustification] = useState('')
+  const [showApproveJustifyDialog, setShowApproveJustifyDialog] = useState(false)
+  const [geofenceStatus, setGeofenceStatus] = useState<{ isOutside: boolean; distance: number; radius: number } | null>(null)
 
   useEffect(() => {
     loadData()
@@ -147,6 +151,22 @@ export default function ApprovalPanel() {
 
   const handleApprove = async () => {
     if (!selectedPermit || !signatureData) return
+
+    // Check geofence before sending
+    if (geofenceStatus?.isOutside) {
+      setShowApproveJustifyDialog(true)
+      return
+    }
+
+    await executeApprove('')
+  }
+
+  const handleApproveWithJustification = async () => {
+    if (!selectedPermit || !signatureData || approveJustification.trim().length < 10) return
+    await executeApprove(approveJustification.trim())
+  }
+
+  const executeApprove = async (justification: string) => {
     setApproving(true)
     try {
       const body: Record<string, unknown> = {
@@ -156,19 +176,28 @@ export default function ApprovalPanel() {
         gpsLongitude: signatureGps?.longitude,
         gpsAccuracy: signatureGps?.accuracy,
       }
-      const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit.id}/approve`, {
+      if (justification) {
+        body.approveJustification = justification
+      }
+      if (geofenceStatus?.isOutside) {
+        body.geofenceJustification = justification
+      }
+      const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit!.id}/approve`, {
         method: 'POST',
         body: JSON.stringify(body),
       })
       // Download PDF if returned
       if (result.pdf) {
-        downloadPdfFromBase64(result.pdf, `Permiso_${selectedPermit.permitNumber}_Aprobado.pdf`)
+        downloadPdfFromBase64(result.pdf, `Permiso_${selectedPermit!.permitNumber}_Aprobado.pdf`)
       }
-      setSuccessMessage(`Permiso ${selectedPermit.permitNumber} aprobado exitosamente`)
+      setSuccessMessage(`Permiso ${selectedPermit!.permitNumber} aprobado exitosamente`)
       setShowSuccessDialog(true)
       setSelectedPermit(null)
       setSignatureData(null)
       setSignatureGps(null)
+      setGeofenceStatus(null)
+      setApproveJustification('')
+      setShowApproveJustifyDialog(false)
       loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al aprobar permiso'
@@ -182,9 +211,18 @@ export default function ApprovalPanel() {
     if (!selectedPermit || !rejectReason.trim()) return
     setRejecting(true)
     try {
+      const body: Record<string, unknown> = {
+        reason: rejectReason.trim(),
+        gpsLatitude: signatureGps?.latitude,
+        gpsLongitude: signatureGps?.longitude,
+        gpsAccuracy: signatureGps?.accuracy,
+      }
+      if (geofenceStatus?.isOutside) {
+        body.rejectGeofenceJustification = rejectReason.trim()
+      }
       const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit.id}/reject`, {
         method: 'POST',
-        body: JSON.stringify({ reason: rejectReason.trim() }),
+        body: JSON.stringify(body),
       })
       // Download PDF if returned
       if (result.pdf) {
@@ -195,6 +233,9 @@ export default function ApprovalPanel() {
       setSelectedPermit(null)
       setRejectReason('')
       setShowRejectDialog(false)
+      setSignatureData(null)
+      setSignatureGps(null)
+      setGeofenceStatus(null)
       loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al rechazar permiso'
@@ -346,7 +387,7 @@ export default function ApprovalPanel() {
                       return (
                         <button
                           key={permit.id}
-                          onClick={() => { setSelectedPermit(permit); setSignatureData(null) }}
+                          onClick={() => { setSelectedPermit(permit); setSignatureData(null); setGeofenceStatus(null) }}
                           className={cn(
                             'w-full text-left p-3 hover:bg-slate-50 transition-colors',
                             isSelected && 'bg-emerald-50 border-l-2 border-emerald-500'
@@ -591,10 +632,58 @@ export default function ApprovalPanel() {
                     onSign={(data, gps) => {
                       setSignatureData(data)
                       setSignatureGps(gps)
+                      // Compute geofence status when GPS is captured
+                      if (gps && selectedPermit?.workLatitude && selectedPermit?.workLongitude) {
+                        const effectiveRadius = selectedPermit.workRadius || 100
+                        const distance = calculateDistance(
+                          { latitude: gps.latitude, longitude: gps.longitude },
+                          { latitude: selectedPermit.workLatitude, longitude: selectedPermit.workLongitude }
+                        )
+                        const isOutside = distance > effectiveRadius
+                        setGeofenceStatus({
+                          isOutside,
+                          distance: Math.round(distance),
+                          radius: effectiveRadius,
+                        })
+                      } else {
+                        setGeofenceStatus(null)
+                      }
                     }}
                     disabled={isBlocked}
                     label="Firma del Supervisor"
                   />
+
+                  {/* Geofence Warning Indicator */}
+                  {geofenceStatus?.isOutside && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200"
+                    >
+                      <div className="flex items-center gap-2 shrink-0">
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        <Badge className="bg-amber-100 text-amber-700 border border-amber-300 text-[10px]">
+                          Fuera de Geocerca
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-amber-700">
+                        Supervisor a <strong>{geofenceStatus.distance}m</strong> del área de trabajo
+                        (radio: {geofenceStatus.radius}m). Se requerirá justificación al aprobar/rechazar.
+                      </p>
+                    </motion.div>
+                  )}
+                  {geofenceStatus && !geofenceStatus.isOutside && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-center gap-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <p className="text-xs text-emerald-700">
+                        Dentro de la geocerca ({geofenceStatus.distance}m del área de trabajo, radio: {geofenceStatus.radius}m)
+                      </p>
+                    </motion.div>
+                  )}
 
                   <Separator />
 
@@ -660,6 +749,59 @@ export default function ApprovalPanel() {
                 disabled={!rejectReason.trim() || rejecting}
               >
                 {rejecting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmar Rechazo'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approve Justification Dialog (Geofence Violation) */}
+      <Dialog open={showApproveJustifyDialog} onOpenChange={(open) => {
+        setShowApproveJustifyDialog(open)
+        if (!open) setApproveJustification('')
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Aprobación Fuera de Geocerca
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Justificación requerida para aprobar fuera del área de trabajo
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <p className="text-sm font-semibold text-amber-800">Supervisor fuera del área de trabajo</p>
+              </div>
+              <p className="text-xs text-amber-700">
+                Se detectó que se encuentra a <strong>{geofenceStatus?.distance}m</strong> del área del permiso{' '}
+                <strong>{selectedPermit?.permitNumber}</strong> (radio permitido: {geofenceStatus?.radius}m).{' '}
+                Debe proporcionar una justificación para continuar.
+              </p>
+            </div>
+            <Textarea
+              placeholder="Explique por qué está aprobando fuera del área de trabajo (mínimo 10 caracteres)..."
+              value={approveJustification}
+              onChange={(e) => setApproveJustification(e.target.value)}
+              className="min-h-[100px] text-sm"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => {
+                setShowApproveJustifyDialog(false)
+                setApproveJustification('')
+              }}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleApproveWithJustification}
+                disabled={approveJustification.trim().length < 10 || approving}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              >
+                {approving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Aprobar con Justificación
               </Button>
             </div>
           </div>

@@ -258,67 +258,55 @@ Genera el análisis predictivo para cada sensor.`
 
     let result: PredictiveResponse
 
-    // Try DeepSeek AI first
-    if (process.env.DEEPSEEK_API_KEY) {
-      try {
-        const response = await fetch(`${process.env.DEEPSEEK_API_URL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'deepseek-chat',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.3,
-            response_format: { type: 'json_object' },
-          }),
-        })
+    // Try AI via z-ai-web-dev-sdk (platform AI)
+    try {
+      const ZAI = (await import('z-ai-web-dev-sdk')).default
+      const zai = await ZAI.create()
 
-        if (!response.ok) {
-          throw new Error(`DeepSeek API error: ${response.status}`)
-        }
+      const response = await zai.chat.completions.create({
+        model: 'default',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.3,
+      })
 
-        const aiData = await response.json()
-        const content = aiData.choices?.[0]?.message?.content
+      const content = response.choices?.[0]?.message?.content
 
-        if (!content) {
-          throw new Error('Empty response from AI')
-        }
-
-        const parsed = JSON.parse(content) as PredictiveResponse
-
-        // Validate structure minimally
-        if (!parsed.overallRisk || !Array.isArray(parsed.sensors)) {
-          throw new Error('Invalid AI response structure')
-        }
-
-        result = {
-          overallRisk: parsed.overallRisk,
-          summary: parsed.summary || 'Análisis completado por IA.',
-          sensors: parsed.sensors.map((s) => ({
-            sensorId: s.sensorId || '',
-            sensorName: s.sensorName || 'Desconocido',
-            type: s.type || 'UNKNOWN',
-            currentValue: Number(s.currentValue) || 0,
-            unit: s.unit || '',
-            trend: ['rising', 'falling', 'stable'].includes(s.trend) ? s.trend : 'stable',
-            failureProbability: Math.max(0, Math.min(100, Number(s.failureProbability) || 0)),
-            maintenanceDays: Math.max(0, Math.round(Number(s.maintenanceDays) || 0)),
-            recommendation: s.recommendation || 'Sin recomendación disponible.',
-          })),
-          analyzedAt: new Date().toISOString(),
-        }
-      } catch (aiError) {
-        // Fall back to mock data if AI fails
-        console.error('AI prediction failed, using mock data:', aiError)
-        result = generateMockPredictions(sensorsWithData)
+      if (!content) {
+        throw new Error('Empty response from AI')
       }
-    } else {
-      // No API key configured — use mock predictions
+
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) throw new Error('No JSON found in AI response')
+
+      const parsed = JSON.parse(jsonMatch[0]) as PredictiveResponse
+
+      // Validate structure minimally
+      if (!parsed.overallRisk || !Array.isArray(parsed.sensors)) {
+        throw new Error('Invalid AI response structure')
+      }
+
+      result = {
+        overallRisk: parsed.overallRisk,
+        summary: parsed.summary || 'Análisis completado por IA.',
+        sensors: parsed.sensors.map((s) => ({
+          sensorId: s.sensorId || '',
+          sensorName: s.sensorName || 'Desconocido',
+          type: s.type || 'UNKNOWN',
+          currentValue: Number(s.currentValue) || 0,
+          unit: s.unit || '',
+          trend: ['rising', 'falling', 'stable'].includes(s.trend) ? s.trend : 'stable',
+          failureProbability: Math.max(0, Math.min(100, Number(s.failureProbability) || 0)),
+          maintenanceDays: Math.max(0, Math.round(Number(s.maintenanceDays) || 0)),
+          recommendation: s.recommendation || 'Sin recomendación disponible.',
+        })),
+        analyzedAt: new Date().toISOString(),
+      }
+    } catch (aiError) {
+      // Fall back to mock data if AI fails
+      console.error('AI prediction failed, using mock data:', aiError)
       result = generateMockPredictions(sensorsWithData)
     }
 

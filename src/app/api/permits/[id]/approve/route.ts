@@ -6,7 +6,6 @@ import { generatePermitPDF } from '@/lib/pdf-generator'
 import { checkGeofence } from '@/lib/gps'
 import { hashSignature } from '@/lib/gps'
 import { createAuditLog } from '@/lib/audit'
-import { checkSubscription } from '@/lib/subscription-guard'
 
 // POST /api/permits/[id]/approve - Approve or reject a permit
 export async function POST(
@@ -25,18 +24,9 @@ export async function POST(
       return NextResponse.json({ error: 'Solo supervisores, gerentes o administradores pueden aprobar o rechazar permisos' }, { status: 403 })
     }
 
-    // Enforce subscription for write operations
-    const subStatus = await checkSubscription(session.companyId)
-    if (subStatus.blockAccess) {
-      return NextResponse.json(
-        { error: `ACCESO BLOQUEADO: ${subStatus.message}`, code: 'SUBSCRIPTION_EXPIRED' },
-        { status: 403 }
-      )
-    }
-
     const { id } = await params
     const body = await request.json()
-    const { action, signature, gpsLatitude, gpsLongitude, gpsAccuracy, rejectionReason, deviceInfo } = body
+    const { action, signature, gpsLatitude, gpsLongitude, gpsAccuracy, rejectionReason, approveJustification, rejectGeofenceJustification, deviceInfo } = body
 
     if (!action || !['approve', 'reject'].includes(action)) {
       return NextResponse.json({ error: 'Acción inválida. Use "approve" o "reject"' }, { status: 400 })
@@ -50,7 +40,8 @@ export async function POST(
         status: 'PENDING'
       },
       include: {
-        createdBy: { select: { id: true, name: true } }
+        createdBy: { select: { id: true, name: true } },
+        workLocationRef: { select: { id: true, name: true, latitude: true, longitude: true, radiusMeters: true } },
       }
     })
 
@@ -66,25 +57,34 @@ export async function POST(
       const hasGps = gpsLatitude != null && gpsLongitude != null
       const hasWorkCoords = permit.workLatitude != null && permit.workLongitude != null
 
+      // Determine effective radius: use WorkLocation's radius if linked, otherwise default
+      const effectiveRadius = permit.workLocationRef?.radiusMeters || permit.workRadius || 100
+
       let geoResult: ReturnType<typeof checkGeofence> | null = null
+      let isOutsideGeofence = false
 
       if (hasGps && hasWorkCoords) {
         geoResult = checkGeofence(
           { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy },
           { latitude: permit.workLatitude, longitude: permit.workLongitude },
-          permit.workRadius
+          effectiveRadius
         )
 
         if (!geoResult.isWithinRadius) {
-          return NextResponse.json(
-            {
-              error: `Supervisor fuera del área de trabajo. Distancia: ${geoResult.distanceMeters}m (máximo permitido: ${geoResult.radiusMeters}m). Acerquese al sitio de trabajo para aprobar.`,
-              code: 'GEOFENCE_VIOLATION',
-              distance: geoResult.distanceMeters,
-              maxRadius: geoResult.radiusMeters
-            },
-            { status: 403 }
-          )
+          isOutsideGeofence = true
+          // Supervisors can approve outside geofence but MUST provide justification
+          if (!approveJustification || approveJustification.trim().length < 10) {
+            return NextResponse.json(
+              {
+                error: 'GEOFENCE_JUSTIFICATION_REQUIRED',
+                message: `Supervisor fuera del área de trabajo (${Math.round(geoResult.distanceMeters)}m del sitio, radio: ${effectiveRadius}m). Debe proporcionar una justificación para aprobar este permiso fuera del rango.`,
+                distance: geoResult.distanceMeters,
+                maxRadius: effectiveRadius,
+                requiresJustification: true,
+              },
+              { status: 403 }
+            )
+          }
         }
       }
 
@@ -130,7 +130,9 @@ export async function POST(
           approvedById: session.userId,
           approvedByName: session.name,
           approvedAt: new Date(),
-          supervisorSignature: signatureData
+          supervisorSignature: signatureData,
+          // Store justification if approved outside geofence
+          ...(isOutsideGeofence ? { approveJustification } : {}),
         },
         include: {
           createdBy: { select: { id: true, name: true, email: true } },
@@ -138,7 +140,7 @@ export async function POST(
         }
       })
 
-      // Normalize technician signature for PDF (technician uses {data, gps} format)
+      // Normalize technician signature for PDF
       let normalizedTechSigForPdf = null
       if (updatedPermit.technicianSignature) {
         try {
@@ -171,7 +173,8 @@ export async function POST(
         photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
         workLatitude: updatedPermit.workLatitude,
         workLongitude: updatedPermit.workLongitude,
-        workRadius: updatedPermit.workRadius
+        workRadius: effectiveRadius,
+        approveJustification: isOutsideGeofence ? approveJustification : undefined,
       }
 
       const pdfBuffer = await generatePermitPDF(pdfData)
@@ -181,19 +184,67 @@ export async function POST(
       await createAuditLog({
         companyId: session.companyId, userId: session.userId,
         action: 'APPROVE', entityType: 'PERMIT', entityId: permit.id,
-        details: { permitNumber: permit.permitNumber, gpsAvailable: hasGps, gpsWithinGeofence: geoResult?.isWithinRadius ?? null, distanceMeters: geoResult?.distanceMeters ?? null },
+        details: {
+          permitNumber: permit.permitNumber,
+          gpsAvailable: hasGps,
+          gpsWithinGeofence: geoResult?.isWithinRadius ?? null,
+          distanceMeters: geoResult?.distanceMeters ?? null,
+          outOfRangeJustification: isOutsideGeofence ? approveJustification : undefined,
+        },
       }, request)
 
       return NextResponse.json({
         permit: updatedPermit,
         pdf: pdfBase64,
-        ...(geoResult ? { geofence: geoResult } : {})
+        ...(geoResult ? { geofence: geoResult } : {}),
+        outOfRangeApproved: isOutsideGeofence,
       })
 
     } else {
       // REJECT action
       if (!rejectionReason) {
         return NextResponse.json({ error: 'El motivo de rechazo es requerido' }, { status: 400 })
+      }
+
+      // Check GPS geofence for rejection (same logic as approval)
+      const hasGps = gpsLatitude != null && gpsLongitude != null
+      const hasWorkCoords = permit.workLatitude != null && permit.workLongitude != null
+      const effectiveRadius = permit.workLocationRef?.radiusMeters || permit.workRadius || 100
+
+      let geoResult: ReturnType<typeof checkGeofence> | null = null
+      let isOutsideGeofence = false
+
+      if (hasGps && hasWorkCoords) {
+        geoResult = checkGeofence(
+          { latitude: gpsLatitude, longitude: gpsLongitude, accuracy: gpsAccuracy },
+          { latitude: permit.workLatitude, longitude: permit.workLongitude },
+          effectiveRadius
+        )
+
+        if (!geoResult.isWithinRadius) {
+          isOutsideGeofence = true
+          // Rejection is a safety action and should always be allowed,
+          // but if outside geofence, justification is required
+          if (!rejectGeofenceJustification || rejectGeofenceJustification.trim().length < 10) {
+            return NextResponse.json(
+              {
+                error: 'GEOFENCE_JUSTIFICATION_REQUIRED',
+                message: `Supervisor fuera del área de trabajo (${Math.round(geoResult.distanceMeters)}m del sitio, radio: ${effectiveRadius}m). Debe proporcionar una justificación para rechazar este permiso fuera del rango.`,
+                distance: geoResult.distanceMeters,
+                maxRadius: effectiveRadius,
+                requiresJustification: true,
+              },
+              { status: 403 }
+            )
+          }
+        }
+      }
+
+      // If outside geofence, prepend geofence warning to rejection reason
+      let finalRejectionReason = rejectionReason
+      if (isOutsideGeofence && geoResult) {
+        const distance = Math.round(geoResult.distanceMeters)
+        finalRejectionReason = `[SUPERVISOR FUERA DE GEOFENCE - ${distance}m] ${rejectionReason}`
       }
 
       const updatedPermit = await db.permit.update({
@@ -203,13 +254,29 @@ export async function POST(
           rejectedById: session.userId,
           rejectedByName: session.name,
           rejectedAt: new Date(),
-          rejectionReason
+          rejectionReason: finalRejectionReason
         },
         include: {
           createdBy: { select: { id: true, name: true, email: true } },
           rejectedBy: { select: { id: true, name: true } }
         }
       })
+
+      // Normalize technician signature for PDF
+      let normalizedTechSigForPdf = null
+      if (updatedPermit.technicianSignature) {
+        try {
+          const raw = JSON.parse(updatedPermit.technicianSignature)
+          normalizedTechSigForPdf = {
+            signerName: raw.signerName || updatedPermit.technicianName,
+            timestamp: raw.timestamp || updatedPermit.createdAt.toISOString(),
+            location: raw.location || raw.gps || null,
+            signatureData: raw.signatureData || raw.data || null,
+            is_within_geofence: raw.is_within_geofence,
+            distance_to_work_meters: raw.distance_to_work_meters,
+          }
+        } catch { normalizedTechSigForPdf = null }
+      }
 
       // Generate rejection PDF
       const pdfData = {
@@ -222,28 +289,38 @@ export async function POST(
         workLocation: updatedPermit.workLocation,
         workDescription: updatedPermit.workDescription,
         safetyChecks: JSON.parse(updatedPermit.safetyChecks || '{}'),
-        technicianSignature: updatedPermit.technicianSignature ? JSON.parse(updatedPermit.technicianSignature) : null,
+        technicianSignature: normalizedTechSigForPdf,
         supervisorSignature: null,
         photos: updatedPermit.photos ? JSON.parse(updatedPermit.photos) : null,
         workLatitude: updatedPermit.workLatitude,
         workLongitude: updatedPermit.workLongitude,
-        workRadius: updatedPermit.workRadius,
-        rejectionReason
+        workRadius: effectiveRadius,
+        rejectionReason: finalRejectionReason,
+        rejectGeofenceJustification: isOutsideGeofence ? rejectGeofenceJustification : undefined,
       }
 
       const pdfBuffer = await generatePermitPDF(pdfData)
       const pdfBase64 = pdfBuffer.toString('base64')
 
-      // Audit log
+      // Audit log with geofence details
       await createAuditLog({
         companyId: session.companyId, userId: session.userId,
         action: 'REJECT', entityType: 'PERMIT', entityId: permit.id,
-        details: { permitNumber: permit.permitNumber, reason: rejectionReason },
+        details: {
+          permitNumber: permit.permitNumber,
+          reason: rejectionReason,
+          gpsAvailable: hasGps,
+          gpsWithinGeofence: geoResult?.isWithinRadius ?? null,
+          distanceMeters: geoResult?.distanceMeters ?? null,
+          outOfRangeJustification: isOutsideGeofence ? rejectGeofenceJustification : undefined,
+        },
       }, request)
 
       return NextResponse.json({
         permit: updatedPermit,
-        pdf: pdfBase64
+        pdf: pdfBase64,
+        ...(geoResult ? { geofence: geoResult } : {}),
+        ...(isOutsideGeofence ? { outOfRangeRejected: true } : {}),
       })
     }
   } catch (error: unknown) {

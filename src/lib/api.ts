@@ -45,6 +45,7 @@ export interface Permit {
   approvedAt?: string | null
   rejectedAt?: string | null
   rejectionReason?: string | null
+  approveJustification?: string | null
   createdAt: string
   updatedAt?: string
 }
@@ -211,6 +212,54 @@ export function downloadPdfFromBase64(base64Data: string, filename: string): voi
 }
 
 // ============ API Fetch ============
+
+export interface FetchMeta {
+  offline: boolean
+  fromCache: boolean
+  status: number
+  offlineWarning?: string
+}
+
+export interface FetchResult<T = unknown> {
+  data: T
+  meta: FetchMeta
+}
+
+/**
+ * Enhanced fetch that detects offline/cache data from Service Worker.
+ * Returns { data, meta } where meta.offline is true when data came from cache.
+ */
+export async function apiFetchWithMeta<T = unknown>(
+  path: string,
+  options?: RequestInit
+): Promise<FetchResult<T>> {
+  const token = getToken()
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  })
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
+    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
+  }
+
+  const data = await res.json()
+
+  return {
+    data: data as T,
+    meta: {
+      offline: res.headers.get('X-Offline-Data') === 'true',
+      fromCache: res.headers.get('X-Offline-Data') === 'true',
+      status: res.status,
+      offlineWarning: res.headers.get('X-Offline-Warning') || undefined,
+    },
+  }
+}
 
 export async function apiFetch<T = unknown>(
   path: string,

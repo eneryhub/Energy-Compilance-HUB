@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Camera, Upload, X, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -23,38 +23,140 @@ interface PhotoEvidenceProps {
 
 export default function PhotoEvidence({ photos, onPhotosChange, maxPhotos = 5, required = true, disabled }: PhotoEvidenceProps) {
   const [showCamera, setShowCamera] = useState(false)
-  const [stream, setStream] = useState<MediaStream | null>(null)
+  const [cameraLoading, setCameraLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
+  const stopCameraCleanup = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+    const video = videoRef.current
+    if (video) {
+      video.srcObject = null
+    }
+    setCameraLoading(false)
+    setShowCamera(false)
+  }, [])
+
+  // Cleanup stream on unmount
   useEffect(() => {
     return () => {
-      if (stream) stream.getTracks().forEach(t => t.stop())
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+      }
     }
-  }, [stream])
+  }, [])
 
-  const startCamera = async () => {
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-      setStream(mediaStream)
-      if (videoRef.current) videoRef.current.srcObject = mediaStream
-      setShowCamera(true)
-      setError(null)
-    } catch {
-      setError('No se pudo acceder a la cámara. Verifica los permisos.')
+  // When showCamera becomes true, mount video element then start stream
+  useEffect(() => {
+    if (!showCamera) return
+
+    const video = videoRef.current
+    if (!video) return
+
+    // Check browser support first — schedule in microtask to satisfy lint
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      queueMicrotask(() => {
+        setError('Tu navegador no soporta acceso a la cámara. Intenta subir una foto en su lugar.')
+        stopCameraCleanup()
+      })
+      return
     }
+
+    let cancelled = false
+
+    const startStream = async () => {
+      setError(null)
+      setCameraLoading(true)
+
+      try {
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        })
+
+        // Guard: component may have closed while waiting for permission
+        if (cancelled) {
+          mediaStream.getTracks().forEach(t => t.stop())
+          return
+        }
+
+        const currentVideo = videoRef.current
+        if (!currentVideo) {
+          mediaStream.getTracks().forEach(t => t.stop())
+          return
+        }
+
+        streamRef.current = mediaStream
+        currentVideo.srcObject = mediaStream
+
+        // Wait for video to be ready, then play
+        const tryPlay = () => {
+          if (cancelled) return
+          currentVideo.play()
+            .then(() => setCameraLoading(false))
+            .catch(() => {
+              if (cancelled) return
+              setError('No se pudo reproducir el video. Intenta subir una foto.')
+              stopCameraCleanup()
+            })
+        }
+
+        if (currentVideo.readyState >= 2) {
+          tryPlay()
+        } else {
+          currentVideo.onloadedmetadata = tryPlay
+        }
+      } catch (err: unknown) {
+        if (cancelled) return
+        setCameraLoading(false)
+        const error = err as { name?: string }
+        const msg = error?.name === 'NotAllowedError'
+          ? 'Permiso de cámara denegado. Activa el acceso en la configuración de tu navegador.'
+          : error?.name === 'NotFoundError'
+            ? 'No se encontró ninguna cámara en este dispositivo.'
+            : error?.name === 'NotReadableError'
+              ? 'La cámara está siendo usada por otra aplicación.'
+              : error?.name === 'OverconstrainedError'
+                ? 'La configuración de cámara solicitada no es compatible. Intenta subir una foto.'
+                : 'No se pudo acceder a la cámara. Verifica los permisos o sube una foto manualmente.'
+        setError(msg)
+      }
+    }
+
+    startStream()
+
+    return () => {
+      cancelled = true
+    }
+  }, [showCamera, stopCameraCleanup])
+
+  const startCamera = () => {
+    setError(null)
+    streamRef.current = null
+    setShowCamera(true)
   }
 
   const takePicture = () => {
     const video = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return
+
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+
     ctx.drawImage(video, 0, 0)
     const photoData = canvas.toDataURL('image/jpeg', 0.8)
     const photo: PhotoItem = {
@@ -64,12 +166,7 @@ export default function PhotoEvidence({ photos, onPhotosChange, maxPhotos = 5, r
       timestamp: new Date().toISOString(),
     }
     onPhotosChange([...photos, photo])
-    stopCamera()
-  }
-
-  const stopCamera = () => {
-    if (stream) { stream.getTracks().forEach(t => t.stop()); setStream(null) }
-    setShowCamera(false)
+    stopCameraCleanup()
   }
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -159,28 +256,65 @@ export default function PhotoEvidence({ photos, onPhotosChange, maxPhotos = 5, r
           <div className="bg-white rounded-xl max-w-lg w-full overflow-hidden">
             <div className="p-3 border-b border-slate-200 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-800">Tomar Foto de Evidencia</p>
-              <button type="button" onClick={stopCamera} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={stopCameraCleanup} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="p-3">
-              <video ref={videoRef} autoPlay playsInline className="w-full rounded-lg bg-black" />
-              <canvas ref={canvasRef} className="hidden" />
+              {error ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center">
+                    <AlertCircle className="w-8 h-8 text-red-400" />
+                  </div>
+                  <p className="text-sm text-red-600 text-center max-w-xs">{error}</p>
+                  <Button type="button" variant="outline" size="sm" onClick={stopCameraCleanup}>
+                    Cerrar
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="relative bg-black rounded-lg overflow-hidden" style={{ minHeight: 280 }}>
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full rounded-lg"
+                      style={{ minHeight: 280, objectFit: 'cover' }}
+                    />
+                    {/* Loading overlay */}
+                    {cameraLoading && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 rounded-lg gap-3">
+                        <Loader2 className="w-8 h-8 animate-spin text-white" />
+                        <p className="text-xs text-slate-300">Activando cámara...</p>
+                      </div>
+                    )}
+                  </div>
+                  <canvas ref={canvasRef} className="hidden" />
+                </>
+              )}
             </div>
-            <div className="p-3 flex gap-2">
-              <Button type="button" onClick={takePicture} className="flex-1 bg-rose-600 hover:bg-rose-700 text-white">
-                <Camera className="w-4 h-4 mr-2" /> Capturar
-              </Button>
-              <Button type="button" variant="outline" onClick={stopCamera} className="flex-1">
-                Cancelar
-              </Button>
-            </div>
+            {!error && (
+              <div className="p-3 flex gap-2">
+                <Button
+                  type="button"
+                  onClick={takePicture}
+                  disabled={cameraLoading}
+                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white"
+                >
+                  <Camera className="w-4 h-4 mr-2" /> Capturar
+                </Button>
+                <Button type="button" variant="outline" onClick={stopCameraCleanup} className="flex-1">
+                  Cancelar
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Status Messages */}
-      {error && (
+      {error && !showCamera && (
         <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           {error}

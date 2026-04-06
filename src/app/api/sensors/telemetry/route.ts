@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTokenPayload } from '@/lib/auth'
-import { getTelemetry, isDemoMode } from '@/lib/scada/engine'
+import { getTelemetry, isDemoMode, warmDemoModeCache } from '@/lib/scada/engine'
 
 // GET /api/sensors/telemetry - Get all telemetry data (with simulation tick if demo mode)
 export async function GET(req: NextRequest) {
@@ -10,15 +10,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
+    // Warm the cache on first request (non-blocking)
+    warmDemoModeCache(payload.companyId).catch(() => {})
+
     const { searchParams } = new URL(req.url)
-    const runSimulation = searchParams.get('simulate') !== 'false' && isDemoMode()
+    const demoMode = await isDemoMode(payload.companyId)
+    const runSimulation = searchParams.get('simulate') !== 'false' && demoMode
 
     const result = await getTelemetry(payload.companyId, runSimulation)
 
     return NextResponse.json({
       points: result.points,
       siteSafety: result.siteSafety,
-      demoMode: isDemoMode(),
+      demoMode,
       timestamp: new Date().toISOString(),
     })
   } catch (error: any) {

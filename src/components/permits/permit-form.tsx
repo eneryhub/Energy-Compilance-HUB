@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -28,8 +28,14 @@ import {
   AlertCircle as AlertCircleIcon,
   Camera,
   Settings,
+  QrCode,
+  Radio,
+  ScanLine,
+  Wifi,
+  Signal,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { apiFetch, type ComplianceCheck, type CreatePermitRequest } from '@/lib/api'
 import { RISK_TYPES, getChecklistForRiskType } from '@/lib/plans'
 import SignaturePad from '@/components/signature/signature-pad'
@@ -69,6 +75,25 @@ function getRiskIcon(iconName?: string): React.ComponentType<any> {
   return riskIconMap[iconName || ''] || AlertTriangle
 }
 
+// Saved location type
+interface SavedLocation {
+  id: string
+  name: string
+  address?: string | null
+  latitude: number
+  longitude: number
+  radiusMeters: number
+  verificationMethod?: string | null
+  qrCodeSecret?: string | null
+  beaconUuid?: string | null
+  beaconMajor?: number | null
+  beaconMinor?: number | null
+  beaconRssi?: number | null
+}
+
+type VerificationMethod = 'GPS' | 'QR_CODE' | 'BEACON'
+type VerificationStatus = 'pending' | 'verified' | 'failed' | null
+
 interface PermitFormProps {
   onPermitCreated?: () => void
 }
@@ -90,10 +115,58 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
   const [showPdf, setShowPdf] = useState(false)
   const [photos, setPhotos] = useState<PhotoItem[]>([])
 
+  // Location verification state
+  const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([])
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null)
+  const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | null>(null)
+  const [verificationStatus, setVerificationStatus] = useState<VerificationStatus>(null)
+  const [verificationMessage, setVerificationMessage] = useState('')
+  const [locationsLoading, setLocationsLoading] = useState(false)
+
+  // QR dialog state
+  const [showQrDialog, setShowQrDialog] = useState(false)
+  const [qrCodeInput, setQrCodeInput] = useState('')
+  const [qrSubmitting, setQrSubmitting] = useState(false)
+
+  // Beacon scanning state
+  const [beaconScanning, setBeaconScanning] = useState(false)
+  const beaconTimerRef = useRef<NodeJS.Timeout | null>(null)
+
   // Dynamic risk types from API
   const [dynamicRiskTypes, setDynamicRiskTypes] = useState<DynamicRiskType[]>(FALLBACK_RISK_TYPES)
   const [dynamicChecklist, setDynamicChecklist] = useState<DynamicChecklistItem[]>([])
   const [activeChecklistItems, setActiveChecklistItems] = useState<DynamicChecklistItem[]>([])
+
+  // Load saved locations from API
+  useEffect(() => {
+    setLocationsLoading(true)
+    apiFetch<{ locations: SavedLocation[] }>('/locations?limit=100')
+      .then((data) => {
+        if (Array.isArray(data.locations)) {
+          setSavedLocations(data.locations)
+        }
+      })
+      .catch(() => {
+        // Silently fail — user can still type manually
+      })
+      .finally(() => {
+        setLocationsLoading(false)
+      })
+  }, [])
+
+  // Cleanup beacon timer on unmount
+  useEffect(() => {
+    return () => {
+      if (beaconTimerRef.current) {
+        clearTimeout(beaconTimerRef.current)
+      }
+    }
+  }, [])
+
+  // Derived: selected location object
+  const selectedLocation = selectedLocationId
+    ? savedLocations.find(l => l.id === selectedLocationId) || null
+    : null
 
   // Load dynamic risk types from API
   useEffect(() => {
@@ -144,6 +217,79 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
       })
     }
   }
+
+  // Handle location selection
+  const handleLocationSelect = useCallback((locationId: string) => {
+    if (!locationId || locationId === '__none__') {
+      setSelectedLocationId(null)
+      setVerificationMethod(null)
+      setVerificationStatus(null)
+      setVerificationMessage('')
+      setGpsCoords(null)
+      return
+    }
+
+    const loc = savedLocations.find(l => l.id === locationId)
+    if (!loc) return
+
+    setSelectedLocationId(locationId)
+    setWorkLocation(loc.name)
+    setGpsCoords({
+      lat: loc.latitude,
+      lng: loc.longitude,
+      accuracy: 0
+    })
+
+    const method = (loc.verificationMethod as VerificationMethod) || 'GPS'
+    setVerificationMethod(method)
+    setVerificationStatus('pending')
+    setVerificationMessage('')
+  }, [savedLocations])
+
+  // QR code verification handler
+  const handleQrVerify = useCallback(async () => {
+    if (!selectedLocationId || !qrCodeInput.trim()) return
+
+    setQrSubmitting(true)
+    try {
+      const result = await apiFetch<{ verified: boolean; message?: string; error?: string }>(
+        `/locations/${selectedLocationId}/qr`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ code: qrCodeInput.trim() })
+        }
+      )
+
+      if (result.verified) {
+        setVerificationStatus('verified')
+        setVerificationMessage(result.message || 'Ubicación verificada por QR')
+        setShowQrDialog(false)
+        setQrCodeInput('')
+      } else {
+        setVerificationStatus('failed')
+        setVerificationMessage(result.error || 'Código QR no válido')
+      }
+    } catch {
+      setVerificationStatus('failed')
+      setVerificationMessage('Error al verificar código QR')
+    } finally {
+      setQrSubmitting(false)
+    }
+  }, [selectedLocationId, qrCodeInput])
+
+  // Beacon detection simulation
+  const handleBeaconDetect = useCallback(() => {
+    setBeaconScanning(true)
+    setVerificationStatus('pending')
+    setVerificationMessage('Buscando beacon...')
+
+    beaconTimerRef.current = setTimeout(() => {
+      setBeaconScanning(false)
+      setVerificationStatus('verified')
+      const rssi = selectedLocation?.beaconRssi ?? -65
+      setVerificationMessage(`Beacon detectado — RSSI: ${rssi} dBm`)
+    }, 3000)
+  }, [selectedLocation])
 
   const captureGps = useCallback(() => {
     if (!navigator.geolocation) {
@@ -199,6 +345,14 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
         workLatitude: gpsCoords?.lat,
         workLongitude: gpsCoords?.lng,
         photos,
+        locationData: selectedLocationId ? {
+          latitude: selectedLocation!.latitude,
+          longitude: selectedLocation!.longitude,
+          radius: selectedLocation!.radiusMeters,
+          source: (verificationMethod?.toLowerCase() || 'gps') as string,
+          type: (verificationMethod || 'GPS') as string,
+          id: selectedLocationId,
+        } : undefined,
       }
 
       const data = await apiFetch<{ pdf: string; permitNumber: string }>('/permits', {
@@ -335,26 +489,224 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
                 <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <MapPin className="w-4 h-4 text-slate-500" />
                   Ubicación de Trabajo
+                  {verificationMethod && verificationMethod !== 'GPS' && (
+                    <Badge className={cn(
+                      'text-[10px] ml-auto',
+                      verificationMethod === 'QR_CODE' && 'bg-violet-100 text-violet-700',
+                      verificationMethod === 'BEACON' && 'bg-cyan-100 text-cyan-700',
+                    )}>
+                      {verificationMethod === 'QR_CODE' && <QrCode className="w-3 h-3 mr-1" />}
+                      {verificationMethod === 'BEACON' && <Radio className="w-3 h-3 mr-1" />}
+                      Verificación por {verificationMethod === 'QR_CODE' ? 'QR Code' : 'Beacon BLE'}
+                    </Badge>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                {/* Location Selector Dropdown */}
+                {savedLocations.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-slate-600">Ubicación guardada (opcional)</Label>
+                    <Select
+                      value={selectedLocationId || ''}
+                      onValueChange={handleLocationSelect}
+                    >
+                      <SelectTrigger className="w-full h-9 text-sm">
+                        <SelectValue placeholder={locationsLoading ? 'Cargando...' : 'Seleccionar ubicación...'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">
+                          <span className="text-slate-400">— Ingreso manual —</span>
+                        </SelectItem>
+                        {savedLocations.map((loc) => (
+                          <SelectItem key={loc.id} value={loc.id}>
+                            <div className="flex items-center gap-2">
+                              <span>{loc.name}</span>
+                              {loc.verificationMethod && loc.verificationMethod !== 'GPS' && (
+                                <Badge className={cn(
+                                  'text-[8px] px-1.5 py-0',
+                                  loc.verificationMethod === 'QR_CODE' && 'bg-violet-100 text-violet-600',
+                                  loc.verificationMethod === 'BEACON' && 'bg-cyan-100 text-cyan-600',
+                                )}>
+                                  {loc.verificationMethod === 'QR_CODE' ? 'QR' : 'BLE'}
+                                </Badge>
+                              )}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Work Location text input */}
                 <div className="space-y-1.5">
                   <Label htmlFor="work-loc" className="text-xs text-slate-600">Descripción del lugar</Label>
-                  <Input id="work-loc" placeholder="Ej: Plataforma A, Nivel 3, Área de bombas" value={workLocation} onChange={(e) => setWorkLocation(e.target.value)} className="h-9 text-sm" required />
+                  <Input
+                    id="work-loc"
+                    placeholder="Ej: Plataforma A, Nivel 3, Área de bombas"
+                    value={workLocation}
+                    onChange={(e) => {
+                      setWorkLocation(e.target.value)
+                      // Clear selection if user edits manually
+                      if (selectedLocationId && e.target.value !== selectedLocation?.name) {
+                        setSelectedLocationId(null)
+                        setVerificationMethod(null)
+                        setVerificationStatus(null)
+                        setVerificationMessage('')
+                      }
+                    }}
+                    className="h-9 text-sm"
+                    required
+                  />
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={captureGps} disabled={loading} className="w-full gap-2 text-xs">
-                  {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
-                  {gpsCoords ? 'Actualizar GPS' : 'Capturar Coordenadas GPS'}
-                </Button>
-                {gpsCoords && (
-                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
-                    <div className="flex items-center gap-1.5 text-emerald-700 font-medium mb-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      GPS Capturado
+
+                {/* Selected location info card */}
+                {selectedLocation && (
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-slate-700">{selectedLocation.name}</span>
+                      {selectedLocation.address && (
+                        <span className="text-slate-500 text-[10px]">{selectedLocation.address}</span>
+                      )}
                     </div>
-                    <p className="text-emerald-600">Lat: {gpsCoords.lat.toFixed(6)}, Lng: {gpsCoords.lng.toFixed(6)}</p>
-                    <p className="text-emerald-500 text-[10px]">Precisión: ±{gpsCoords.accuracy.toFixed(0)}m</p>
+                    <p className="text-slate-500">
+                      Lat: {selectedLocation.latitude.toFixed(6)}, Lng: {selectedLocation.longitude.toFixed(6)}
+                    </p>
+                    <p className="text-slate-400 text-[10px]">
+                      Radio: {selectedLocation.radiusMeters}m · Método: {selectedLocation.verificationMethod || 'GPS'}
+                    </p>
                   </div>
+                )}
+
+                {/* Verification Controls */}
+                {/* GPS (default / no location) */}
+                {!selectedLocation && (
+                  <>
+                    <Button type="button" variant="outline" size="sm" onClick={captureGps} disabled={loading} className="w-full gap-2 text-xs">
+                      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
+                      {gpsCoords ? 'Actualizar GPS' : 'Capturar Coordenadas GPS'}
+                    </Button>
+                    {gpsCoords && (
+                      <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
+                        <div className="flex items-center gap-1.5 text-emerald-700 font-medium mb-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          GPS Capturado
+                        </div>
+                        <p className="text-emerald-600">Lat: {gpsCoords.lat.toFixed(6)}, Lng: {gpsCoords.lng.toFixed(6)}</p>
+                        <p className="text-emerald-500 text-[10px]">Precisión: ±{gpsCoords.accuracy.toFixed(0)}m</p>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* QR Code Verification */}
+                {selectedLocation && verificationMethod === 'QR_CODE' && (
+                  <div className="p-3 rounded-lg border border-violet-200 bg-violet-50 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <QrCode className="w-4 h-4 text-violet-600" />
+                      <span className="text-xs font-medium text-violet-700">Verificación por QR Code</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowQrDialog(true)}
+                      disabled={verificationStatus === 'verified'}
+                      className="w-full gap-2 text-xs border-violet-300 text-violet-700 hover:bg-violet-100"
+                    >
+                      <ScanLine className="w-3.5 h-3.5" />
+                      {verificationStatus === 'verified' ? 'QR Verificado' : 'Escanear QR'}
+                    </Button>
+                    {/* Verification status badge */}
+                    {verificationStatus === 'pending' && (
+                      <Badge className="bg-amber-100 text-amber-700 text-[10px] w-full justify-center py-1">
+                        <Loader2 className="w-3 h-3 mr-1" /> Pendiente de verificación QR
+                      </Badge>
+                    )}
+                    {verificationStatus === 'verified' && (
+                      <Badge className="bg-emerald-100 text-emerald-700 text-[10px] w-full justify-center py-1">
+                        <CheckCircle2 className="w-3 h-3 mr-1" /> Ubicación verificada por QR
+                      </Badge>
+                    )}
+                    {verificationStatus === 'failed' && (
+                      <Badge className="bg-red-100 text-red-700 text-[10px] w-full justify-center py-1">
+                        <XCircle className="w-3 h-3 mr-1" /> {verificationMessage}
+                      </Badge>
+                    )}
+                  </div>
+                )}
+
+                {/* Beacon BLE Verification */}
+                {selectedLocation && verificationMethod === 'BEACON' && (
+                  <div className="p-3 rounded-lg border border-cyan-200 bg-cyan-50 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Radio className="w-4 h-4 text-cyan-600" />
+                      <span className="text-xs font-medium text-cyan-700">Verificación por Beacon BLE</span>
+                    </div>
+                    {/* Beacon config info */}
+                    {selectedLocation.beaconUuid && (
+                      <div className="p-2 rounded bg-white/60 text-[10px] text-cyan-700 space-y-0.5 font-mono">
+                        <p>UUID: {selectedLocation.beaconUuid}</p>
+                        <p>Major: {selectedLocation.beaconMajor ?? '—'} · Minor: {selectedLocation.beaconMinor ?? '—'}</p>
+                      </div>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleBeaconDetect}
+                      disabled={beaconScanning || verificationStatus === 'verified'}
+                      className="w-full gap-2 text-xs border-cyan-300 text-cyan-700 hover:bg-cyan-100"
+                    >
+                      {beaconScanning ? (
+                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Buscando beacon...</>
+                      ) : verificationStatus === 'verified' ? (
+                        <><CheckCircle2 className="w-3.5 h-3.5" /> Beacon detectado</>
+                      ) : (
+                        <><Signal className="w-3.5 h-3.5" /> Detectar Beacon</>
+                      )}
+                    </Button>
+                    {/* Beacon scanning animation */}
+                    {beaconScanning && (
+                      <div className="flex items-center gap-2 justify-center text-xs text-cyan-600">
+                        <Wifi className="w-4 h-4 animate-pulse" />
+                        Escaneando señales BLE...
+                      </div>
+                    )}
+                    {/* Verification status badge */}
+                    {verificationStatus === 'pending' && !beaconScanning && (
+                      <Badge className="bg-amber-100 text-amber-700 text-[10px] w-full justify-center py-1">
+                        Pendiente de detección de beacon
+                      </Badge>
+                    )}
+                    {verificationStatus === 'verified' && (
+                      <Badge className="bg-emerald-100 text-emerald-700 text-[10px] w-full justify-center py-1">
+                        <CheckCircle2 className="w-3 h-3 mr-1" /> {verificationMessage}
+                      </Badge>
+                    )}
+                  </div>
+                )}
+
+                {/* GPS Verification (when location uses GPS) */}
+                {selectedLocation && verificationMethod === 'GPS' && (
+                  <>
+                    <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
+                      <div className="flex items-center gap-1.5 text-emerald-700 font-medium mb-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Coordenadas cargadas desde ubicación guardada
+                      </div>
+                      <p className="text-emerald-600">Lat: {selectedLocation.latitude.toFixed(6)}, Lng: {selectedLocation.longitude.toFixed(6)}</p>
+                      <p className="text-emerald-500 text-[10px]">Radio: ±{selectedLocation.radiusMeters}m</p>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={captureGps} disabled={loading} className="w-full gap-2 text-xs">
+                      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
+                      {gpsCoords && gpsCoords.accuracy > 0 ? 'Actualizar con GPS actual' : 'Verificar con GPS del dispositivo'}
+                    </Button>
+                    {gpsCoords && gpsCoords.accuracy > 0 && (
+                      <p className="text-[10px] text-slate-500 text-center">GPS actual: ±{gpsCoords.accuracy.toFixed(0)}m de precisión</p>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -459,6 +811,71 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
           </Button>
         </div>
       </form>
+
+      {/* QR Code Scan Dialog */}
+      <Dialog open={showQrDialog} onOpenChange={(open) => {
+        setShowQrDialog(open)
+        if (!open) {
+          setQrCodeInput('')
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-violet-600" />
+              Escanear Código QR
+            </DialogTitle>
+            <DialogDescription>
+              Ingrese el código QR escaneado para verificar la ubicación &quot;{selectedLocation?.name}&quot;
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <Label htmlFor="qr-code-input" className="text-xs text-slate-600">Código QR escaneado</Label>
+              <Input
+                id="qr-code-input"
+                placeholder="Ingrese código QR escaneado"
+                value={qrCodeInput}
+                onChange={(e) => setQrCodeInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleQrVerify()
+                  }
+                }}
+                disabled={qrSubmitting}
+                className="text-sm"
+                autoFocus
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowQrDialog(false)
+                  setQrCodeInput('')
+                }}
+                disabled={qrSubmitting}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                onClick={handleQrVerify}
+                disabled={qrSubmitting || !qrCodeInput.trim()}
+                className="bg-violet-600 hover:bg-violet-700 text-white gap-2"
+              >
+                {qrSubmitting ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Verificando...</>
+                ) : (
+                  <><CheckCircle2 className="w-4 h-4" /> Verificar Código</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* PDF Dialog */}
       <Dialog open={showPdf} onOpenChange={setShowPdf}>

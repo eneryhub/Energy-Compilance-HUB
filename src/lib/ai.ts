@@ -1,5 +1,4 @@
-const AI_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1'
-const AI_API_KEY = process.env.DEEPSEEK_API_KEY || ''
+import ZAI from 'z-ai-web-dev-sdk'
 
 export interface DocumentExtraction {
   documentType: string
@@ -12,27 +11,28 @@ export interface DocumentExtraction {
   keywords: string[]
 }
 
+let _zaiInstance: InstanceType<typeof ZAI> | null = null
+
+async function getZAI(): Promise<InstanceType<typeof ZAI>> {
+  if (!_zaiInstance) {
+    _zaiInstance = await ZAI.create()
+  }
+  return _zaiInstance
+}
+
 /**
  * Extract information from a document using AI
  */
 export async function extractDocumentData(text: string): Promise<DocumentExtraction | null> {
-  if (!AI_API_KEY) {
-    return null
-  }
-
   try {
-    const response = await fetch(`${AI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content: `Eres un experto en análisis de documentos de seguridad industrial HSE para Latinoamérica.
+    const zai = await getZAI()
+
+    const response = await zai.chat.completions.create({
+      model: 'default',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un experto en análisis de documentos de seguridad industrial HSE para Latinoamérica.
 Extrae información estructurada. Responde ÚNICAMENTE con JSON válido:
 {
   "documentType": "string",
@@ -44,21 +44,16 @@ Extrae información estructurada. Responde ÚNICAMENTE con JSON válido:
   "summary": "string",
   "keywords": ["string"]
 }`,
-          },
-          {
-            role: 'user',
-            content: `Analiza este documento:\n\n${text}`,
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 500,
-      }),
+        },
+        {
+          role: 'user',
+          content: `Analiza este documento:\n\n${text}`,
+        },
+      ],
+      temperature: 0.1,
     })
 
-    if (!response.ok) return null
-
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = response.choices?.[0]?.message?.content
     if (!content) return null
 
     const jsonMatch = content.match(/\{[\s\S]*\}/)
@@ -82,48 +77,32 @@ export async function generateAlertMessage(params: {
 }): Promise<string> {
   const { documentTitle, documentType, expiryDate, daysRemaining, holderName } = params
 
-  if (!AI_API_KEY) {
-    if (daysRemaining <= 0) {
-      return `ALERTA URGENTE: ${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
-    }
-    if (daysRemaining === 1) {
-      return `ALERTA: ${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} vence MANANA (${expiryDate}).`
-    }
-    return `Recordatorio: ${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} vence en ${daysRemaining} dias (${expiryDate}).`
+  // Simple fallback for non-critical alerts
+  if (daysRemaining > 0) {
+    return `${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} vence en ${daysRemaining} dias (${expiryDate}).`
   }
 
   try {
-    const response = await fetch(`${AI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content: 'Genera mensajes de alerta claros y concisos en español para seguridad industrial. Maximo 160 caracteres.',
-          },
-          {
-            role: 'user',
-            content: `Genera alerta para documento: ${documentType} "${documentTitle}" de ${holderName || 'N/A'}, vence en ${daysRemaining} dias.`,
-          },
-        ],
-        temperature: 0.5,
-        max_tokens: 100,
-      }),
+    const zai = await getZAI()
+
+    const response = await zai.chat.completions.create({
+      model: 'default',
+      messages: [
+        {
+          role: 'system',
+          content: 'Genera mensajes de alerta claros y concisos en español para seguridad industrial. Maximo 160 caracteres.',
+        },
+        {
+          role: 'user',
+          content: `Genera alerta URGENTE para documento VENCIDO: ${documentType} "${documentTitle}" de ${holderName || 'N/A'}, venció el ${expiryDate}.`,
+        },
+      ],
+      temperature: 0.5,
     })
 
-    if (!response.ok) {
-      return `${documentType} "${documentTitle}" vence en ${daysRemaining} dias.`
-    }
-
-    const data = await response.json()
-    return data.choices?.[0]?.message?.content || `${documentType} "${documentTitle}" vence en ${daysRemaining} dias.`
+    return response.choices?.[0]?.message?.content || `${documentType} "${documentTitle}" ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
   } catch {
-    return `${documentType} "${documentTitle}" vence en ${daysRemaining} dias.`
+    return `ALERTA URGENTE: ${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
   }
 }
 
@@ -142,7 +121,7 @@ export interface PermitReviewResult {
 }
 
 /**
- * Review a work permit for safety compliance using DeepSeek AI.
+ * Review a work permit for safety compliance using AI (z-ai-web-dev-sdk).
  * Returns a structured assessment with recommendations.
  */
 export async function reviewPermitSafety(params: {
@@ -158,125 +137,181 @@ export async function reviewPermitSafety(params: {
 }): Promise<PermitReviewResult> {
   const { riskType, riskLabel, workDescription, workLocation, safetyChecks, technicianName, supervisorName, hasPhotos, photosCount } = params
 
-  if (!AI_API_KEY) {
-    // Fallback: basic rule-based review
-    const failedChecks = Object.entries(safetyChecks).filter(([, val]) => !val).map(([key]) => key)
-    const allRequiredPass = true // can't determine without AI
-    return {
-      overallScore: failedChecks.length === 0 ? 85 : 60,
-      riskLevel: riskType === 'CALIENTE' || riskType === 'ELECTRICO' ? 'ALTO' : riskType === 'ALTURA' ? 'MEDIO-ALTO' : 'MEDIO',
-      recommendation: failedChecks.length === 0 ? 'APROBAR' : 'REVISAR',
-      findings: [
-        ...failedChecks.map(key => ({
-          severity: 'warning' as const,
-          category: 'checklist',
-          description: `Item de verificación "${key}" no marcado`,
-          suggestion: 'Verifique que este item esté cumplido antes de aprobar',
-        })),
-        ...(hasPhotos ? [] : [{
-          severity: 'info' as const,
-          category: 'evidence',
-          description: 'No se adjuntaron fotos de evidencia',
-          suggestion: 'Se recomienda adjuntar fotos del área de trabajo y condiciones',
-        }]),
-      ],
-      summary: `Permisos de ${riskLabel} en ${workLocation}. ${failedChecks.length === 0 ? 'Todos los items de verificación completados.' : `${failedChecks.length} item(s) pendiente(s).`} ${hasPhotos ? `${photosCount} foto(s) adjuntada(s).` : 'Sin evidencia fotográfica.'}`,
-      reviewedAt: new Date().toISOString(),
-    }
-  }
+  const failedChecks = Object.entries(safetyChecks).filter(([, val]) => !val)
+  const passedChecks = Object.entries(safetyChecks).filter(([, val]) => val)
+  const totalChecks = Object.keys(safetyChecks).length
 
   try {
+    const zai = await getZAI()
+
     const checksDescription = Object.entries(safetyChecks).map(([key, val]) =>
-      `- ${key.replace(/_/g, ' ')}: ${val ? '✅ Cumplido' : '❌ No cumplido'}`
+      `- ${key.replace(/_/g, ' ')}: ${val ? 'SI Cumplido' : 'NO Cumplido'}`
     ).join('\n')
 
-    const response = await fetch(`${AI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content: `Eres un auditor de seguridad industrial HSE experto en normativa latinoamericana.
-Analiza permisos de trabajo y genera un JSON con tu evaluación.
+    const response = await zai.chat.completions.create({
+      model: 'default',
+      messages: [
+        {
+          role: 'system',
+          content: `Eres un auditor de seguridad industrial HSE experto en normativa latinoamericana (OSHA, NFPA, ISO 45001).
+Analiza permisos de trabajo y genera EXCLUSIVAMENTE un JSON con tu evaluación. No incluyas texto fuera del JSON.
 
-IMPORTANTE: Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {
-  "overallScore": 0-100,
-  "riskLevel": "BAJO|MEDIO|MEDIO-ALTO|ALTO|CRITICO",
-  "recommendation": "APROBAR|REVISAR|RECHAZAR",
+  "overallScore": number entre 0 y 100,
+  "riskLevel": uno de "BAJO|MEDIO|MEDIO-ALTO|ALTO|CRITICO",
+  "recommendation": uno de "APROBAR|REVISAR|RECHAZAR",
   "findings": [
     {
-      "severity": "critical|warning|info",
-      "category": "checklist|safety|evidence|procedures|ppe",
-      "description": "Descripción del hallazgo",
-      "suggestion": "Recomendación para corregir"
+      "severity": uno de "critical|warning|info",
+      "category": uno de "checklist|safety|evidence|procedures|ppe",
+      "description": "Descripcion del hallazgo en español",
+      "suggestion": "Recomendacion para corregir en español"
     }
   ],
-  "summary": "Resumen ejecutivo de 2-3 oraciones"
+  "summary": "Resumen ejecutivo de 2-3 oraciones en español"
 }
 
 Criterios de scoring:
-- 90-100: Todo cumplido, con fotos, checklist completo
-- 70-89: Checklist mayormente completo, puede tener hallazgos menores
-- 50-69: Hallazgos importantes que requieren atención
-- 0-49: Riesgo crítico, no se recomienda aprobar`,
-          },
-          {
-            role: 'user',
-            content: `Analiza este permiso de trabajo:
+- 90-100: Todo cumplido, checklist completo, con fotos
+- 70-89: Checklist mayormente completo, hallazgos menores
+- 50-69: Hallazgos importantes que requieren atencion
+- 0-49: Riesgo critico, no se recomienda aprobar
+
+Si TODOS los checks estan cumplidos y hay fotos, el score debe ser >= 90 y recommendation "APROBAR".
+Si hay checks sin cumplir, penaliza proporcionalmente.`,
+        },
+        {
+          role: 'user',
+          content: `Analiza este permiso de trabajo:
 
 TIPO DE RIESGO: ${riskLabel} (${riskType})
-DESCRIPCIÓN: ${workDescription}
-UBICACIÓN: ${workLocation}
-TÉCNICO: ${technicianName}
+DESCRIPCION DEL TRABAJO: ${workDescription}
+UBICACION: ${workLocation}
+TECNICO: ${technicianName}
 SUPERVISOR: ${supervisorName}
 
-LISTA DE VERIFICACIÓN:
+LISTA DE VERIFICACION (${passedChecks.length}/${totalChecks} cumplidos):
 ${checksDescription}
 
-EVIDENCIA FOTOGRÁFICA: ${hasPhotos ? `Sí, ${photosCount} foto(s)` : 'No se adjuntaron fotos'}`,
-          },
-        ],
-        temperature: 0.2,
-        max_tokens: 800,
-      }),
+EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` : 'No se adjuntaron fotos'}`,
+        },
+      ],
+      temperature: 0.2,
     })
 
-    if (!response.ok) {
-      throw new Error(`AI API error: ${response.status}`)
-    }
-
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = response.choices?.[0]?.message?.content
     if (!content) throw new Error('Empty AI response')
 
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (!jsonMatch) throw new Error('Invalid AI JSON response')
 
     const result = JSON.parse(jsonMatch[0])
+
     return {
-      ...result,
+      overallScore: typeof result.overallScore === 'number' ? result.overallScore : 70,
+      riskLevel: result.riskLevel || 'MEDIO',
+      recommendation: result.recommendation || 'REVISAR',
+      findings: Array.isArray(result.findings) ? result.findings : [],
+      summary: result.summary || 'Revision completada por IA.',
       reviewedAt: new Date().toISOString(),
     }
   } catch (error) {
-    // Fallback on error
-    const failedChecks = Object.entries(safetyChecks).filter(([, val]) => !val)
-    return {
-      overallScore: 70,
-      riskLevel: 'MEDIO',
-      recommendation: 'REVISAR',
-      findings: [{
+    // Intelligent fallback when AI is unavailable — rule-based review
+    console.error('[AI] reviewPermitSafety fallback triggered:', error instanceof Error ? error.message : error)
+
+    let score = 100
+
+    // Penalize failed checks
+    score -= failedChecks.length * 12
+
+    // Penalize missing photos
+    if (!hasPhotos) score -= 10
+
+    // Penalize empty work description
+    if (workDescription.length < 20) score -= 15
+
+    // Risk type adjustment
+    if (riskType === 'CALIENTE' || riskType === 'ELECTRICO' || riskType === 'EXCAVACION') {
+      score -= 5
+    }
+
+    score = Math.max(0, Math.min(100, score))
+
+    const riskLevel = score >= 90 ? 'BAJO' : score >= 70 ? 'MEDIO' : score >= 50 ? 'MEDIO-ALTO' : score >= 30 ? 'ALTO' : 'CRITICO'
+    const recommendation = score >= 85 && failedChecks.length === 0 ? 'APROBAR' : score >= 50 ? 'REVISAR' : 'RECHAZAR'
+
+    const findings: Array<{ severity: string; category: string; description: string; suggestion: string }> = []
+
+    // Check-specific findings
+    for (const [key] of failedChecks) {
+      findings.push({
         severity: 'warning',
-        category: 'system',
-        description: 'No se pudo completar la revisión IA. Verificación manual requerida.',
-        suggestion: 'Revise manualmente el checklist y las condiciones del trabajo.',
-      }],
-      summary: `Revisión IA no disponible. ${failedChecks.length} item(s) pendiente(s) en checklist.`,
+        category: 'checklist',
+        description: `Item "${key.replace(/_/g, ' ')}" no fue verificado`,
+        suggestion: 'Este item debe ser completado antes de aprobar el permiso',
+      })
+    }
+
+    // Evidence findings
+    if (!hasPhotos) {
+      findings.push({
+        severity: 'info',
+        category: 'evidence',
+        description: 'No se adjuntaron fotografias de evidencia',
+        suggestion: 'Se recomienda documentar las condiciones del area con fotos',
+      })
+    }
+
+    // Risk-specific findings
+    if (riskType === 'ALTURA' && !safetyChecks.has_harness) {
+      findings.push({
+        severity: 'critical',
+        category: 'ppe',
+        description: 'Trabajo en altura sin arnés de seguridad verificado',
+        suggestion: 'El arnés de cuerpo completo es obligatorio para trabajos en altura. No apruebe sin verificar.',
+      })
+    }
+    if (riskType === 'CALIENTE' && !safetyChecks.has_fire_extinguisher) {
+      findings.push({
+        severity: 'critical',
+        category: 'safety',
+        description: 'Trabajo en caliente sin extintor verificado',
+        suggestion: 'Verifique la disponibilidad de extintores en el area antes de iniciar.',
+      })
+    }
+    if (riskType === 'ELECTRICO' && !safetyChecks.has_lockout_tagout) {
+      findings.push({
+        severity: 'critical',
+        category: 'procedures',
+        description: 'Trabajo eléctrico sin Lockout/Tagout verificado',
+        suggestion: 'LOTO es obligatorio. No inicie trabajo sin desenergizar y bloquear la fuente.',
+      })
+    }
+    if (riskType === 'EXCAVACION' && !safetyChecks.has_gas_detection) {
+      findings.push({
+        severity: 'critical',
+        category: 'safety',
+        description: 'Excavación sin detección de gases verificado',
+        suggestion: 'Monitoreo de gases continuo es obligatorio en excavaciones.',
+      })
+    }
+
+    // Add positive finding if all checks pass
+    if (failedChecks.length === 0) {
+      findings.push({
+        severity: 'info',
+        category: 'checklist',
+        description: `Todos los ${totalChecks} items de verificación están completados`,
+        suggestion: 'El checklist está completo. Verifique las condiciones en campo.',
+      })
+    }
+
+    return {
+      overallScore: score,
+      riskLevel,
+      recommendation,
+      findings,
+      summary: `Revision automatica de permiso "${riskLabel}" en ${workLocation || 'ubicacion no especificada'}. ${passedChecks.length}/${totalChecks} checks completados.${hasPhotos ? ` ${photosCount} foto(s) adjuntada(s).` : ' Sin evidencia fotografica.'} ${recommendation === 'APROBAR' ? 'Permiso cumple con los requisitos minimos.' : 'Se requieren acciones correctivas antes de aprobar.'}`,
       reviewedAt: new Date().toISOString(),
     }
   }

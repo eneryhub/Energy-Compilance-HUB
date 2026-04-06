@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -37,6 +38,15 @@ import {
   TrendingUp,
   Clock,
   MapPin,
+  RefreshCw,
+  QrCode,
+  Download,
+  ScanLine,
+  Signal,
+  Crosshair,
+  Input as InputIcon,
+  Key,
+  FileUp,
 } from 'lucide-react'
 import {
   LineChart,
@@ -51,7 +61,9 @@ import {
   ReferenceLine,
 } from 'recharts'
 import { cn } from '@/lib/utils'
-import { apiFetch, getToken } from '@/lib/api'
+import { apiFetch, apiFetchWithMeta, getToken } from '@/lib/api'
+import SensorImport from '@/components/import/sensor-import'
+import LocationImport from '@/components/import/location-import'
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -141,12 +153,74 @@ export default function TelemetryBoard() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([])
   const [lastUpdate, setLastUpdate] = useState<string>('')
+  const [sensorOffline, setSensorOffline] = useState(false)
+  const [networkError, setNetworkError] = useState(false)
+  const [activeTab, setActiveTab] = useState<'telemetry' | 'sensors' | 'locations' | 'import' | 'apikeys'>('telemetry')
   const pollRef = useRef<NodeJS.Timeout | null>(null)
+  const [importSubTab, setImportSubTab] = useState<'sensors' | 'locations'>('sensors')
 
   // New sensor form
   const [newName, setNewName] = useState('')
   const [newType, setNewType] = useState('PRESION')
   const [newLocation, setNewLocation] = useState('')
+
+  // Location management state
+  const [showLocationDialog, setShowLocationDialog] = useState(false)
+  const [locName, setLocName] = useState('')
+  const [locAddress, setLocAddress] = useState('')
+  const [locLat, setLocLat] = useState('')
+  const [locLng, setLocLng] = useState('')
+  const [locRadius, setLocRadius] = useState('100')
+  const [locMethod, setLocMethod] = useState<string>('GPS')
+  const [locBeaconUuid, setLocBeaconUuid] = useState('')
+  const [locBeaconMajor, setLocBeaconMajor] = useState('')
+  const [locBeaconMinor, setLocBeaconMinor] = useState('')
+  const [locBeaconRssi, setLocBeaconRssi] = useState('-70')
+  const [creatingLocation, setCreatingLocation] = useState(false)
+  const [createdQrData, setCreatedQrData] = useState<{ location: any; qr: { secret: string; payload: any } } | null>(null)
+  const [createdBeaconData, setCreatedBeaconData] = useState<{ location: any; beacon: { uuid: string; major: number | null; minor: number | null; rssi: number } } | null>(null)
+  const [qrLoading, setQrLoading] = useState(false)
+  const [qrImageUrl, setQrImageUrl] = useState<string | null>(null)
+  const [showQrPreview, setShowQrPreview] = useState(false)
+  const [qrPreviewLocationId, setQrPreviewLocationId] = useState<string | null>(null)
+  const [beaconDetecting, setBeaconDetecting] = useState(false)
+  const beaconDetectTimer = useRef<NodeJS.Timeout | null>(null)
+
+  // API Key management state
+  const [apiKeys, setApiKeys] = useState<Array<{ id: string; name: string; keyPrefix: string; permissions: string; isActive: boolean; lastUsedAt: string | null; expiresAt: string | null; createdAt: string }>>([])
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false)
+  const [apiKeyName, setApiKeyName] = useState('')
+  const [apiKeyPermissions, setApiKeyPermissions] = useState('read')
+  const [apiKeyExpiry, setApiKeyExpiry] = useState('90')
+  const [creatingApiKey, setCreatingApiKey] = useState(false)
+  const [newApiKeyData, setNewApiKeyData] = useState<{ key: string; name: string } | null>(null)
+  const [revokingKeyId, setRevokingKeyId] = useState<string | null>(null)
+
+  const [fullLocations, setFullLocations] = useState<Array<{
+    id: string; name: string; address?: string | null; latitude: number; longitude: number;
+    radiusMeters: number; verificationMethod?: string | null;
+    qrCodeSecret?: string | null; beaconUuid?: string | null;
+    beaconMajor?: number | null; beaconMinor?: number | null; verifiedAt?: string | null;
+  }>>([])
+
+  // Load full locations data for management
+  const loadFullLocations = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ locations: typeof fullLocations }>('/locations?limit=100')
+      if (data?.locations && Array.isArray(data.locations)) {
+        setFullLocations(data.locations)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const loadApiKeys = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ keys: typeof apiKeys }>('/api-keys')
+      if (data?.keys) setApiKeys(data.keys)
+    } catch { /* ignore */ }
+  }, [])
 
   // ── Load initial data ──────────────────────────────────
 
@@ -177,14 +251,22 @@ export default function TelemetryBoard() {
 
   const loadTelemetry = useCallback(async () => {
     try {
-      const data = await apiFetch<TelemetryResponse>('/sensors/telemetry')
-      setTelemetry(data)
-      setDemoMode(data.demoMode)
+      const result = await apiFetchWithMeta<TelemetryResponse>('/sensors/telemetry')
+      setTelemetry(result.data)
+      setDemoMode(result.data.demoMode)
       setLastUpdate(new Date().toLocaleTimeString('es'))
+      // Detect offline data from Service Worker
+      setSensorOffline(result.meta.offline)
+      setNetworkError(false)
     } catch {
-      // If telemetry fails (e.g. Prisma not regenerated), show empty state
-      setTelemetry({ points: [], siteSafety: { isSafe: true, criticalSensors: [], warningSensors: [] }, demoMode: true, timestamp: new Date().toISOString() })
-      setLastUpdate(new Date().toLocaleTimeString('es'))
+      // If telemetry fails (network error or server error)
+      if (!navigator.onLine) {
+        setNetworkError(true)
+        setSensorOffline(true)
+      } else {
+        setTelemetry({ points: [], siteSafety: { isSafe: true, criticalSensors: [], warningSensors: [] }, demoMode: true, timestamp: new Date().toISOString() })
+        setLastUpdate(new Date().toLocaleTimeString('es'))
+      }
     } finally {
       setLoading(false)
     }
@@ -193,7 +275,15 @@ export default function TelemetryBoard() {
   useEffect(() => {
     loadSensors()
     loadLocations()
-  }, [loadSensors, loadLocations])
+    loadFullLocations(); loadApiKeys()
+  }, [loadSensors, loadLocations, loadFullLocations, loadApiKeys])
+
+  // Cleanup beacon detect timer
+  useEffect(() => {
+    return () => {
+      if (beaconDetectTimer.current) clearTimeout(beaconDetectTimer.current)
+    }
+  }, [])
 
   // ── Polling (every 3 seconds) ──────────────────────────
 
@@ -310,6 +400,140 @@ export default function TelemetryBoard() {
     return new Date(ts).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  // ── Location Handlers ────────────────────────────────
+
+  const handleCaptureGpsForLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocalización no disponible')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocLat(pos.coords.latitude.toFixed(6))
+        setLocLng(pos.coords.longitude.toFixed(6))
+      },
+      () => alert('No se pudo obtener GPS'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+
+  const handleCreateLocation = async () => {
+    if (!locName.trim() || !locLat || !locLng) return
+    setCreatingLocation(true)
+    try {
+      const body: Record<string, unknown> = {
+        name: locName.trim(),
+        address: locAddress.trim() || undefined,
+        latitude: parseFloat(locLat),
+        longitude: parseFloat(locLng),
+        radiusMeters: parseInt(locRadius) || 100,
+        verificationMethod: locMethod,
+      }
+
+      if (locMethod === 'BEACON') {
+        if (locBeaconUuid.trim()) body.beaconUuid = locBeaconUuid.trim()
+        if (locBeaconMajor) body.beaconMajor = parseInt(locBeaconMajor)
+        if (locBeaconMinor) body.beaconMinor = parseInt(locBeaconMinor)
+        if (locBeaconRssi) body.beaconRssi = parseInt(locBeaconRssi)
+      }
+
+      const data = await apiFetch<any>('/locations', { method: 'POST', body: JSON.stringify(body) })
+
+      if (locMethod === 'QR_CODE' && data.qr) {
+        setCreatedQrData(data)
+      } else if (locMethod === 'BEACON' && data.beacon) {
+        setCreatedBeaconData(data)
+      } else {
+        setShowLocationDialog(false)
+        resetLocationForm()
+      }
+
+      loadFullLocations()
+      loadLocations()
+    } catch (err: any) {
+      alert(err.message || 'Error al crear ubicación')
+    } finally {
+      setCreatingLocation(false)
+    }
+  }
+
+  const resetLocationForm = () => {
+    setLocName('')
+    setLocAddress('')
+    setLocLat('')
+    setLocLng('')
+    setLocRadius('100')
+    setLocMethod('GPS')
+    setLocBeaconUuid('')
+    setLocBeaconMajor('')
+    setLocBeaconMinor('')
+    setLocBeaconRssi('-70')
+    setCreatedQrData(null)
+    setCreatedBeaconData(null)
+  }
+
+  const handleDownloadQr = async (locationId: string) => {
+    setQrLoading(true)
+    setQrPreviewLocationId(locationId)
+    try {
+      const data = await apiFetch<{ qrUrl: string; secret: string }>(`/locations/${locationId}/qr`)
+      setQrImageUrl(data.qrUrl)
+      setShowQrPreview(true)
+    } catch {
+      alert('Error al generar QR code')
+    } finally {
+      setQrLoading(false)
+    }
+  }
+
+  const downloadQrImage = (url: string, locationName: string) => {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qr-${locationName.replace(/\s+/g, '-').toLowerCase()}.png`
+    a.click()
+  }
+
+  const handleDetectBeacon = (locationId: string) => {
+    setBeaconDetecting(true)
+    beaconDetectTimer.current = setTimeout(() => {
+      setBeaconDetecting(false)
+      alert('Beacon detectado correctamente (simulación). En producción se usaría la Web Bluetooth API.')
+    }, 3000)
+  }
+
+  const handleCreateApiKey = async () => {
+    if (!apiKeyName.trim()) return
+    setCreatingApiKey(true)
+    try {
+      const data = await apiFetch<{ key: string; name: string; id: string; keyPrefix: string; permissions: string; expiresAt: string | null }>('/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name: apiKeyName.trim(), permissions: apiKeyPermissions, expiresDays: parseInt(apiKeyExpiry) || 90 }),
+      })
+      setNewApiKeyData({ key: data.key, name: data.name })
+      setApiKeyName('')
+      setApiKeyPermissions('read')
+      setApiKeyExpiry('90')
+      loadApiKeys()
+    } catch (err: any) {
+      alert(err.message || 'Error al crear API Key')
+    } finally {
+      setCreatingApiKey(false)
+    }
+  }
+
+  const handleRevokeKey = async (id: string) => {
+    if (!confirm('¿Revocar esta API Key? Esta acción no se puede deshacer.')) return
+    setRevokingKeyId(id)
+    try {
+      await apiFetch(`/api-keys?id=${id}`, { method: 'DELETE' })
+      loadApiKeys()
+    } catch (err: any) {
+      alert(err.message || 'Error al revocar API Key')
+    } finally {
+      setRevokingKeyId(null)
+    }
+  }
+
   const getSensorTypeLabel = (type: string) => {
     const labels: Record<string, string> = {
       PRESION: 'Presión',
@@ -382,373 +606,779 @@ export default function TelemetryBoard() {
         </div>
       </div>
 
-      {/* ── Site Safety Banner ──────────────────────────── */}
-      <AnimatePresence mode="wait">
-        {telemetry && !telemetry.siteSafety.isSafe && (
-          <motion.div
-            key="unsafe"
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="rounded-xl border-2 border-red-400 bg-gradient-to-r from-red-900 to-red-950 p-4 text-white"
-          >
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-lg bg-red-500/30">
-                <ShieldAlert className="w-6 h-6 text-red-300 animate-pulse" />
+      {/* ── Tab Navigation Bar ──────────────────────────── */}
+      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {[
+          { id: 'telemetry' as const, label: 'Telemetría', icon: Activity, count: telemetry?.points.length ?? 0 },
+          { id: 'sensors' as const, label: 'Sensores', icon: Settings, count: sensors.length },
+          { id: 'locations' as const, label: 'Ubicaciones', icon: MapPin, count: fullLocations.length },
+          { id: 'import' as const, label: 'Importar', icon: FileUp, count: 0 },
+          { id: 'apikeys' as const, label: 'Credenciales API', icon: Key, count: apiKeys.length },
+        ].map((tab) => {
+          const TabIcon = tab.icon
+          const isActive = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                isActive
+                  ? 'bg-white text-slate-900 shadow-sm border border-slate-200'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-white/60'
+              )}
+            >
+              <TabIcon className={cn('w-3.5 h-3.5', isActive ? 'text-emerald-600' : 'text-slate-400')} />
+              <span className="hidden sm:inline">{tab.label}</span>
+              <Badge className={cn(
+                'text-[9px] px-1.5 py-0 min-w-[18px] text-center',
+                isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
+              )}>
+                {tab.count}
+              </Badge>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* ── Tab Content: Telemetría ────────────────────── */}
+      {activeTab === 'telemetry' && (
+        <div className="space-y-4">
+          {/* Site Safety Banner */}
+          <AnimatePresence mode="wait">
+            {telemetry && !telemetry.siteSafety.isSafe && (
+              <motion.div
+                key="unsafe"
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="rounded-xl border-2 border-red-400 bg-gradient-to-r from-red-900 to-red-950 p-4 text-white"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-red-500/30">
+                    <ShieldAlert className="w-6 h-6 text-red-300 animate-pulse" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-bold flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                      ALERTA SCADA — SITIO NO SEGURO
+                    </h3>
+                    <p className="text-sm text-red-200 mt-1">
+                      Se han detectado sensores en estado CRÍTICO. Las operaciones de firma están BLOQUEADAS.
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {telemetry.siteSafety.criticalSensors.map((s) => (
+                        <div key={s.id} className="flex items-center justify-between p-2.5 rounded-lg bg-red-500/20 text-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-pulse" />
+                            <span className="font-medium text-red-100">{s.name}</span>
+                            <span className="text-red-300 text-xs">({s.type})</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-red-100">{s.value} {s.unit}</span>
+                            <Badge className="bg-red-600 text-white text-[10px]">Límite: {s.threshold} {s.unit}</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {telemetry && telemetry.siteSafety.isSafe && (
+              <motion.div
+                key="safe"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex items-center gap-3 p-3 rounded-xl bg-slate-900 text-white"
+              >
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                <span className="text-sm font-medium text-slate-300">
+                  Todos los sensores operativos — Sitio SEGURO
+                </span>
+                {telemetry.siteSafety.warningSensors.length > 0 && (
+                  <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-[10px]">
+                    {telemetry.siteSafety.warningSensors.length} advertencia(s)
+                  </Badge>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Offline Sensor Warning */}
+          {sensorOffline && !networkError && telemetry && telemetry.points.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 flex items-center gap-3"
+            >
+              <div className="p-2 rounded-lg bg-amber-100 flex-shrink-0">
+                <WifiOff className="w-5 h-5 text-amber-600" />
               </div>
               <div className="flex-1">
-                <h3 className="text-base font-bold flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                  ALERTA SCADA — SITIO NO SEGURO
-                </h3>
-                <p className="text-sm text-red-200 mt-1">
-                  Se han detectado sensores en estado CRÍTICO. Las operaciones de firma están BLOQUEADAS.
+                <p className="text-sm font-semibold text-amber-800">Dato fuera de línea</p>
+                <p className="text-xs text-amber-600">
+                  Último valor guardado — Los sensores se actualizarán automáticamente al recuperar la conexión.
                 </p>
-                <div className="mt-3 space-y-2">
-                  {telemetry.siteSafety.criticalSensors.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between p-2.5 rounded-lg bg-red-500/20 text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-400 animate-pulse" />
-                        <span className="font-medium text-red-100">{s.name}</span>
-                        <span className="text-red-300 text-xs">({s.type})</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-red-100">{s.value} {s.unit}</span>
-                        <Badge className="bg-red-600 text-white text-[10px]">Límite: {s.threshold} {s.unit}</Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
-            </div>
-          </motion.div>
-        )}
-
-        {telemetry && telemetry.siteSafety.isSafe && (
-          <motion.div
-            key="safe"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex items-center gap-3 p-3 rounded-xl bg-slate-900 text-white"
-          >
-            <ShieldCheck className="w-5 h-5 text-emerald-400" />
-            <span className="text-sm font-medium text-slate-300">
-              Todos los sensores operativos — Sitio SEGURO
-            </span>
-            {telemetry.siteSafety.warningSensors.length > 0 && (
-              <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-[10px]">
-                {telemetry.siteSafety.warningSensors.length} advertencia(s)
+              <Badge className="bg-amber-200 text-amber-800 text-[10px] border-amber-300 flex-shrink-0">
+                OFFLINE
               </Badge>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
 
-      {/* ── Sensor Grid ─────────────────────────────────── */}
-      {!telemetry || telemetry.points.length === 0 ? (
-        <Card className="border-slate-200">
-          <CardContent className="py-16 text-center">
-            <Activity className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <p className="text-sm text-slate-500">No hay sensores configurados</p>
-            <p className="text-xs text-slate-400 mt-1">Agregue un sensor para comenzar el monitoreo</p>
-            <Button
-              onClick={() => setShowAddDialog(true)}
-              className="mt-4 bg-slate-900 hover:bg-slate-800 text-white gap-1.5"
+          {networkError && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-xl border-2 border-red-300 bg-red-50 px-4 py-3 flex items-center gap-3"
             >
-              <Plus className="w-4 h-4" />
-              Agregar Sensor
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {telemetry.points.map((point, index) => {
-            const Icon = SENSOR_ICONS[point.type] || Gauge
-            const colors = SENSOR_COLORS[point.type] || SENSOR_COLORS.PRESION
-            const gaugeColor = getGaugeColor(point.value, point.thresholdCritical, point.thresholdWarning)
-            const pct = Math.min((point.value / point.thresholdCritical) * 100, 115)
-            const isSelected = selectedSensor === point.sensorId
-
-            return (
-              <motion.div
-                key={point.sensorId}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
+              <div className="p-2 rounded-lg bg-red-100 flex-shrink-0">
+                <WifiOff className="w-5 h-5 text-red-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-red-800">Sensores no disponibles</p>
+                <p className="text-xs text-red-600">
+                  No hay datos de sensores almacenados localmente. Los datos en tiempo real requieren conexión a internet.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={loadTelemetry}
+                className="border-red-300 text-red-700 hover:bg-red-100 text-xs flex-shrink-0"
               >
-                <Card
-                  className={cn(
-                    'cursor-pointer transition-all border-2 overflow-hidden',
-                    isSelected
-                      ? 'border-slate-900 shadow-lg'
-                      : point.status === 'CRITICO'
-                        ? 'border-red-300 shadow-red-100'
-                        : point.status === 'WARNING'
-                          ? 'border-amber-300'
-                          : 'border-slate-200 hover:border-slate-300',
-                    point.status === 'CRITICO' && 'bg-red-50/30'
-                  )}
-                  onClick={() => setSelectedSensor(isSelected ? null : point.sensorId)}
-                >
-                  {/* Status bar */}
-                  <div className={cn(
-                    'h-1',
-                    point.status === 'CRITICO' ? 'bg-red-500' :
-                    point.status === 'WARNING' ? 'bg-amber-500' : 'bg-emerald-500'
-                  )} />
+                <RefreshCw className="w-3 h-3 mr-1" />
+                Reintentar
+              </Button>
+            </motion.div>
+          )}
 
-                  <CardHeader className="pb-2 pt-3 px-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className={cn(
-                          'p-2 rounded-lg',
-                          point.status === 'CRITICO' ? 'bg-red-100' :
-                          point.status === 'WARNING' ? 'bg-amber-100' : 'bg-slate-100'
-                        )}>
-                          <Icon className={cn(
-                            'w-4 h-4',
-                            point.status === 'CRITICO' ? 'text-red-600' :
-                            point.status === 'WARNING' ? 'text-amber-600' : 'text-slate-600'
-                          )} />
+          {/* Sensor Grid */}
+          {!telemetry || telemetry.points.length === 0 ? (
+            <Card className="border-slate-200">
+              <CardContent className="py-16 text-center">
+                <Activity className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm text-slate-500">No hay sensores configurados</p>
+                <p className="text-xs text-slate-400 mt-1">Agregue un sensor para comenzar el monitoreo</p>
+                <Button
+                  onClick={() => { setShowAddDialog(true); setActiveTab('sensors') }}
+                  className="mt-4 bg-slate-900 hover:bg-slate-800 text-white gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  Agregar Sensor
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {telemetry.points.map((point, index) => {
+                const Icon = SENSOR_ICONS[point.type] || Gauge
+                const colors = SENSOR_COLORS[point.type] || SENSOR_COLORS.PRESION
+                const gaugeColor = getGaugeColor(point.value, point.thresholdCritical, point.thresholdWarning)
+                const pct = Math.min((point.value / point.thresholdCritical) * 100, 115)
+                const isSelected = selectedSensor === point.sensorId
+
+                return (
+                  <motion.div
+                    key={point.sensorId}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                  >
+                    <Card
+                      className={cn(
+                        'cursor-pointer transition-all border-2 overflow-hidden',
+                        isSelected
+                          ? 'border-slate-900 shadow-lg'
+                          : point.status === 'CRITICO'
+                            ? 'border-red-300 shadow-red-100'
+                            : point.status === 'WARNING'
+                              ? 'border-amber-300'
+                              : 'border-slate-200 hover:border-slate-300',
+                        point.status === 'CRITICO' && 'bg-red-50/30'
+                      )}
+                      onClick={() => setSelectedSensor(isSelected ? null : point.sensorId)}
+                    >
+                      {/* Status bar */}
+                      <div className={cn(
+                        'h-1',
+                        point.status === 'CRITICO' ? 'bg-red-500' :
+                        point.status === 'WARNING' ? 'bg-amber-500' : 'bg-emerald-500'
+                      )} />
+
+                      <CardHeader className="pb-2 pt-3 px-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <div className={cn(
+                              'p-2 rounded-lg',
+                              point.status === 'CRITICO' ? 'bg-red-100' :
+                              point.status === 'WARNING' ? 'bg-amber-100' : 'bg-slate-100'
+                            )}>
+                              <Icon className={cn(
+                                'w-4 h-4',
+                                point.status === 'CRITICO' ? 'text-red-600' :
+                                point.status === 'WARNING' ? 'text-amber-600' : 'text-slate-600'
+                              )} />
+                            </div>
+                            <div>
+                              <CardTitle className="text-sm font-semibold text-slate-800 leading-tight">
+                                {point.sensorName}
+                              </CardTitle>
+                              <p className="text-[10px] text-slate-400 uppercase tracking-wider">
+                                {getSensorTypeLabel(point.type)}
+                                {point.isSimulated && ' • SIM'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {/* LED Indicator */}
+                            <div className={cn(
+                              'w-3 h-3 rounded-full transition-all duration-500',
+                              getLedColor(point.status)
+                            )} />
+                          </div>
                         </div>
+                      </CardHeader>
+
+                      <CardContent className="px-4 pb-4 space-y-3">
+                        {/* Main Value */}
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-3xl font-bold font-mono tracking-tight" style={{ color: gaugeColor }}>
+                            {point.value.toFixed(1)}
+                          </span>
+                          <span className="text-sm text-slate-500 font-medium">{point.unit}</span>
+                        </div>
+
+                        {/* Gauge bar */}
+                        <div className="space-y-1">
+                          <div className="relative h-2 rounded-full bg-slate-200 overflow-hidden">
+                            <motion.div
+                              className="absolute inset-y-0 left-0 rounded-full"
+                              style={{ backgroundColor: gaugeColor }}
+                              animate={{ width: `${Math.min(pct, 100)}%` }}
+                              transition={{ duration: 0.5, ease: 'easeOut' }}
+                            />
+                            {/* Warning zone */}
+                            <div
+                              className="absolute inset-y-0 right-0 bg-amber-200/50"
+                              style={{ width: `${((point.thresholdCritical - point.thresholdWarning) / point.thresholdCritical) * 100}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[10px] text-slate-400">
+                            <span>0</span>
+                            <span className="text-amber-500 font-medium">Warn: {point.thresholdWarning}</span>
+                            <span className="text-red-500 font-medium">Crit: {point.thresholdCritical}</span>
+                          </div>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div className="flex items-center justify-between">
+                          <Badge className={cn(
+                            'text-[10px] border font-semibold',
+                            point.status === 'CRITICO' ? 'bg-red-100 text-red-700 border-red-200' :
+                            point.status === 'WARNING' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                            'bg-emerald-100 text-emerald-700 border-emerald-200'
+                          )}>
+                            {point.status === 'CRITICO' ? '⚠ CRÍTICO' :
+                             point.status === 'WARNING' ? '⚡ ADVERTENCIA' : '● NORMAL'}
+                          </Badge>
+                          <span className="text-[10px] text-slate-400">
+                            {formatTime(point.timestamp)}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Expanded Chart View */}
+          {selectedSensor && (
+                <Card className="border-slate-900 shadow-lg">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <TrendingUp className="w-5 h-5 text-slate-700" />
+                        <CardTitle className="text-sm font-semibold text-slate-800">
+                          Tendencia — {telemetry?.points.find(p => p.sensorId === selectedSensor)?.sensorName || 'Sensor'}
+                        </CardTitle>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedSensor(null)} className="text-xs text-slate-500">
+                        Cerrar
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {history.length === 0 ? (
+                      <div className="py-12 text-center text-sm text-slate-400">
+                        <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+                        Cargando datos históricos...
+                      </div>
+                    ) : (
+                      <div style={{ width: '100%', height: 280 }}>
+                        <ResponsiveContainer width="100%" height={280}>
+                          <AreaChart data={history}>
+                            <defs>
+                              <linearGradient id="valueGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                              </linearGradient>
+                              <linearGradient id="criticalGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
+                                <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                            <XAxis
+                              dataKey="timestamp"
+                              tickFormatter={(v) => new Date(v).toLocaleTimeString('es', { minute: '2-digit', second: '2-digit' })}
+                              tick={{ fontSize: 10, fill: '#94a3b8' }}
+                              interval="preserveStartEnd"
+                            />
+                            <YAxis
+                              tick={{ fontSize: 10, fill: '#94a3b8' }}
+                              domain={['auto', 'auto']}
+                            />
+                            <RechartsTooltip
+                              contentStyle={{
+                                backgroundColor: '#1e293b',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                color: '#e2e8f0',
+                              }}
+                              labelFormatter={(v) => new Date(v).toLocaleTimeString('es')}
+                              formatter={(value: number, _name: string, props: any) => [
+                                `${value.toFixed(1)} ${telemetry?.points.find(p => p.sensorId === selectedSensor)?.unit || ''}`,
+                                props.payload.status === 'CRITICO' ? 'CRÍTICO' :
+                                props.payload.status === 'WARNING' ? 'ADVERTENCIA' : 'Normal'
+                              ]}
+                            />
+                            {telemetry?.points.find(p => p.sensorId === selectedSensor) && (
+                              <ReferenceLine
+                                y={telemetry.points.find(p => p.sensorId === selectedSensor)!.thresholdCritical}
+                                stroke="#ef4444"
+                                strokeDasharray="6 3"
+                                strokeWidth={1.5}
+                                label={{ value: 'CRÍTICO', position: 'right', fontSize: 9, fill: '#ef4444' }}
+                              />
+                            )}
+                            {telemetry?.points.find(p => p.sensorId === selectedSensor) && (
+                              <ReferenceLine
+                                y={telemetry.points.find(p => p.sensorId === selectedSensor)!.thresholdWarning}
+                                stroke="#f59e0b"
+                                strokeDasharray="4 4"
+                                strokeWidth={1}
+                                label={{ value: 'WARN', position: 'right', fontSize: 9, fill: '#f59e0b' }}
+                              />
+                            )}
+                            <Area
+                              type="monotone"
+                              dataKey="value"
+                              stroke="#10b981"
+                              strokeWidth={2}
+                              fill="url(#valueGradient)"
+                              dot={false}
+                              activeDot={{ r: 4, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+          )}
+        </div>
+      )}
+
+      {/* ── Tab Content: Sensores ──────────────────────── */}
+      {activeTab === 'sensors' && (
+        <Card className="border-slate-200">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <Settings className="w-4 h-4 text-slate-500" />
+                Configuración de Sensores
+                <Badge className="text-[10px] bg-slate-100 text-slate-600">{sensors.length} sensor(es)</Badge>
+              </CardTitle>
+              <Button
+                size="sm"
+                onClick={() => setShowAddDialog(true)}
+                className="bg-slate-900 hover:bg-slate-800 text-white gap-1.5 text-xs h-7"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Nuevo Sensor
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="max-h-[60vh]">
+              {sensors.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  <Gauge className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p>No hay sensores configurados</p>
+                  <p className="text-xs mt-1 mb-4">Agregue sensores para monitorear variables en tiempo real</p>
+                  <Button
+                    onClick={() => setShowAddDialog(true)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white gap-1.5 text-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Agregar Sensor
+                  </Button>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {sensors.map((sensor) => (
+                    <div key={sensor.id} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+                      <div className="flex items-center gap-3">
+                        <div className={cn(
+                          'w-2.5 h-2.5 rounded-full',
+                          !sensor.isActive ? 'bg-slate-300' :
+                          telemetry?.points.find(p => p.sensorId === sensor.id)?.status === 'CRITICO' ? 'bg-red-500' :
+                          telemetry?.points.find(p => p.sensorId === sensor.id)?.status === 'WARNING' ? 'bg-amber-500' :
+                          'bg-emerald-500'
+                        )} />
                         <div>
-                          <CardTitle className="text-sm font-semibold text-slate-800 leading-tight">
-                            {point.sensorName}
-                          </CardTitle>
-                          <p className="text-[10px] text-slate-400 uppercase tracking-wider">
-                            {getSensorTypeLabel(point.type)}
-                            {point.isSimulated && ' • SIM'}
+                          <p className="text-sm font-medium text-slate-700">{sensor.name}</p>
+                          <p className="text-[10px] text-slate-400">
+                            {getSensorTypeLabel(sensor.type)} • {sensor.unit}
+                            {sensor.isSimulated && ' • Simulado'}
+                            {!sensor.isActive && ' • Inactivo'}
+                            {sensor.location && (
+                              <span className="ml-1 flex items-center gap-0.5 inline">
+                                <MapPin className="w-2.5 h-2.5" />
+                                {sensor.location.name}
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {/* LED Indicator */}
-                        <div className={cn(
-                          'w-3 h-3 rounded-full transition-all duration-500',
-                          getLedColor(point.status)
-                        )} />
+                        <Badge className="text-[10px] bg-slate-100 text-slate-500">
+                          Crít: {sensor.thresholdCritical} {sensor.unit}
+                        </Badge>
+                        {deletingId === sensor.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => { e.stopPropagation(); handleDelete(sensor.id) }}
+                            className="h-7 w-7 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </div>
-                  </CardHeader>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
 
-                  <CardContent className="px-4 pb-4 space-y-3">
-                    {/* Main Value */}
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-3xl font-bold font-mono tracking-tight" style={{ color: gaugeColor }}>
-                        {point.value.toFixed(1)}
-                      </span>
-                      <span className="text-sm text-slate-500 font-medium">{point.unit}</span>
-                    </div>
-
-                    {/* Gauge bar */}
-                    <div className="space-y-1">
-                      <div className="relative h-2 rounded-full bg-slate-200 overflow-hidden">
-                        <motion.div
-                          className="absolute inset-y-0 left-0 rounded-full"
-                          style={{ backgroundColor: gaugeColor }}
-                          animate={{ width: `${Math.min(pct, 100)}%` }}
-                          transition={{ duration: 0.5, ease: 'easeOut' }}
-                        />
-                        {/* Warning zone */}
-                        <div
-                          className="absolute inset-y-0 right-0 bg-amber-200/50"
-                          style={{ width: `${((point.thresholdCritical - point.thresholdWarning) / point.thresholdCritical) * 100}%` }}
-                        />
+      {/* ── Tab Content: Ubicaciones ───────────────────── */}
+      {activeTab === 'locations' && (
+        <Card className="border-slate-200">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-emerald-600" />
+                Gestión de Ubicaciones
+                <Badge className="text-[10px] bg-slate-100 text-slate-600">{fullLocations.length} ubicacion(es)</Badge>
+              </CardTitle>
+              <Button
+                size="sm"
+                onClick={() => { resetLocationForm(); setShowLocationDialog(true) }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 text-xs h-7"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Nueva Ubicación
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="max-h-[60vh]">
+              {fullLocations.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  <MapPin className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p>No hay ubicaciones registradas</p>
+                  <p className="text-xs mt-1 mb-4">Cree ubicaciones para asignar sensores y verificar trabajos en campo</p>
+                  <Button
+                    onClick={() => { resetLocationForm(); setShowLocationDialog(true) }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 text-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Crear Ubicación
+                  </Button>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {fullLocations.map((loc) => (
+                    <div key={loc.id} className="px-4 py-3 hover:bg-slate-50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-slate-700 truncate">{loc.name}</p>
+                            <Badge className={cn(
+                              'text-[9px] px-1.5 py-0 border',
+                              !loc.verificationMethod || loc.verificationMethod === 'GPS'
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                                : loc.verificationMethod === 'QR_CODE'
+                                  ? 'bg-violet-50 text-violet-600 border-violet-200'
+                                  : 'bg-cyan-50 text-cyan-600 border-cyan-200',
+                            )}>
+                              {loc.verificationMethod === 'QR_CODE' ? (
+                                <><QrCode className="w-2.5 h-2.5 mr-0.5" />QR</>
+                              ) : loc.verificationMethod === 'BEACON' ? (
+                                <><Radio className="w-2.5 h-2.5 mr-0.5" />BLE</>
+                              ) : (
+                                <><Crosshair className="w-2.5 h-2.5 mr-0.5" />GPS</>
+                              )}
+                            </Badge>
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            {loc.address && <span>{loc.address} · </span>}
+                            {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)} · Radio: {loc.radiusMeters}m
+                          </p>
+                          {loc.verificationMethod === 'BEACON' && loc.beaconUuid && (
+                            <p className="text-[9px] text-cyan-600 font-mono mt-0.5 truncate">
+                              UUID: {loc.beaconUuid} · Major: {loc.beaconMajor ?? '—'} · Minor: {loc.beaconMinor ?? '—'}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {loc.verificationMethod === 'QR_CODE' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDownloadQr(loc.id)}
+                              disabled={qrLoading}
+                              className="h-7 text-[10px] gap-1 border-violet-200 text-violet-700 hover:bg-violet-50"
+                            >
+                              {qrLoading && qrPreviewLocationId === loc.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <QrCode className="w-3 h-3" />
+                              )}
+                              QR
+                            </Button>
+                          )}
+                          {loc.verificationMethod === 'BEACON' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDetectBeacon(loc.id)}
+                              disabled={beaconDetecting}
+                              className="h-7 text-[10px] gap-1 border-cyan-200 text-cyan-700 hover:bg-cyan-50"
+                            >
+                              {beaconDetecting ? (
+                                <><Loader2 className="w-3 h-3 animate-spin" />Escaneando...</>
+                              ) : (
+                                <><Signal className="w-3 h-3" />Detectar</>
+                              )}
+                            </Button>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex justify-between text-[10px] text-slate-400">
-                        <span>0</span>
-                        <span className="text-amber-500 font-medium">Warn: {point.thresholdWarning}</span>
-                        <span className="text-red-500 font-medium">Crit: {point.thresholdCritical}</span>
-                      </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
 
-                    {/* Status Badge */}
-                    <div className="flex items-center justify-between">
-                      <Badge className={cn(
-                        'text-[10px] border font-semibold',
-                        point.status === 'CRITICO' ? 'bg-red-100 text-red-700 border-red-200' :
-                        point.status === 'WARNING' ? 'bg-amber-100 text-amber-700 border-amber-200' :
-                        'bg-emerald-100 text-emerald-700 border-emerald-200'
-                      )}>
-                        {point.status === 'CRITICO' ? '⚠ CRÍTICO' :
-                         point.status === 'WARNING' ? '⚡ ADVERTENCIA' : '● NORMAL'}
-                      </Badge>
-                      <span className="text-[10px] text-slate-400">
-                        {formatTime(point.timestamp)}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
+      {/* ── Tab Content: Importar CSV ──────────────── */}
+      {activeTab === 'import' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setImportSubTab('sensors')}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-all',
+                importSubTab === 'sensors'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                  : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'
+              )}
+            >
+              <FileUp className="w-3.5 h-3.5" />
+              Sensores SCADA
+            </button>
+            <button
+              onClick={() => setImportSubTab('locations')}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-all',
+                importSubTab === 'locations'
+                  ? 'bg-slate-900 text-white border border-slate-900'
+                  : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'
+              )}
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              Ubicaciones
+            </button>
+          </div>
+          <AnimatePresence mode="wait">
+            {importSubTab === 'sensors' ? (
+              <motion.div key="sensor-import" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <SensorImport onImportComplete={() => { loadSensors(); loadTelemetry(); loadFullLocations(); loadLocations() }} />
               </motion.div>
-            )
-          })}
+            ) : (
+              <motion.div key="location-import" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }}>
+                <LocationImport onImportComplete={() => { loadFullLocations(); loadLocations() }} />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 
-      {/* ── Expanded Chart View ─────────────────────────── */}
-      {selectedSensor && (
-            <Card className="border-slate-900 shadow-lg">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-slate-700" />
-                    <CardTitle className="text-sm font-semibold text-slate-800">
-                      Tendencia — {telemetry?.points.find(p => p.sensorId === selectedSensor)?.sensorName || 'Sensor'}
-                    </CardTitle>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedSensor(null)} className="text-xs text-slate-500">
-                    Cerrar
+      {/* ── Tab Content: Credenciales API ────────────────── */}
+      {activeTab === 'apikeys' && (
+        <div className="space-y-4">
+          {/* JWT Token Section */}
+          <Card className="border-slate-200">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                Token JWT (Sesión de Usuario)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-slate-500">
+                El token JWT se genera automáticamente al iniciar sesión. Úselo en scripts o configuraciones de gateway para autenticar requests a la API.
+              </p>
+              <div className="p-3 rounded-lg bg-slate-900 text-white">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">Token Completo</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      const token = getToken()
+                      if (token) {
+                        navigator.clipboard.writeText(token)
+                          .then(() => alert('Token copiado al portapapeles'))
+                          .catch(() => {
+                            const ta = document.createElement('textarea'); ta.value = token; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('Token copiado')
+                          })
+                      } else {
+                        alert('No hay token disponible. Inicie sesión primero.')
+                      }
+                    }}
+                    className="h-6 text-[10px] text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 px-2 gap-1"
+                  >
+                    <Download className="w-3 h-3" />
+                    Copiar Token
                   </Button>
                 </div>
-              </CardHeader>
-              <CardContent>
-                {history.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-slate-400">
-                    <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
-                    Cargando datos históricos...
-                  </div>
-                ) : (
-                  <div style={{ width: '100%', height: 280 }}>
-                    <ResponsiveContainer width="100%" height={280}>
-                      <AreaChart data={history}>
-                        <defs>
-                          <linearGradient id="valueGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="criticalGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
-                            <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis
-                          dataKey="timestamp"
-                          tickFormatter={(v) => new Date(v).toLocaleTimeString('es', { minute: '2-digit', second: '2-digit' })}
-                          tick={{ fontSize: 10, fill: '#94a3b8' }}
-                          interval="preserveStartEnd"
-                        />
-                        <YAxis
-                          tick={{ fontSize: 10, fill: '#94a3b8' }}
-                          domain={['auto', 'auto']}
-                        />
-                        <RechartsTooltip
-                          contentStyle={{
-                            backgroundColor: '#1e293b',
-                            border: 'none',
-                            borderRadius: '8px',
-                            fontSize: '12px',
-                            color: '#e2e8f0',
-                          }}
-                          labelFormatter={(v) => new Date(v).toLocaleTimeString('es')}
-                          formatter={(value: number, _name: string, props: any) => [
-                            `${value.toFixed(1)} ${telemetry?.points.find(p => p.sensorId === selectedSensor)?.unit || ''}`,
-                            props.payload.status === 'CRITICO' ? 'CRÍTICO' :
-                            props.payload.status === 'WARNING' ? 'ADVERTENCIA' : 'Normal'
-                          ]}
-                        />
-                        {telemetry?.points.find(p => p.sensorId === selectedSensor) && (
-                          <ReferenceLine
-                            y={telemetry.points.find(p => p.sensorId === selectedSensor)!.thresholdCritical}
-                            stroke="#ef4444"
-                            strokeDasharray="6 3"
-                            strokeWidth={1.5}
-                            label={{ value: 'CRÍTICO', position: 'right', fontSize: 9, fill: '#ef4444' }}
-                          />
-                        )}
-                        {telemetry?.points.find(p => p.sensorId === selectedSensor) && (
-                          <ReferenceLine
-                            y={telemetry.points.find(p => p.sensorId === selectedSensor)!.thresholdWarning}
-                            stroke="#f59e0b"
-                            strokeDasharray="4 4"
-                            strokeWidth={1}
-                            label={{ value: 'WARN', position: 'right', fontSize: 9, fill: '#f59e0b' }}
-                          />
-                        )}
-                        <Area
-                          type="monotone"
-                          dataKey="value"
-                          stroke="#10b981"
-                          strokeWidth={2}
-                          fill="url(#valueGradient)"
-                          dot={false}
-                          activeDot={{ r: 4, fill: '#10b981', stroke: '#fff', strokeWidth: 2 }}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-      )}
-
-      {/* ── Sensor Management List ──────────────────────── */}
-      <Card className="border-slate-200">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-            <Settings className="w-4 h-4 text-slate-500" />
-            Configuración de Sensores
-            <Badge className="text-[10px] bg-slate-100 text-slate-600 ml-auto">{sensors.length} sensor(es)</Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <ScrollArea className="max-h-72">
-            {sensors.length === 0 ? (
-              <div className="p-6 text-center text-sm text-slate-400">
-                No hay sensores configurados
+                <code className="text-[11px] font-mono text-emerald-400 break-all leading-relaxed">
+                  {getToken() ? `${getToken()!.substring(0, 40)}...${getToken()!.slice(-20)}` : '— No disponible —'}
+                </code>
               </div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {sensors.map((sensor) => (
-                  <div key={sensor.id} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-                    <div className="flex items-center gap-3">
-                      <div className={cn(
-                        'w-2.5 h-2.5 rounded-full',
-                        !sensor.isActive ? 'bg-slate-300' :
-                        telemetry?.points.find(p => p.sensorId === sensor.id)?.status === 'CRITICO' ? 'bg-red-500' :
-                        telemetry?.points.find(p => p.sensorId === sensor.id)?.status === 'WARNING' ? 'bg-amber-500' :
-                        'bg-emerald-500'
-                      )} />
-                      <div>
-                        <p className="text-sm font-medium text-slate-700">{sensor.name}</p>
-                        <p className="text-[10px] text-slate-400">
-                          {getSensorTypeLabel(sensor.type)} • {sensor.unit}
-                          {sensor.isSimulated && ' • Simulado'}
-                          {!sensor.isActive && ' • Inactivo'}
-                          {sensor.location && (
-                            <span className="ml-1 flex items-center gap-0.5 inline">
-                              <MapPin className="w-2.5 h-2.5" />
-                              {sensor.location.name}
-                            </span>
+              <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <div className="text-[10px] text-amber-700 space-y-0.5">
+                  <p className="font-semibold">Seguridad:</p>
+                  <p>No comparta este token públicamente. Tiene el mismo acceso que su sesión de usuario. El token expira según la configuración del servidor.</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* API Keys Section */}
+          <Card className="border-slate-200">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                  <Key className="w-4 h-4 text-amber-600" />
+                  API Keys (Integración Externa)
+                  <Badge className="text-[10px] bg-slate-100 text-slate-600">{apiKeys.length} clave(s)</Badge>
+                </CardTitle>
+                <Button
+                  size="sm"
+                  onClick={() => setShowApiKeyDialog(true)}
+                  className="bg-amber-600 hover:bg-amber-700 text-white gap-1.5 text-xs h-7"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Nueva API Key
+                </Button>
+              </div>
+            </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="max-h-[60vh]">
+              {apiKeys.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  <Key className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                  <p>No hay API Keys configuradas</p>
+                  <p className="text-xs mt-1 mb-4">Cree claves para integración con sistemas externos via API REST</p>
+                  <Button
+                    onClick={() => setShowApiKeyDialog(true)}
+                    className="bg-amber-600 hover:bg-amber-700 text-white gap-1.5 text-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Crear API Key
+                  </Button>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {apiKeys.map((k) => (
+                    <div key={k.id} className="px-4 py-3 hover:bg-slate-50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-slate-700">{k.name}</p>
+                            <Badge className={cn(
+                              'text-[10px] px-1.5 py-0',
+                              k.permissions === 'admin' ? 'bg-red-100 text-red-700' :
+                              k.permissions === 'write' ? 'bg-amber-100 text-amber-700' :
+                              'bg-emerald-100 text-emerald-700'
+                            )}>
+                              {k.permissions.toUpperCase()}
+                            </Badge>
+                            {!k.isActive && <Badge className="bg-slate-200 text-slate-500 text-[10px]">REVOCADA</Badge>}
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-mono mt-1">
+                            {k.keyPrefix}...
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            Creada: {new Date(k.createdAt).toLocaleDateString('es')}
+                            {k.expiresAt && ` · Expira: ${new Date(k.expiresAt).toLocaleDateString('es')}`}
+                            {k.lastUsedAt && ` · Último uso: ${new Date(k.lastUsedAt).toLocaleDateString('es')}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {revokingKeyId === k.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); handleRevokeKey(k.id) }}
+                              className="h-7 w-7 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                              title="Revocar"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
                           )}
-                        </p>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge className="text-[10px] bg-slate-100 text-slate-500">
-                        Crít: {sensor.thresholdCritical} {sensor.unit}
-                      </Badge>
-                      {deletingId === sensor.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(e) => { e.stopPropagation(); handleDelete(sensor.id) }}
-                          className="h-7 w-7 text-slate-400 hover:text-red-500 hover:bg-red-50"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </CardContent>
-      </Card>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+        </div>
+      )}
 
       {/* ── Add Sensor Dialog ───────────────────────────── */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
@@ -812,6 +1442,439 @@ export default function TelemetryBoard() {
               >
                 {addingSensor ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 Crear Sensor
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Create Location Dialog ───────────────────────── */}
+      <Dialog open={showLocationDialog} onOpenChange={(open) => {
+        if (!open) { setShowLocationDialog(false); resetLocationForm() }
+      }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-emerald-600" />
+              Crear Ubicación de Trabajo
+            </DialogTitle>
+            <DialogDescription>
+              Registre una nueva ubicación para monitoreo SCADA y verificación de permisos.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            {/* Name */}
+            <div>
+              <Label className="text-xs text-slate-600 mb-1.5 block">Nombre de la Ubicación *</Label>
+              <input
+                type="text"
+                value={locName}
+                onChange={(e) => setLocName(e.target.value)}
+                placeholder="Ej: Plataforma A, Nivel 3"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              />
+            </div>
+
+            {/* Address */}
+            <div>
+              <Label className="text-xs text-slate-600 mb-1.5 block">Dirección (opcional)</Label>
+              <input
+                type="text"
+                value={locAddress}
+                onChange={(e) => setLocAddress(e.target.value)}
+                placeholder="Ej: Instalación Norte, Km 15"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+              />
+            </div>
+
+            {/* GPS Coordinates */}
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label className="text-xs text-slate-600 mb-1.5 block">Latitud *</Label>
+                <input
+                  type="text"
+                  value={locLat}
+                  onChange={(e) => setLocLat(e.target.value)}
+                  placeholder="10.123456"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent font-mono"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-slate-600 mb-1.5 block">Longitud *</Label>
+                <input
+                  type="text"
+                  value={locLng}
+                  onChange={(e) => setLocLng(e.target.value)}
+                  placeholder="-67.123456"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent font-mono"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-slate-600 mb-1.5 block">Radio (m)</Label>
+                <input
+                  type="text"
+                  value={locRadius}
+                  onChange={(e) => setLocRadius(e.target.value)}
+                  placeholder="100"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCaptureGpsForLocation}
+              className="w-full gap-2 text-xs"
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              Capturar GPS del Dispositivo
+            </Button>
+
+            {/* Verification Method */}
+            <div>
+              <Label className="text-xs text-slate-600 mb-1.5 block">Método de Verificación</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 'GPS', label: 'GPS', icon: Crosshair, color: 'border-emerald-300 bg-emerald-50 text-emerald-700' },
+                  { value: 'QR_CODE', label: 'Código QR', icon: QrCode, color: 'border-violet-300 bg-violet-50 text-violet-700' },
+                  { value: 'BEACON', label: 'Beacon BLE', icon: Radio, color: 'border-cyan-300 bg-cyan-50 text-cyan-700' },
+                ].map((m) => {
+                  const MIcon = m.icon
+                  const isSelected = locMethod === m.value
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => setLocMethod(m.value)}
+                      className={cn(
+                        'flex items-center justify-center gap-1.5 p-2.5 rounded-lg border-2 text-xs font-medium transition-all',
+                        isSelected ? m.color : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                      )}
+                    >
+                      <MIcon className="w-3.5 h-3.5" />
+                      {m.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* QR Info (when QR selected) */}
+            {locMethod === 'QR_CODE' && (
+              <div className="p-3 rounded-lg border border-violet-200 bg-violet-50 space-y-2">
+                <div className="flex items-center gap-2">
+                  <QrCode className="w-4 h-4 text-violet-600" />
+                  <span className="text-xs font-medium text-violet-700">Verificación por QR Code</span>
+                </div>
+                <p className="text-[11px] text-violet-600">
+                  Al crear la ubicación se generará automáticamente un código QR único con un secreto de verificación. Podrá descargarlo e imprimirlo para colocar en el sitio.
+                </p>
+              </div>
+            )}
+
+            {/* Beacon Config (when Beacon selected) */}
+            {locMethod === 'BEACON' && (
+              <div className="p-3 rounded-lg border border-cyan-200 bg-cyan-50 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-cyan-600" />
+                  <span className="text-xs font-medium text-cyan-700">Configuración Beacon BLE</span>
+                </div>
+                <p className="text-[11px] text-cyan-600">
+                  Configure los parámetros del beacon iBeacon. Si deja el UUID vacío se generará uno automáticamente.
+                </p>
+                <div className="space-y-2">
+                  <div>
+                    <Label className="text-[10px] text-cyan-600 mb-1 block">UUID (opcional - auto-generado)</Label>
+                    <input
+                      type="text"
+                      value={locBeaconUuid}
+                      onChange={(e) => setLocBeaconUuid(e.target.value)}
+                      placeholder="Ej: A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+                      className="w-full rounded-lg border border-cyan-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400 font-mono"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <Label className="text-[10px] text-cyan-600 mb-1 block">Major</Label>
+                      <input
+                        type="text"
+                        value={locBeaconMajor}
+                        onChange={(e) => setLocBeaconMajor(e.target.value)}
+                        placeholder="0-65535"
+                        className="w-full rounded-lg border border-cyan-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] text-cyan-600 mb-1 block">Minor</Label>
+                      <input
+                        type="text"
+                        value={locBeaconMinor}
+                        onChange={(e) => setLocBeaconMinor(e.target.value)}
+                        placeholder="0-65535"
+                        className="w-full rounded-lg border border-cyan-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] text-cyan-600 mb-1 block">RSSI (dBm)</Label>
+                      <input
+                        type="text"
+                        value={locBeaconRssi}
+                        onChange={(e) => setLocBeaconRssi(e.target.value)}
+                        placeholder="-70"
+                        className="w-full rounded-lg border border-cyan-200 px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => { setShowLocationDialog(false); resetLocationForm() }}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleCreateLocation}
+                disabled={!locName.trim() || !locLat || !locLng || creatingLocation}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+              >
+                {creatingLocation ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Creando...</>
+                ) : (
+                  <><Plus className="w-4 h-4" /> Crear Ubicación</>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* QR Code Created Result (inside dialog) */}
+          {createdQrData && (
+            <div className="mt-4 pt-4 border-t border-slate-200">
+              <div className="p-4 rounded-xl border-2 border-violet-300 bg-violet-50 space-y-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-violet-600" />
+                  <span className="text-sm font-semibold text-violet-800">Ubicación creada con QR</span>
+                </div>
+                <p className="text-xs text-violet-600">
+                  Ubicación &quot;{createdQrData.location.name}&quot; creada exitosamente. Su código QR se generó con el secreto:
+                </p>
+                <div className="p-2 rounded-lg bg-white border border-violet-200">
+                  <p className="text-[10px] text-violet-500 font-medium">Secreto QR (guarde en lugar seguro):</p>
+                  <p className="text-xs font-mono text-violet-800 mt-0.5 break-all">{createdQrData.qr.secret}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      handleDownloadQr(createdQrData.location.id)
+                    }}
+                    className="bg-violet-600 hover:bg-violet-700 text-white gap-1.5 text-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Descargar QR
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setShowLocationDialog(false); resetLocationForm() }}
+                    className="text-xs"
+                  >
+                    Cerrar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Beacon Created Result (inside dialog) */}
+          {createdBeaconData && (
+            <div className="mt-4 pt-4 border-t border-slate-200">
+              <div className="p-4 rounded-xl border-2 border-cyan-300 bg-cyan-50 space-y-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-cyan-600" />
+                  <span className="text-sm font-semibold text-cyan-800">Ubicación creada con Beacon</span>
+                </div>
+                <p className="text-xs text-cyan-600">
+                  Ubicación &quot;{createdBeaconData.location.name}&quot; creada con configuración BLE:
+                </p>
+                <div className="p-2 rounded-lg bg-white border border-cyan-200 space-y-1 text-xs font-mono text-cyan-800">
+                  <p>UUID: {createdBeaconData.beacon.uuid}</p>
+                  <p>Major: {createdBeaconData.beacon.major ?? '—'} · Minor: {createdBeaconData.beacon.minor ?? '—'} · RSSI: {createdBeaconData.beacon.rssi} dBm</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => handleDetectBeacon(createdBeaconData.location.id)}
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white gap-1.5 text-xs"
+                  >
+                    <Signal className="w-3.5 h-3.5" />
+                    Probar Detección
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setShowLocationDialog(false); resetLocationForm() }}
+                    className="text-xs"
+                  >
+                    Cerrar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── API Key Creation Dialog ────────────────────── */}
+      <Dialog open={showApiKeyDialog} onOpenChange={(open) => {
+        setShowApiKeyDialog(open)
+        if (!open) setNewApiKeyData(null)
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Key className="w-5 h-5 text-amber-600" />
+              Crear API Key
+            </DialogTitle>
+            <DialogDescription>
+              Genere una clave para integración con sistemas externos via API REST.
+            </DialogDescription>
+          </DialogHeader>
+          {newApiKeyData ? (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200">
+                <p className="text-xs font-semibold text-emerald-800 mb-2">✓ API Key creada exitosamente</p>
+                <p className="text-xs text-emerald-700 mb-2">
+                  <strong>IMPORTANTE:</strong> Guarde esta clave ahora. No podrá verla de nuevo.
+                </p>
+                <div className="p-2.5 rounded bg-white border border-emerald-300">
+                  <code className="text-xs text-slate-800 break-all">{newApiKeyData.key}</code>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 gap-1.5 text-xs"
+                  onClick={() => {
+                    navigator.clipboard.writeText(newApiKeyData.key)
+                    alert('Clave copiada al portapapeles')
+                  }}
+                >
+                  <Download className="w-3 h-3" />
+                  Copiar al portapapeles
+                </Button>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => { setShowApiKeyDialog(false); setNewApiKeyData(null) }}>
+                  Cerrar
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-600">Nombre descriptivo</Label>
+                <Input
+                  placeholder="Ej: Integración SAP, Sensor IoT, Dashboard externo"
+                  value={apiKeyName}
+                  onChange={(e) => setApiKeyName(e.target.value)}
+                  className="h-9 text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-600">Permisos</Label>
+                <Select value={apiKeyPermissions} onValueChange={setApiKeyPermissions}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="read">
+                      <div className="flex items-center gap-2">
+                        <ScanLine className="w-3.5 h-3.5 text-emerald-600" />
+                        Solo lectura (GET)
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="write">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-3.5 h-3.5 text-amber-600" />
+                        Lectura y escritura (GET, POST, PUT)
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="admin">
+                      <div className="flex items-center gap-2">
+                        <ShieldAlert className="w-3.5 h-3.5 text-red-600" />
+                        Administrador (todos los permisos)
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-slate-600">Vigencia (días)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={apiKeyExpiry}
+                  onChange={(e) => setApiKeyExpiry(e.target.value)}
+                  className="h-9 text-sm"
+                />
+                <p className="text-[10px] text-slate-400">La clave expirará después del período indicado</p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowApiKeyDialog(false)}>Cancelar</Button>
+                <Button
+                  onClick={handleCreateApiKey}
+                  disabled={creatingApiKey || !apiKeyName.trim()}
+                  className="bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                >
+                  {creatingApiKey ? <><Loader2 className="w-4 h-4 animate-spin" /> Generando...</> : <><Key className="w-4 h-4" /> Generar API Key</>}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── QR Code Preview Dialog ──────────────────────── */}
+      <Dialog open={showQrPreview} onOpenChange={setShowQrPreview}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-violet-600" />
+              Código QR de Ubicación
+            </DialogTitle>
+            <DialogDescription>
+              Descargue e imprima este código QR para colocarlo en el sitio de trabajo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            {qrImageUrl && (
+              <div className="flex justify-center p-4 rounded-xl bg-white border border-slate-200">
+                <img
+                  src={qrImageUrl}
+                  alt="Código QR de ubicación"
+                  className="w-64 h-auto rounded-lg shadow-sm"
+                />
+              </div>
+            )}
+            <div className="flex justify-center gap-2">
+              <Button
+                onClick={() => {
+                  if (qrImageUrl) {
+                    const loc = fullLocations.find(l => l.id === qrPreviewLocationId)
+                    downloadQrImage(qrImageUrl, loc?.name || 'ubicacion')
+                  }
+                }}
+                className="bg-violet-600 hover:bg-violet-700 text-white gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Descargar PNG
+              </Button>
+              <Button variant="outline" onClick={() => setShowQrPreview(false)}>
+                Cerrar
               </Button>
             </div>
           </div>

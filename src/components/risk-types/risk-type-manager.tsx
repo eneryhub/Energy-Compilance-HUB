@@ -23,6 +23,7 @@ import {
   ToggleRight,
   Palette,
   ShieldAlert,
+  Upload,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -40,6 +41,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
+import PermitImport from '@/components/import/permit-import'
 
 interface RiskType {
   id: string
@@ -102,6 +104,7 @@ export default function RiskTypeManager() {
   const [addingItem, setAddingItem] = useState(false)
   const [togglingItem, setTogglingItem] = useState<string | null>(null)
   const [deletingItem, setDeletingItem] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   const fetchRiskTypes = useCallback(async () => {
     try {
@@ -259,14 +262,29 @@ export default function RiskTypeManager() {
           </h2>
           <p className="text-sm text-slate-500 mt-1">Configura los tipos de riesgo y listas de verificación de seguridad</p>
         </div>
-        <Button
-          className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
-          onClick={() => setShowCreateDialog(true)}
-        >
-          <Plus className="w-4 h-4" />
-          Nuevo Tipo de Riesgo
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            onClick={() => setShowImport(!showImport)}
+          >
+            <Upload className="w-4 h-4" />
+            Importar
+          </Button>
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+            onClick={() => setShowCreateDialog(true)}
+          >
+            <Plus className="w-4 h-4" />
+            Nuevo Tipo de Riesgo
+          </Button>
+        </div>
       </div>
+
+      {/* Import Section */}
+      {showImport && (
+        <PermitImport onImportComplete={() => { fetchRiskTypes(); setShowImport(false) }} />
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

@@ -57,3 +57,5 @@ server.log
 /skills/
 test/
 prompt/
+.vercel
+.env*.local

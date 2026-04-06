@@ -50,6 +50,9 @@ interface SubscriptionData {
     currentPeriodStart?: string | null
     currentPeriodEnd?: string | null
     trialEndsAt?: string | null
+    trialDaysRemaining: number
+    isTrial: boolean
+    trialTotalDays: number
   }
   limits: {
     users: { current: number; max: number; percent: number }
@@ -339,6 +342,77 @@ export default function SubscriptionManager() {
               </Badge>
             </div>
           </div>
+
+          {/* Trial Countdown Banner */}
+          {data.subscription.isTrial && data.subscription.trialDaysRemaining > 0 && (
+            <div className={`mt-4 rounded-lg p-4 border ${
+              data.subscription.trialDaysRemaining <= 2
+                ? 'bg-red-50 border-red-200'
+                : data.subscription.trialDaysRemaining <= 4
+                ? 'bg-amber-50 border-amber-200'
+                : 'bg-blue-50 border-blue-200'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Clock className={`w-5 h-5 ${
+                    data.subscription.trialDaysRemaining <= 2
+                      ? 'text-red-500'
+                      : data.subscription.trialDaysRemaining <= 4
+                      ? 'text-amber-500'
+                      : 'text-blue-500'
+                  }`} />
+                  <div>
+                    <p className={`text-sm font-semibold ${
+                      data.subscription.trialDaysRemaining <= 2
+                        ? 'text-red-700'
+                        : data.subscription.trialDaysRemaining <= 4
+                        ? 'text-amber-700'
+                        : 'text-blue-700'
+                    }`}>
+                      {data.subscription.trialDaysRemaining === 1
+                        ? '¡Último día de prueba!'
+                        : `${data.subscription.trialDaysRemaining} día(s) restante(s) de prueba`}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Finaliza el {data.subscription.trialEndsAt
+                        ? new Date(data.subscription.trialEndsAt).toLocaleDateString('es', { day: '2-digit', month: 'long', year: 'numeric' })
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setActiveTab('plans')}
+                  className={`gap-1.5 text-xs ${
+                    data.subscription.trialDaysRemaining <= 2
+                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  }`}
+                >
+                  <Crown className="w-3.5 h-3.5" />
+                  {data.subscription.trialDaysRemaining <= 2 ? '¡Suscribirme!' : 'Mejorar Plan'}
+                </Button>
+              </div>
+              {/* Progress bar for trial days */}
+              {data.subscription.trialTotalDays > 0 && (
+                <div className="mt-3">
+                  <Progress
+                    value={Math.max(0, ((data.subscription.trialTotalDays - data.subscription.trialDaysRemaining) / data.subscription.trialTotalDays) * 100)}
+                    className={`h-1.5 ${
+                      data.subscription.trialDaysRemaining <= 2
+                        ? '[&>div]:bg-red-500'
+                        : data.subscription.trialDaysRemaining <= 4
+                        ? '[&>div]:bg-amber-500'
+                        : '[&>div]:bg-blue-500'
+                    }`}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Día {data.subscription.trialTotalDays - data.subscription.trialDaysRemaining} de {data.subscription.trialTotalDays}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

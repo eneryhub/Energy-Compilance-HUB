@@ -49,6 +49,15 @@ export async function GET(req: NextRequest) {
     const usagePercentUsers = maxUsers > 0 ? Math.round((userCount / maxUsers) * 100) : 0
     const usagePercentPermits = maxPermits > 0 ? Math.round((permitsThisMonth / maxPermits) * 100) : 0
 
+    // Calculate trial info
+    const planTrialDays = plan.trialDays
+    const created = new Date(company.createdAt)
+    const trialEnd = new Date(created.getTime() + planTrialDays * 24 * 60 * 60 * 1000)
+    const now = new Date()
+    const trialMsRemaining = trialEnd.getTime() - now.getTime()
+    const trialDaysRemaining = Math.ceil(trialMsRemaining / (24 * 60 * 60 * 1000))
+    const isTrial = company.subscriptionStatus === 'TRIAL' && trialDaysRemaining > 0
+
     return NextResponse.json({
       subscription: {
         plan: company.subscriptionPlan || 'starter',
@@ -58,7 +67,10 @@ export async function GET(req: NextRequest) {
         expiresAt: company.subscriptionExpiresAt,
         currentPeriodStart: company.currentPeriodStart,
         currentPeriodEnd: company.currentPeriodEnd,
-        trialEndsAt: company.trialEndsAt,
+        trialEndsAt: trialEnd.toISOString(),
+        trialDaysRemaining: isTrial ? trialDaysRemaining : 0,
+        isTrial,
+        trialTotalDays: planTrialDays,
       },
       limits: {
         users: { current: userCount, max: maxUsers, percent: usagePercentUsers },
