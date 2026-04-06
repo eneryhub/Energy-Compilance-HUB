@@ -31,7 +31,6 @@ import {
   RefreshCw,
   PlusCircle,
   ArrowRight,
-  Info,
   MapPin,
   Navigation,
   Wifi,
@@ -351,16 +350,18 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
   // ── Render ───────────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-slate-900">
+          <div className="p-2.5 rounded-xl bg-slate-900 shrink-0">
             <MapPin className="w-5 h-5 text-emerald-400" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Importar Ubicaciones</h2>
-            <p className="text-xs text-slate-500">Carga masiva desde CSV o XLSX con previsualización</p>
+            <h2 className="text-lg font-bold text-slate-800 leading-tight">Importar Ubicaciones</h2>
+            <p className="text-xs text-slate-500 leading-normal mt-0.5">
+              Carga masiva desde CSV o XLSX con previsualización
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -368,7 +369,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             variant="outline"
             size="sm"
             onClick={generateTemplate}
-            className="gap-1.5 text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+            className="gap-1.5 text-emerald-700 border-emerald-200 hover:bg-emerald-50 shrink-0"
           >
             <Download className="w-3.5 h-3.5" />
             Descargar Plantilla
@@ -388,33 +389,41 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
       </div>
 
       {/* Steps Indicator */}
-      <div className="flex items-center gap-2 px-1">
-        {(['upload', 'preview', 'results'] as Step[]).map((s, i) => (
-          <div key={s} className="flex items-center gap-2 flex-1">
-            <div className={cn(
-              'flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all',
-              step === s
-                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                : i < ['upload', 'preview', 'results'].indexOf(step)
-                  ? 'bg-slate-100 text-slate-500'
-                  : 'bg-slate-50 text-slate-400'
-            )}>
-              <span className={cn(
-                'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold',
-                step === s ? 'bg-emerald-600 text-white' : i < ['upload', 'preview', 'results'].indexOf(step) ? 'bg-slate-400 text-white' : 'bg-slate-200 text-slate-500'
-              )}>
-                {i < ['upload', 'preview', 'results'].indexOf(step) ? '✓' : i + 1}
-              </span>
-              {s === 'upload' ? 'Cargar' : s === 'preview' ? 'Revisar' : 'Resultado'}
-            </div>
-            {i < 2 && (
+      <div className="flex items-center gap-0 overflow-x-auto">
+        {(['upload', 'preview', 'results'] as const).map((s, i) => {
+          const stepIndex = ['upload', 'preview', 'results'].indexOf(step)
+          const isActive = step === s
+          const isCompleted = i < stepIndex
+
+          return (
+            <div key={s} className="flex items-center gap-0 flex-1 min-w-0">
               <div className={cn(
-                'flex-1 h-0.5 rounded-full',
-                i < ['upload', 'preview', 'results'].indexOf(step) ? 'bg-emerald-300' : 'bg-slate-200'
-              )} />
-            )}
-          </div>
-        ))}
+                'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap',
+                isActive
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                  : isCompleted
+                    ? 'bg-slate-100 text-slate-500'
+                    : 'bg-slate-50 text-slate-400'
+              )}>
+                <span className={cn(
+                  'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0',
+                  isActive ? 'bg-emerald-600 text-white' : isCompleted ? 'bg-slate-400 text-white' : 'bg-slate-200 text-slate-500'
+                )}>
+                  {isCompleted ? '✓' : i + 1}
+                </span>
+                <span className="hidden sm:inline">
+                  {s === 'upload' ? 'Cargar' : s === 'preview' ? 'Revisar' : 'Resultado'}
+                </span>
+              </div>
+              {i < 2 && (
+                <div className={cn(
+                  'flex-1 h-0.5 rounded-full mx-1 min-w-[12px]',
+                  isCompleted ? 'bg-emerald-300' : 'bg-slate-200'
+                )} />
+              )}
+            </div>
+          )
+        })}
       </div>
 
       <AnimatePresence mode="wait">
@@ -427,7 +436,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             exit={{ opacity: 0, y: -10 }}
           >
             <Card className="border-slate-200">
-              <CardContent className="py-12">
+              <CardContent className="py-10">
                 <div
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
                   onDragLeave={() => setDragOver(false)}
@@ -448,10 +457,10 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                     className="hidden"
                   />
                   <div className={cn(
-                    'w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center',
+                    'w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center',
                     dragOver ? 'bg-emerald-100' : 'bg-slate-100'
                   )}>
-                    <Upload className={cn('w-7 h-7', dragOver ? 'text-emerald-600' : 'text-slate-400')} />
+                    <Upload className={cn('w-6 h-6', dragOver ? 'text-emerald-600' : 'text-slate-400')} />
                   </div>
                   <p className="text-sm font-semibold text-slate-700 mb-1">
                     {dragOver ? 'Suelte el archivo aquí' : 'Arrastre su archivo CSV o XLSX'}
@@ -487,48 +496,48 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             </Card>
 
             {/* Info Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-              <Card className="p-4 border-slate-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+              <Card className="p-3.5 border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700">CSV / XLSX</p>
-                    <p className="text-[10px] text-slate-400">Formatos soportados</p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-700 leading-tight">CSV / XLSX</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">Formatos soportados</p>
                   </div>
                 </div>
               </Card>
-              <Card className="p-4 border-slate-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center">
+              <Card className="p-3.5 border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
                     <PlusCircle className="w-4 h-4 text-slate-600" />
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700">Crear + Actualizar</p>
-                    <p className="text-[10px] text-slate-400">Upsert por nombre</p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-700 leading-tight">Crear + Actualizar</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">Upsert por nombre</p>
                   </div>
                 </div>
               </Card>
-              <Card className="p-4 border-slate-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center">
+              <Card className="p-3.5 border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center shrink-0">
                     <Navigation className="w-4 h-4 text-amber-600" />
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700">GPS Requerido</p>
-                    <p className="text-[10px] text-slate-400">Latitud y Longitud</p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-700 leading-tight">GPS Requerido</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">Latitud y Longitud</p>
                   </div>
                 </div>
               </Card>
-              <Card className="p-4 border-slate-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center">
+              <Card className="p-3.5 border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
                     <Wifi className="w-4 h-4 text-slate-600" />
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700">3 Verificaciones</p>
-                    <p className="text-[10px] text-slate-400">GPS, QR, Beacon BLE</p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-700 leading-tight">3 Verificaciones</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">GPS, QR, Beacon BLE</p>
                   </div>
                 </div>
               </Card>
@@ -548,13 +557,13 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             {/* Summary */}
             <Card className="border-slate-200">
               <CardContent className="py-4">
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <FileSpreadsheet className="w-4 h-4 text-slate-500" />
-                    <span className="text-sm font-medium text-slate-700">{fileName}</span>
-                    <Badge className="text-[10px] bg-slate-100 text-slate-600">{rows.length} filas</Badge>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileSpreadsheet className="w-4 h-4 text-slate-500 shrink-0" />
+                    <span className="text-sm font-medium text-slate-700 truncate">{fileName}</span>
+                    <Badge className="text-[10px] bg-slate-100 text-slate-600 shrink-0">{rows.length} filas</Badge>
                   </div>
-                  <div className="flex items-center gap-2 ml-auto">
+                  <div className="flex items-center gap-2 flex-wrap ml-auto">
                     {createCount > 0 && (
                       <Badge className="text-[10px] bg-emerald-100 text-emerald-700 border-emerald-200 gap-1">
                         <PlusCircle className="w-3 h-3" />
@@ -598,11 +607,11 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                       <TableRow className="bg-slate-50">
                         <TableHead className="w-12 text-center text-xs">#</TableHead>
                         <TableHead className="text-xs">Nombre</TableHead>
-                        <TableHead className="text-xs">Dirección</TableHead>
+                        <TableHead className="text-xs hidden sm:table-cell">Dirección</TableHead>
                         <TableHead className="text-xs text-center">Lat</TableHead>
                         <TableHead className="text-xs text-center">Lng</TableHead>
-                        <TableHead className="text-xs text-center">Radio</TableHead>
-                        <TableHead className="text-xs text-center">Verificación</TableHead>
+                        <TableHead className="text-xs text-center hidden md:table-cell">Radio</TableHead>
+                        <TableHead className="text-xs text-center hidden lg:table-cell">Verificación</TableHead>
                         <TableHead className="text-xs text-center">Acción</TableHead>
                         <TableHead className="text-xs text-center">Estado</TableHead>
                       </TableRow>
@@ -619,14 +628,14 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                           )}
                         >
                           <TableCell className="text-center text-xs text-slate-400">{row.row}</TableCell>
-                          <TableCell className="text-sm font-medium text-slate-700">{row.name}</TableCell>
-                          <TableCell className="text-xs text-slate-500 max-w-[150px] truncate">
+                          <TableCell className="text-xs font-medium text-slate-700 max-w-[120px] truncate">{row.name}</TableCell>
+                          <TableCell className="text-xs text-slate-500 max-w-[150px] truncate hidden sm:table-cell">
                             {row.address || '—'}
                           </TableCell>
                           <TableCell className="text-center text-xs text-slate-600 font-mono">{row.latitude.toFixed(4)}</TableCell>
                           <TableCell className="text-center text-xs text-slate-600 font-mono">{row.longitude.toFixed(4)}</TableCell>
-                          <TableCell className="text-center text-xs text-slate-600">{row.radiusMeters}m</TableCell>
-                          <TableCell className="text-center">
+                          <TableCell className="text-center text-xs text-slate-600 hidden md:table-cell">{row.radiusMeters}m</TableCell>
+                          <TableCell className="text-center hidden lg:table-cell">
                             <Badge className={cn(
                               'text-[10px]',
                               row.verificationMethod === 'GPS' ? 'bg-emerald-100 text-emerald-700' :
@@ -641,7 +650,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                               'text-[10px] font-semibold',
                               row.action === 'CREATE' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'
                             )}>
-                              {row.action === 'CREATE' ? 'NUEVO' : 'ACTUALIZAR'}
+                              {row.action === 'CREATE' ? 'NUEVO' : 'ACT'}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-center">
@@ -650,14 +659,14 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                             )}
                             {row.status === 'warning' && (
                               <Badge className="text-[10px] bg-amber-100 text-amber-700 border-amber-200">
-                                <AlertTriangle className="w-3 h-3 mr-1" />
+                                <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
                                 Warn
                               </Badge>
                             )}
                             {row.status === 'error' && (
                               <Badge className="text-[10px] bg-red-100 text-red-700 border-red-200">
-                                <XCircle className="w-3 h-3 mr-1" />
-                                Error
+                                <XCircle className="w-2.5 h-2.5 mr-0.5" />
+                                Err
                               </Badge>
                             )}
                           </TableCell>
@@ -711,7 +720,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             )}
 
             {/* Action buttons */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <Button variant="outline" onClick={() => { setStep('upload'); setRows([]); setParseError(null) }}>
                 Volver
               </Button>
@@ -762,7 +771,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
               <CardContent className="py-8">
                 <div className="text-center">
                   <div className={cn(
-                    'w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center',
+                    'w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center',
                     result.success && result.errors.length === 0
                       ? 'bg-emerald-100'
                       : result.success
@@ -770,11 +779,11 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                         : 'bg-red-100'
                   )}>
                     {result.success && result.errors.length === 0 ? (
-                      <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+                      <CheckCircle2 className="w-7 h-7 text-emerald-600" />
                     ) : result.success ? (
-                      <AlertTriangle className="w-8 h-8 text-amber-600" />
+                      <AlertTriangle className="w-7 h-7 text-amber-600" />
                     ) : (
-                      <XCircle className="w-8 h-8 text-red-600" />
+                      <XCircle className="w-7 h-7 text-red-600" />
                     )}
                   </div>
                   <h3 className="text-lg font-bold text-slate-800 mb-1">
@@ -795,25 +804,25 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
 
                 {/* Stats */}
                 {result.success && (
-                  <div className="grid grid-cols-3 gap-4 mt-6 max-w-md mx-auto">
-                    <div className="text-center p-4 rounded-xl bg-white border border-emerald-100 shadow-sm">
-                      <p className="text-2xl font-bold text-emerald-600">{result.created}</p>
-                      <p className="text-xs text-slate-500 mt-1">Creadas</p>
+                  <div className="grid grid-cols-3 gap-3 mt-6 max-w-sm mx-auto">
+                    <div className="text-center p-3 rounded-xl bg-white border border-emerald-100 shadow-sm">
+                      <p className="text-xl font-bold text-emerald-600">{result.created}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Creadas</p>
                     </div>
-                    <div className="text-center p-4 rounded-xl bg-white border border-amber-100 shadow-sm">
-                      <p className="text-2xl font-bold text-amber-600">{result.updated}</p>
-                      <p className="text-xs text-slate-500 mt-1">Actualizadas</p>
+                    <div className="text-center p-3 rounded-xl bg-white border border-amber-100 shadow-sm">
+                      <p className="text-xl font-bold text-amber-600">{result.updated}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Actualizadas</p>
                     </div>
-                    <div className="text-center p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
-                      <p className="text-2xl font-bold text-slate-600">{result.skipped}</p>
-                      <p className="text-xs text-slate-500 mt-1">Omitidas</p>
+                    <div className="text-center p-3 rounded-xl bg-white border border-slate-100 shadow-sm">
+                      <p className="text-xl font-bold text-slate-600">{result.skipped}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Omitidas</p>
                     </div>
                   </div>
                 )}
 
                 {/* Progress bar */}
                 {result.success && (
-                  <div className="mt-6 max-w-md mx-auto">
+                  <div className="mt-6 max-w-sm mx-auto">
                     <div className="flex justify-between text-xs text-slate-500 mb-1.5">
                       <span>Progreso</span>
                       <span>{result.created + result.updated + result.skipped} filas procesadas</span>

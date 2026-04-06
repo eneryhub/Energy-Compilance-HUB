@@ -108,15 +108,26 @@ export default function Home() {
           setComplianceStatus(data.isCompliant ? 'COMPLIANT' : 'NON_COMPLIANT')
         }
 
-        // Check subscription status
+        // Check subscription status — sync plan from server (authoritative source)
+        // Always read the latest token from localStorage (may have been updated by upgrade)
+        const latestToken = getToken()
         const subRes = await fetch('/api/subscription/status', {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${latestToken}` },
         })
         if (subRes.ok) {
           const subData = await subRes.json()
           if (subData.blockAccess) {
             setSubscriptionBlocked(true)
             setSubscriptionMessage(subData.message || 'Suscripción expirada. Actualice su plan.')
+          }
+          // ALWAYS sync subscriptionPlan from server — it's the authoritative source
+          // This handles edge cases where localStorage may be stale or corrupted
+          if (subData.plan) {
+            setUserState((prev) => {
+              if (!prev) return prev
+              if (prev.subscriptionPlan === subData.plan) return prev // no change needed
+              return { ...prev, subscriptionPlan: subData.plan }
+            })
           }
         }
         // Other errors (500, etc.) — keep user logged in, skip compliance data
@@ -129,17 +140,27 @@ export default function Home() {
   }, [])
 
   // Listen for plan updates from SubscriptionManager (no full reload needed)
+  // Uses functional state update to avoid stale closure — no dependency on `user`
   useEffect(() => {
     const handlePlanUpdated = ((e: CustomEvent) => {
-      const newPlan = (e as CustomEvent<{ plan: string }>).detail.plan
-      if (newPlan && user) {
-        setUserState({ ...user, subscriptionPlan: newPlan })
-        setUser({ ...user, subscriptionPlan: newPlan })
-      }
+      const newPlan = (e as CustomEvent<{ plan: string }>).detail?.plan
+      if (!newPlan) return
+      // Functional update: always reads latest state, no stale closure risk
+      setUserState((prev) => {
+        if (!prev) return prev
+        return { ...prev, subscriptionPlan: newPlan }
+      })
     }) as EventListener
 
     window.addEventListener('plan-updated', handlePlanUpdated)
     return () => window.removeEventListener('plan-updated', handlePlanUpdated)
+  }, []) // Empty deps — registered once, uses functional state update
+
+  // Persist user state to localStorage whenever it changes (keeps ech_user in sync)
+  useEffect(() => {
+    if (user) {
+      setUser(user)
+    }
   }, [user])
 
   const handleLogout = useCallback(() => {

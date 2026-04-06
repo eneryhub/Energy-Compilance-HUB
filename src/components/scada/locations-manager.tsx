@@ -32,6 +32,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   Radar,
+  Download,
+  RefreshCw,
+  Bluetooth,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
@@ -60,6 +63,10 @@ interface LocationForm {
   longitude: string
   radiusMeters: string
   verificationMethod: string
+  beaconUuid: string
+  beaconMajor: string
+  beaconMinor: string
+  beaconRssi: string
 }
 
 const VERIFICATION_METHODS = [
@@ -75,6 +82,10 @@ const emptyForm: LocationForm = {
   longitude: '',
   radiusMeters: '100',
   verificationMethod: 'GPS',
+  beaconUuid: '',
+  beaconMajor: '1',
+  beaconMinor: '1',
+  beaconRssi: '-70',
 }
 
 // ── Component ──────────────────────────────────────────────
@@ -94,6 +105,33 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [gettingGps, setGettingGps] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // QR Code state
+  const [qrImageUrl, setQrImageUrl] = useState<string | null>(null)
+  const [qrGenerating, setQrGenerating] = useState(false)
+
+  // ── QR Code generation ───────────────────────────────
+
+  const handleGenerateQr = async (locationId: string) => {
+    setQrGenerating(true)
+    try {
+      const data = await apiFetch<{ qrCodeDataUrl: string }>(`/locations/${locationId}/qr`)
+      setQrImageUrl(data.qrCodeDataUrl)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al generar QR'
+      setError(message)
+    } finally {
+      setQrGenerating(false)
+    }
+  }
+
+  const handleDownloadQr = () => {
+    if (!qrImageUrl) return
+    const link = document.createElement('a')
+    link.download = 'ech-qr-code.png'
+    link.href = qrImageUrl
+    link.click()
+  }
 
   // ── Load locations ──────────────────────────────────
 
@@ -179,13 +217,21 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
     setSaving(true)
 
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         name: form.name.trim(),
         address: form.address.trim() || null,
         latitude: lat,
         longitude: lng,
         radiusMeters: radius,
         verificationMethod: form.verificationMethod || null,
+      }
+
+      // Include Beacon fields if method is BEACON
+      if (form.verificationMethod === 'BEACON') {
+        body.beaconUuid = form.beaconUuid.trim()
+        body.beaconMajor = parseInt(form.beaconMajor) || 0
+        body.beaconMinor = parseInt(form.beaconMinor) || 0
+        body.beaconRssi = parseInt(form.beaconRssi) || -70
       }
 
       if (editingId) {
@@ -279,23 +325,23 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
   // ── Render ─────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-slate-900">
+          <div className="p-2.5 rounded-xl bg-slate-900 shrink-0">
             <MapPin className="w-5 h-5 text-emerald-400" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-slate-800">Gestión de Ubicaciones</h2>
-            <p className="text-xs text-slate-500">
+            <h2 className="text-lg font-bold text-slate-800 leading-tight">Gestión de Ubicaciones</h2>
+            <p className="text-xs text-slate-500 leading-normal mt-0.5">
               {locations.length} ubicación(es) registrada(s)
             </p>
           </div>
         </div>
         <Button
           onClick={handleOpenCreate}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 text-sm"
+          className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 text-sm shrink-0"
         >
           <Plus className="w-4 h-4" />
           Nueva Ubicación
@@ -356,71 +402,108 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.03 }}
-                      className="flex items-start justify-between p-4 hover:bg-slate-50 transition-colors"
+                      className="px-4 py-3.5 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors"
                     >
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
-                        <div className="p-2 rounded-lg bg-emerald-50 mt-0.5 shrink-0">
-                          <Building2 className="w-4 h-4 text-emerald-600" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <p className="text-sm font-semibold text-slate-800 truncate">
-                              {loc.name}
-                            </p>
-                            {totalRelated > 0 && (
-                              <Badge className="text-[10px] bg-slate-100 text-slate-500 shrink-0">
-                                {loc._count?.sensors || 0} sensor(es) • {loc._count?.permits || 0} permiso(s)
-                              </Badge>
-                            )}
+                      <div className="flex items-start justify-between gap-3">
+                        {/* Left: icon + content */}
+                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                          <div className="p-2 rounded-lg bg-emerald-50 mt-0.5 shrink-0">
+                            <Building2 className="w-4 h-4 text-emerald-600" />
                           </div>
-                          {loc.address && (
-                            <p className="text-xs text-slate-500 truncate flex items-center gap-1">
-                              <MapPin className="w-3 h-3 shrink-0" />
-                              {loc.address}
-                            </p>
-                          )}
-                          <div className="flex flex-wrap items-center gap-3 mt-1.5">
-                            <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1">
-                              <Navigation className="w-3 h-3" />
-                              {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                            </span>
-                            <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                              <Wifi className="w-3 h-3" />
-                              Radio: {loc.radiusMeters}m
-                            </span>
-                            {loc.verificationMethod && (
-                              <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                                <VerifIcon className="w-3 h-3" />
-                                {verifMethod?.label || loc.verificationMethod}
+                          <div className="flex-1 min-w-0 space-y-1">
+                            {/* Name + related badge */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-semibold text-slate-800 leading-snug truncate">
+                                {loc.name}
+                              </p>
+                              {totalRelated > 0 && (
+                                <Badge className="text-[10px] bg-slate-100 text-slate-500 shrink-0 leading-none">
+                                  {loc._count?.sensors || 0}s · {loc._count?.permits || 0}p
+                                </Badge>
+                              )}
+                            </div>
+
+                            {/* Address */}
+                            {loc.address && (
+                              <p className="text-xs text-slate-500 leading-relaxed truncate flex items-center gap-1">
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                {loc.address}
+                              </p>
+                            )}
+
+                            {/* Metadata grid: coordinates, radius, verification */}
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-0.5">
+                              <span className="text-xs text-slate-400 font-mono flex items-center gap-1.5 leading-relaxed">
+                                <Navigation className="w-3 h-3 shrink-0" />
+                                {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
                               </span>
-                            )}
+                              <span className="text-xs text-slate-400 flex items-center gap-1.5 leading-relaxed">
+                                <Wifi className="w-3 h-3 shrink-0" />
+                                Radio: {loc.radiusMeters}m
+                              </span>
+                              {loc.verificationMethod && (
+                                <span className="text-xs text-slate-400 flex items-center gap-1.5 leading-relaxed">
+                                  <VerifIcon className="w-3 h-3 shrink-0" />
+                                  {verifMethod?.label || loc.verificationMethod}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Created date */}
+                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                              Creada: {new Date(loc.createdAt).toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            </p>
                           </div>
-                          <p className="text-[10px] text-slate-300 mt-1">
-                            Creada: {new Date(loc.createdAt).toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' })}
-                          </p>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0 ml-3">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleEdit(loc)}
-                          className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        {deletingId === loc.id ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                        ) : (
+
+                        {/* Right: action buttons */}
+                        <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
+                          {/* QR Code action button */}
+                          {loc.verificationMethod === 'QR_CODE' && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={async () => {
+                                setQrImageUrl(null)
+                                await handleGenerateQr(loc.id)
+                                setEditingId(loc.id)
+                                setForm(emptyForm)
+                                setForm((f) => ({ ...f, verificationMethod: 'QR_CODE' }))
+                                setShowDialog(true)
+                                setError(null)
+                              }}
+                              disabled={qrGenerating}
+                              className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
+                              title="Generar/Ver Código QR"
+                            >
+                              {qrGenerating ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <QrCode className="w-3.5 h-3.5" />
+                              )}
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => handleDelete(loc)}
-                            className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                            onClick={() => handleEdit(loc)}
+                            className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Pencil className="w-3.5 h-3.5" />
                           </Button>
-                        )}
+                          {deletingId === loc.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDelete(loc)}
+                              className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </motion.div>
                   )
@@ -462,10 +545,10 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-2">
+          <div className="space-y-5 pt-2">
             {/* Name */}
-            <div>
-              <Label className="text-xs text-slate-600 mb-1.5 block">Nombre *</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Nombre *</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -475,8 +558,8 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
             </div>
 
             {/* Address */}
-            <div>
-              <Label className="text-xs text-slate-600 mb-1.5 block">Dirección (Opcional)</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Dirección (Opcional)</Label>
               <Input
                 value={form.address}
                 onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
@@ -486,9 +569,9 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
             </div>
 
             {/* GPS Coordinates */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <Label className="text-xs text-slate-600">Coordenadas GPS *</Label>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium text-slate-600">Coordenadas GPS *</Label>
                 <Button
                   type="button"
                   variant="outline"
@@ -506,8 +589,8 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 </Button>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-[10px] text-slate-400 mb-1 block">Latitud</Label>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-slate-400">Latitud</Label>
                   <Input
                     type="number"
                     step="0.000001"
@@ -519,8 +602,8 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                     className="text-sm font-mono"
                   />
                 </div>
-                <div>
-                  <Label className="text-[10px] text-slate-400 mb-1 block">Longitud</Label>
+                <div className="space-y-1">
+                  <Label className="text-[11px] text-slate-400">Longitud</Label>
                   <Input
                     type="number"
                     step="0.000001"
@@ -534,7 +617,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 </div>
               </div>
               {form.latitude && form.longitude && !isNaN(parseFloat(form.latitude)) && !isNaN(parseFloat(form.longitude)) && (
-                <p className="text-[10px] text-emerald-600 mt-1 flex items-center gap-1">
+                <p className="text-xs text-emerald-600 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" />
                   Coordenadas válidas
                 </p>
@@ -542,8 +625,8 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
             </div>
 
             {/* Radius */}
-            <div>
-              <Label className="text-xs text-slate-600 mb-1.5 block">Radio de Geocerca (metros)</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Radio de Geocerca (metros)</Label>
               <Input
                 type="number"
                 min="10"
@@ -553,14 +636,14 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 placeholder="100"
                 className="text-sm"
               />
-              <p className="text-[10px] text-slate-400 mt-1">
+              <p className="text-xs text-slate-400">
                 Área circular alrededor del punto GPS (10 - 10,000m)
               </p>
             </div>
 
             {/* Verification Method */}
-            <div>
-              <Label className="text-xs text-slate-600 mb-1.5 block">Método de Verificación</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-slate-600">Método de Verificación</Label>
               <Select value={form.verificationMethod} onValueChange={(v) => setForm((f) => ({ ...f, verificationMethod: v }))}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -580,6 +663,97 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 </SelectContent>
               </Select>
             </div>
+
+            {/* QR Code info (when method is QR_CODE) */}
+            {form.verificationMethod === 'QR_CODE' && (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2">
+                  <QrCode className="w-4 h-4 text-emerald-600" />
+                  <p className="text-xs font-semibold text-slate-700">Verificación por Código QR</p>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Al crear la ubicación, se genera automáticamente un código QR único.
+                  Los técnicos deben escanearlo para crear permisos. Puedes regenerarlo y descargarlo después.
+                </p>
+                {qrImageUrl && (
+                  <div className="flex flex-col items-center gap-2 pt-2">
+                    <img src={qrImageUrl} alt="QR Code" className="w-48 h-48 rounded-lg border border-slate-200" />
+                    <Button variant="outline" size="sm" onClick={handleDownloadQr} className="text-xs gap-1.5">
+                      <Download className="w-3 h-3" />
+                      Descargar PNG
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Beacon BLE config (when method is BEACON) */}
+            {form.verificationMethod === 'BEACON' && (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Bluetooth className="w-4 h-4 text-blue-600" />
+                  <p className="text-xs font-semibold text-slate-700">Configuración Beacon BLE (iBeacon)</p>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Ingresa los datos del beacon físico instalado en la ubicación.
+                  Los técnicos deben estar dentro del rango del beacon para crear permisos.
+                </p>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-slate-500 font-medium">UUID del Beacon *</Label>
+                    <Input
+                      value={form.beaconUuid}
+                      onChange={(e) => setForm((f) => ({ ...f, beaconUuid: e.target.value }))}
+                      placeholder="f7826da6-4fa3-4e98-8014-7c7a646e9c01"
+                      className="text-xs font-mono"
+                    />
+                    <p className="text-xs text-slate-400">Formato UUID v4 (36 caracteres con guiones)</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500 font-medium">Major (0-65535)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="65535"
+                        value={form.beaconMajor}
+                        onChange={(e) => setForm((f) => ({ ...f, beaconMajor: e.target.value }))}
+                        placeholder="1"
+                        className="text-xs font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-slate-500 font-medium">Minor (0-65535)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="65535"
+                        value={form.beaconMinor}
+                        onChange={(e) => setForm((f) => ({ ...f, beaconMinor: e.target.value }))}
+                        placeholder="1"
+                        className="text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-slate-500 font-medium">RSSI umbral (dBm)</Label>
+                    <Input
+                      type="number"
+                      min="-100"
+                      max="0"
+                      value={form.beaconRssi}
+                      onChange={(e) => setForm((f) => ({ ...f, beaconRssi: e.target.value }))}
+                      placeholder="-70"
+                      className="text-xs font-mono"
+                    />
+                    <p className="text-xs text-slate-400">
+                      Señal mínima para considerar &quot;en rango&quot;. Más cercano a 0 = más fuerte.
+                      Recomendado: -50 a -80 dBm.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Error message */}
             <AnimatePresence>
@@ -609,7 +783,13 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
               </Button>
               <Button
                 onClick={handleSave}
-                disabled={saving || !form.name.trim() || !form.latitude || !form.longitude}
+                disabled={
+                  saving ||
+                  !form.name.trim() ||
+                  !form.latitude ||
+                  !form.longitude ||
+                  (form.verificationMethod === 'BEACON' && !form.beaconUuid.trim())
+                }
                 className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
               >
                 {saving ? (
