@@ -1,4 +1,3 @@
-// ====================== LocationsManager.tsx ======================
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
@@ -11,6 +10,14 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   Select,
   SelectContent,
@@ -227,7 +234,6 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
         verificationMethod: form.verificationMethod || null,
       }
 
-      // Include Beacon fields if method is BEACON
       if (form.verificationMethod === 'BEACON') {
         body.beaconUuid = form.beaconUuid.trim()
         body.beaconMajor = parseInt(form.beaconMajor) || 0
@@ -364,10 +370,10 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
         />
       </div>
 
-      {/* Location List */}
+      {/* Tabla de ubicaciones - CORREGIDA CON TABLE SEMÁNTICA */}
       <Card className="border-slate-200">
         <CardContent className="p-0">
-          <ScrollArea className="max-h-[520px]">
+          <ScrollArea className="h-[520px]">
             {loading ? (
               <div className="py-16 flex flex-col items-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
@@ -395,130 +401,133 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 )}
               </div>
             ) : (
-              <div className="divide-y divide-slate-100">
-                {filtered.map((loc, index) => {
-                  const totalRelated = (loc._count?.sensors || 0) + (loc._count?.permits || 0)
-                  const verifMethod = VERIFICATION_METHODS.find((m) => m.value === loc.verificationMethod)
-                  const VerifIcon = verifMethod?.icon || Crosshair
+              <Table>
+                <TableHeader className="sticky top-0 bg-slate-50/95 backdrop-blur-sm z-10">
+                  <TableRow>
+                    <TableHead className="w-[30%] min-w-[180px]">Nombre</TableHead>
+                    <TableHead className="w-[25%] min-w-[160px] hidden md:table-cell">Dirección</TableHead>
+                    <TableHead className="w-[20%] min-w-[140px]">Coordenadas</TableHead>
+                    <TableHead className="w-[10%] min-w-[80px] text-center">Radio</TableHead>
+                    <TableHead className="w-[15%] min-w-[100px]">Verificación</TableHead>
+                    <TableHead className="w-[10%] min-w-[80px] text-center">Acciones</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((loc) => {
+                    const totalRelated = (loc._count?.sensors || 0) + (loc._count?.permits || 0)
+                    const verifMethod = VERIFICATION_METHODS.find((m) => m.value === loc.verificationMethod)
+                    const VerifIcon = verifMethod?.icon || Crosshair
 
-                  return (
-                    <motion.div
-                      key={loc.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: index * 0.03 }}
-                      className="px-4 py-4 sm:px-5 sm:py-5 hover:bg-slate-50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        {/* Left: icon + content */}
-                        <div className="flex items-start gap-3 flex-1 min-w-0">
-                          <div className="p-2 rounded-lg bg-emerald-50 mt-0.5 shrink-0">
-                            <Building2 className="w-4 h-4 text-emerald-600" />
-                          </div>
-                          <div className="flex-1 min-w-0 space-y-1.5">
-                            {/* Name + related badge */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-semibold text-slate-800 leading-snug truncate">
-                                {loc.name}
-                              </p>
-                              {totalRelated > 0 && (
-                                <Badge className="text-[10px] bg-slate-100 text-slate-500 shrink-0 leading-none">
-                                  {loc._count?.sensors || 0}s · {loc._count?.permits || 0}p
-                                </Badge>
-                              )}
-                            </div>
-
-                            {/* Address */}
-                            {loc.address && (
-                              <p className="text-xs text-slate-500 leading-relaxed truncate flex items-center gap-1">
-                                <MapPin className="w-3 h-3 shrink-0" />
-                                {loc.address}
-                              </p>
+                    return (
+                      <TableRow key={loc.id} className="group hover:bg-slate-50">
+                        {/* Nombre */}
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="truncate max-w-[180px]" title={loc.name}>
+                              {loc.name}
+                            </span>
+                            {totalRelated > 0 && (
+                              <Badge className="text-[10px] bg-slate-100 text-slate-500 shrink-0 ml-1">
+                                {loc._count?.sensors || 0}s · {loc._count?.permits || 0}p
+                              </Badge>
                             )}
-
-                            {/* Metadata grid: coordinates, radius, verification */}
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5">
-                              <span className="text-xs text-slate-400 font-mono flex items-center gap-1.5 leading-relaxed">
-                                <Navigation className="w-3 h-3 shrink-0" />
-                                {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
-                              </span>
-                              <span className="text-xs text-slate-400 flex items-center gap-1.5 leading-relaxed">
-                                <Wifi className="w-3 h-3 shrink-0" />
-                                Radio: {loc.radiusMeters}m
-                              </span>
-                              {loc.verificationMethod && (
-                                <span className="text-xs text-slate-400 flex items-center gap-1.5 leading-relaxed">
-                                  <VerifIcon className="w-3 h-3 shrink-0" />
-                                  {verifMethod?.label || loc.verificationMethod}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Created date */}
-                            <p className="text-[11px] text-slate-300 leading-relaxed">
-                              Creada: {new Date(loc.createdAt).toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' })}
-                            </p>
                           </div>
-                        </div>
+                        </TableCell>
 
-                        {/* Right: action buttons */}
-                        <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
-                          {/* QR Code action button */}
-                          {loc.verificationMethod === 'QR_CODE' && (
+                        {/* Dirección */}
+                        <TableCell className="hidden md:table-cell">
+                          <span className="text-sm text-slate-500 truncate block max-w-[180px]" title={loc.address || ''}>
+                            {loc.address || '—'}
+                          </span>
+                        </TableCell>
+
+                        {/* Coordenadas */}
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs font-mono text-slate-500 truncate max-w-[130px]">
+                              <Navigation className="inline w-3 h-3 mr-1" />
+                              {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
+                            </span>
+                            <span className="text-[11px] text-slate-400">
+                              Creada: {new Date(loc.createdAt).toLocaleDateString('es')}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        {/* Radio */}
+                        <TableCell className="text-center">
+                          <Badge variant="outline" className="bg-slate-50 text-slate-600">
+                            <Wifi className="w-3 h-3 mr-1" />
+                            {loc.radiusMeters}m
+                          </Badge>
+                        </TableCell>
+
+                        {/* Método de verificación */}
+                        <TableCell>
+                          <div className="flex items-center gap-1.5">
+                            <VerifIcon className="w-3.5 h-3.5 text-slate-500" />
+                            <span className="text-xs text-slate-600 truncate max-w-[100px]">
+                              {verifMethod?.label || loc.verificationMethod || 'GPS'}
+                            </span>
+                          </div>
+                        </TableCell>
+
+                        {/* Acciones */}
+                        <TableCell>
+                          <div className="flex items-center justify-end gap-0.5">
+                            {loc.verificationMethod === 'QR_CODE' && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={async () => {
+                                  setQrImageUrl(null)
+                                  await handleGenerateQr(loc.id)
+                                  setEditingId(loc.id)
+                                  setForm((f) => ({ ...f, verificationMethod: 'QR_CODE' }))
+                                  setShowDialog(true)
+                                  setError(null)
+                                }}
+                                disabled={qrGenerating}
+                                className="h-8 w-8 text-slate-400 hover:text-emerald-600"
+                                title="Generar QR"
+                              >
+                                {qrGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <QrCode className="w-3.5 h-3.5" />}
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={async () => {
-                                setQrImageUrl(null)
-                                await handleGenerateQr(loc.id)
-                                setEditingId(loc.id)
-                                setForm((f) => ({ ...f, verificationMethod: 'QR_CODE' }))
-                                setShowDialog(true)
-                                setError(null)
-                              }}
-                              disabled={qrGenerating}
-                              className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
-                              title="Generar/Ver Código QR"
+                              onClick={() => handleEdit(loc)}
+                              className="h-8 w-8 text-slate-400 hover:text-emerald-600"
                             >
-                              {qrGenerating ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <QrCode className="w-3.5 h-3.5" />
-                              )}
+                              <Pencil className="w-3.5 h-3.5" />
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleEdit(loc)}
-                            className="h-8 w-8 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                          {deletingId === loc.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDelete(loc)}
-                              className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </motion.div>
-                  )
-                })}
-              </div>
+                            {deletingId === loc.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDelete(loc)}
+                                className="h-8 w-8 text-slate-400 hover:text-red-500"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
             )}
           </ScrollArea>
         </CardContent>
       </Card>
 
-      {/* Create / Edit Dialog */}
+      {/* Create / Edit Dialog (igual que antes, sin cambios) */}
       <Dialog open={showDialog} onOpenChange={(open) => {
         if (!open) {
           setShowDialog(false)
@@ -668,7 +677,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
               </Select>
             </div>
 
-            {/* QR Code info (when method is QR_CODE) */}
+            {/* QR Code info */}
             {form.verificationMethod === 'QR_CODE' && (
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                 <div className="flex items-center gap-2">
@@ -691,7 +700,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
               </div>
             )}
 
-            {/* Beacon BLE config (when method is BEACON) */}
+            {/* Beacon BLE config */}
             {form.verificationMethod === 'BEACON' && (
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
                 <div className="flex items-center gap-2">
@@ -751,7 +760,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                       className="text-xs font-mono"
                     />
                     <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
-                      Señal mínima para considerar &quot;en rango&quot;. Más cercano a 0 = más fuerte.
+                      Señal mínima para considerar "en rango". Más cercano a 0 = más fuerte.
                       Recomendado: -50 a -80 dBm.
                     </p>
                   </div>
