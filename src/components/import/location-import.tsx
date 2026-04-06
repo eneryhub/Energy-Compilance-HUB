@@ -1,3 +1,4 @@
+// ====================== LocationImport.tsx ======================
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
@@ -350,16 +351,16 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
   // ── Render ───────────────────────────────────────────────
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-slate-900 shrink-0">
             <MapPin className="w-5 h-5 text-emerald-400" />
           </div>
-          <div>
+          <div className="space-y-1">
             <h2 className="text-lg font-bold text-slate-800 leading-tight">Importar Ubicaciones</h2>
-            <p className="text-xs text-slate-500 leading-normal mt-0.5">
+            <p className="text-xs text-slate-500 leading-relaxed">
               Carga masiva desde CSV o XLSX con previsualización
             </p>
           </div>
@@ -496,7 +497,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             </Card>
 
             {/* Info Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
               <Card className="p-3.5 border-slate-200">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
@@ -552,7 +553,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="space-y-4"
+            className="space-y-5"
           >
             {/* Summary */}
             <Card className="border-slate-200">
@@ -595,7 +596,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
 
             {/* Preview Table */}
             <Card className="border-slate-200">
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   Previsualización de Datos
                 </CardTitle>
@@ -681,7 +682,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             {/* Warnings / Errors list */}
             {(warningCount > 0 || errorCount > 0) && (
               <Card className="border-slate-200">
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                     {errorCount > 0 ? (
                       <>
@@ -757,7 +758,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="space-y-4"
+            className="space-y-5"
           >
             {/* Result Card */}
             <Card className={cn(
@@ -786,14 +787,14 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
                       <XCircle className="w-7 h-7 text-red-600" />
                     )}
                   </div>
-                  <h3 className="text-lg font-bold text-slate-800 mb-1">
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">
                     {result.success && result.errors.length === 0
                       ? 'Importación Completada'
                       : result.success
                         ? 'Importación Completada con Advertencias'
                         : 'Importación Fallida'}
                   </h3>
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-slate-500 leading-relaxed">
                     {result.success && result.errors.length === 0
                       ? 'Todas las ubicaciones fueron procesadas correctamente.'
                       : result.success
@@ -804,18 +805,18 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
 
                 {/* Stats */}
                 {result.success && (
-                  <div className="grid grid-cols-3 gap-3 mt-6 max-w-sm mx-auto">
+                  <div className="grid grid-cols-3 gap-4 mt-6 max-w-sm mx-auto">
                     <div className="text-center p-3 rounded-xl bg-white border border-emerald-100 shadow-sm">
                       <p className="text-xl font-bold text-emerald-600">{result.created}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">Creadas</p>
+                      <p className="text-xs text-slate-500 mt-1">Creadas</p>
                     </div>
                     <div className="text-center p-3 rounded-xl bg-white border border-amber-100 shadow-sm">
                       <p className="text-xl font-bold text-amber-600">{result.updated}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">Actualizadas</p>
+                      <p className="text-xs text-slate-500 mt-1">Actualizadas</p>
                     </div>
                     <div className="text-center p-3 rounded-xl bg-white border border-slate-100 shadow-sm">
                       <p className="text-xl font-bold text-slate-600">{result.skipped}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">Omitidas</p>
+                      <p className="text-xs text-slate-500 mt-1">Omitidas</p>
                     </div>
                   </div>
                 )}
@@ -839,7 +840,7 @@ export default function LocationImport({ onImportComplete }: LocationImportProps
             {/* Error details */}
             {result.errors.length > 0 && (
               <Card className="border-slate-200">
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                     <XCircle className="w-4 h-4 text-red-500" />
                     Detalle de Errores ({result.errors.length})

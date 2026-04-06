@@ -1,3 +1,4 @@
+// ====================== LocationsManager.tsx ======================
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
@@ -299,6 +300,10 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
       longitude: String(loc.longitude),
       radiusMeters: String(loc.radiusMeters),
       verificationMethod: loc.verificationMethod || 'GPS',
+      beaconUuid: '',
+      beaconMajor: '1',
+      beaconMinor: '1',
+      beaconRssi: '-70',
     })
     setShowDialog(true)
     setError(null)
@@ -325,16 +330,16 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
   // ── Render ─────────────────────────────────────────
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-slate-900 shrink-0">
             <MapPin className="w-5 h-5 text-emerald-400" />
           </div>
-          <div>
+          <div className="space-y-1">
             <h2 className="text-lg font-bold text-slate-800 leading-tight">Gestión de Ubicaciones</h2>
-            <p className="text-xs text-slate-500 leading-normal mt-0.5">
+            <p className="text-xs text-slate-500 leading-relaxed">
               {locations.length} ubicación(es) registrada(s)
             </p>
           </div>
@@ -364,7 +369,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
         <CardContent className="p-0">
           <ScrollArea className="max-h-[520px]">
             {loading ? (
-              <div className="py-16 flex flex-col items-center gap-2">
+              <div className="py-16 flex flex-col items-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
                 <p className="text-sm text-slate-400">Cargando ubicaciones...</p>
               </div>
@@ -375,14 +380,14 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                   {search ? 'No se encontraron ubicaciones' : 'No hay ubicaciones registradas'}
                 </p>
                 {!search && (
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-slate-400 mt-2">
                     Agregue ubicaciones para asociar sensores y permisos
                   </p>
                 )}
                 {!search && (
                   <Button
                     onClick={handleOpenCreate}
-                    className="mt-4 bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                    className="mt-5 bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
                     Crear Ubicación
@@ -402,7 +407,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.03 }}
-                      className="px-4 py-3.5 sm:px-5 sm:py-4 hover:bg-slate-50 transition-colors"
+                      className="px-4 py-4 sm:px-5 sm:py-5 hover:bg-slate-50 transition-colors"
                     >
                       <div className="flex items-start justify-between gap-3">
                         {/* Left: icon + content */}
@@ -410,7 +415,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                           <div className="p-2 rounded-lg bg-emerald-50 mt-0.5 shrink-0">
                             <Building2 className="w-4 h-4 text-emerald-600" />
                           </div>
-                          <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex-1 min-w-0 space-y-1.5">
                             {/* Name + related badge */}
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="text-sm font-semibold text-slate-800 leading-snug truncate">
@@ -432,7 +437,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                             )}
 
                             {/* Metadata grid: coordinates, radius, verification */}
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-0.5">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-0.5">
                               <span className="text-xs text-slate-400 font-mono flex items-center gap-1.5 leading-relaxed">
                                 <Navigation className="w-3 h-3 shrink-0" />
                                 {loc.latitude.toFixed(4)}, {loc.longitude.toFixed(4)}
@@ -467,7 +472,6 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                                 setQrImageUrl(null)
                                 await handleGenerateQr(loc.id)
                                 setEditingId(loc.id)
-                                setForm(emptyForm)
                                 setForm((f) => ({ ...f, verificationMethod: 'QR_CODE' }))
                                 setShowDialog(true)
                                 setError(null)
@@ -538,7 +542,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 </>
               )}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="mt-1.5">
               {editingId
                 ? 'Modifique los datos de la ubicación de trabajo.'
                 : 'Registre una nueva ubicación para asociar sensores y permisos.'}
@@ -617,7 +621,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 </div>
               </div>
               {form.latitude && form.longitude && !isNaN(parseFloat(form.latitude)) && !isNaN(parseFloat(form.longitude)) && (
-                <p className="text-xs text-emerald-600 flex items-center gap-1">
+                <p className="text-xs text-emerald-600 flex items-center gap-1 mt-1">
                   <CheckCircle2 className="w-3 h-3" />
                   Coordenadas válidas
                 </p>
@@ -636,7 +640,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                 placeholder="100"
                 className="text-sm"
               />
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
                 Área circular alrededor del punto GPS (10 - 10,000m)
               </p>
             </div>
@@ -676,7 +680,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                   Los técnicos deben escanearlo para crear permisos. Puedes regenerarlo y descargarlo después.
                 </p>
                 {qrImageUrl && (
-                  <div className="flex flex-col items-center gap-2 pt-2">
+                  <div className="flex flex-col items-center gap-3 pt-2">
                     <img src={qrImageUrl} alt="QR Code" className="w-48 h-48 rounded-lg border border-slate-200" />
                     <Button variant="outline" size="sm" onClick={handleDownloadQr} className="text-xs gap-1.5">
                       <Download className="w-3 h-3" />
@@ -707,7 +711,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                       placeholder="f7826da6-4fa3-4e98-8014-7c7a646e9c01"
                       className="text-xs font-mono"
                     />
-                    <p className="text-xs text-slate-400">Formato UUID v4 (36 caracteres con guiones)</p>
+                    <p className="text-xs text-slate-400 leading-relaxed mt-0.5">Formato UUID v4 (36 caracteres con guiones)</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
@@ -746,7 +750,7 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                       placeholder="-70"
                       className="text-xs font-mono"
                     />
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
                       Señal mínima para considerar &quot;en rango&quot;. Más cercano a 0 = más fuerte.
                       Recomendado: -50 a -80 dBm.
                     </p>
@@ -765,14 +769,14 @@ export default function LocationsManager({ onLocationsChanged }: LocationsManage
                   className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200"
                 >
                   <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
-                  <p className="text-xs text-red-700">{error}</p>
+                  <p className="text-xs text-red-700 leading-relaxed">{error}</p>
                 </motion.div>
               )}
             </AnimatePresence>
 
             {/* Actions */}
             <Separator />
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 pt-1">
               <Button variant="outline" onClick={() => {
                 setShowDialog(false)
                 setEditingId(null)
