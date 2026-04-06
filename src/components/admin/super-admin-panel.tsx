@@ -90,12 +90,12 @@ interface AdminCompany {
   createdAt: string
   updatedAt: string
   stripeCustomerId: string | null
-  _count: CompanyCounts
-  permitStats: { total: number; pending: number; approved: number; rejected: number; cancelled: number }
-  documentStats: { total: number; expired: number }
-  sensorStats: { total: number; active: number; critical: number }
-  lastActivity: string | null
-  invoiceTotal: number
+  _count: Partial<CompanyCounts>
+  permitStats?: { total: number; pending: number; approved: number; rejected: number; cancelled: number }
+  documentStats?: { total: number; expired: number }
+  sensorStats?: { total: number; active: number; critical: number }
+  lastActivity?: string | null
+  invoiceTotal?: number
 }
 
 interface AdminAuditLog {
@@ -680,7 +680,7 @@ export default function SuperAdminPanel() {
                   {/* Table Rows */}
                   <div className="divide-y divide-slate-100">
                     {filteredCompanies.map((company) => {
-                      const hasAlert = company.sensorStats.critical > 0 || company.documentStats.expired > 0 || !company.isActive
+                      const hasAlert = (company.sensorStats?.critical ?? 0) > 0 || (company.documentStats?.expired ?? 0) > 0 || !company.isActive
                       return (
                         <div
                           key={company.id}
@@ -725,7 +725,7 @@ export default function SuperAdminPanel() {
                           <div className="col-span-1 text-center">
                             <div className="flex items-center justify-center gap-0.5">
                               <Users className="w-3 h-3 text-slate-400" />
-                              <span className="text-xs text-slate-700">{company._count.users}</span>
+                              <span className="text-xs text-slate-700">{company._count?.users ?? 0}</span>
                             </div>
                           </div>
 
@@ -733,9 +733,9 @@ export default function SuperAdminPanel() {
                           <div className="col-span-1 text-center">
                             <div className="flex items-center justify-center gap-0.5">
                               <FileText className="w-3 h-3 text-slate-400" />
-                              <span className="text-xs text-slate-700">{company._count.permits}</span>
-                              {company.permitStats.pending > 0 && (
-                                <span className="text-[8px] text-amber-600">({company.permitStats.pending})</span>
+                              <span className="text-xs text-slate-700">{company._count?.permits ?? 0}</span>
+                              {(company.permitStats?.pending ?? 0) > 0 && (
+                                <span className="text-[8px] text-amber-600">({company.permitStats?.pending})</span>
                               )}
                             </div>
                           </div>
@@ -744,10 +744,10 @@ export default function SuperAdminPanel() {
                           <div className="col-span-1 text-center">
                             <div className="flex items-center justify-center gap-0.5">
                               <Activity className="w-3 h-3 text-slate-400" />
-                              <span className={`text-xs ${company.sensorStats.critical > 0 ? 'text-red-600 font-semibold' : 'text-slate-700'}`}>
-                                {company.sensorStats.active}
+                              <span className={`text-xs ${(company.sensorStats?.critical ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-slate-700'}`}>
+                                {company.sensorStats?.active ?? 0}
                               </span>
-                              {company.sensorStats.critical > 0 && (
+                              {(company.sensorStats?.critical ?? 0) > 0 && (
                                 <span className="text-[8px] text-red-500">!</span>
                               )}
                             </div>
@@ -757,15 +757,15 @@ export default function SuperAdminPanel() {
                           <div className="col-span-1 text-center">
                             <div className="flex items-center justify-center gap-0.5">
                               <FolderOpen className="w-3 h-3 text-slate-400" />
-                              <span className={`text-xs ${company.documentStats.expired > 0 ? 'text-amber-600 font-semibold' : 'text-slate-700'}`}>
-                                {company._count.documents}
+                              <span className={`text-xs ${(company.documentStats?.expired ?? 0) > 0 ? 'text-amber-600 font-semibold' : 'text-slate-700'}`}>
+                                {company._count?.documents ?? 0}
                               </span>
                             </div>
                           </div>
 
                           {/* Revenue */}
                           <div className="col-span-1 text-center">
-                            <span className="text-xs text-slate-700 font-medium">${company.invoiceTotal.toFixed(0)}</span>
+                            <span className="text-xs text-slate-700 font-medium">${(company.invoiceTotal ?? 0).toFixed(0)}</span>
                           </div>
 
                           {/* Actions */}
@@ -881,10 +881,10 @@ export default function SuperAdminPanel() {
                     )}
                   </InfoItem>
                   <InfoItem label="Expira" value={formatDate(selectedCompany.company.subscriptionExpiresAt)} />
-                  <InfoItem label="\u00daltima actividad" value={timeAgo(selectedCompany.company.lastActivity)} />
-                  <InfoItem label="Max Usuarios" value={`${selectedCompany.company._count.users} / ${selectedCompany.company.maxUsers}`} />
-                  <InfoItem label="Max Permisos/Mes" value={`${selectedCompany.company._count.permits} / ${selectedCompany.company.maxPermitsPerMonth}`} />
-                  <InfoItem label="Ingresos totales" value={`$${selectedCompany.company.invoiceTotal.toFixed(2)}`} />
+                  <InfoItem label="\u00daltima actividad" value={timeAgo(selectedCompany.company.lastActivity ?? null)} />
+                  <InfoItem label="Max Usuarios" value={`${selectedCompany.company._count?.users ?? 0} / ${selectedCompany.company.maxUsers}`} />
+                  <InfoItem label="Max Permisos/Mes" value={`${selectedCompany.company._count?.permits ?? 0} / ${selectedCompany.company.maxPermitsPerMonth}`} />
+                  <InfoItem label="Ingresos totales" value={`$${(selectedCompany.company.invoiceTotal ?? 0).toFixed(2)}`} />
                   <InfoItem label="Stripe" value={selectedCompany.company.stripeCustomerId ? 'Vinculado' : 'Demo'} />
                 </div>
 
@@ -892,9 +892,9 @@ export default function SuperAdminPanel() {
 
                 {/* Quick stats */}
                 <div className="grid grid-cols-4 gap-2">
-                  <MiniStat label="Sensores" value={selectedCompany.company.sensorStats.active} sub={`${selectedCompany.company.sensorStats.critical} cr\u00edticos`} alert={selectedCompany.company.sensorStats.critical > 0} />
-                  <MiniStat label="Locaciones" value={selectedCompany.company._count.workLocations} />
-                  <MiniStat label="API Keys" value={selectedCompany.company._count.apiKeys} />
+                  <MiniStat label="Sensores" value={selectedCompany.company.sensorStats?.active ?? 0} sub={`${selectedCompany.company.sensorStats?.critical ?? 0} cr\u00edticos`} alert={(selectedCompany.company.sensorStats?.critical ?? 0) > 0} />
+                  <MiniStat label="Locaciones" value={selectedCompany.company._count?.workLocations ?? 0} />
+                  <MiniStat label="API Keys" value={selectedCompany.company._count?.apiKeys ?? 0} />
                   <MiniStat label="Soporte" value={selectedCompany.unreadSupport} sub="no le\u00eddos" alert={selectedCompany.unreadSupport > 0} />
                 </div>
 
