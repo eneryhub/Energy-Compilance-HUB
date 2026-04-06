@@ -14,14 +14,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'La contraseña debe tener al menos 6 caracteres' }, { status: 400 })
     }
 
-    // Create company
+    // Create company — 7-day trial period
+    const trialDays = 7
+    const trialEndsAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000)
+
     const company = await db.company.create({
       data: {
         name: companyName,
         email: email.toLowerCase().trim(),
         subscriptionPlan: 'starter',
         subscriptionStatus: 'TRIAL',
-        subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 day trial
+        trialEndsAt,
+        subscriptionExpiresAt: new Date(trialEndsAt.getTime()), // trial = subscription window
       },
     })
 

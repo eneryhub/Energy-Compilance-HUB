@@ -134,6 +134,8 @@ export default function SubscriptionManager() {
   const [pendingPlanKey, setPendingPlanKey] = useState<string | null>(null)
   const [pendingPlanName, setPendingPlanName] = useState<string | null>(null)
   const [pendingPlanPrice, setPendingPlanPrice] = useState<number | null>(null)
+  const [pendingPlanPriceAnnual, setPendingPlanPriceAnnual] = useState<number | null>(null)
+  const [pendingBillingCycle, setPendingBillingCycle] = useState<'monthly' | 'annual'>('monthly')
   const [checkoutLoading, setCheckoutLoading] = useState(false)
 
   // Enterprise contact state
@@ -181,6 +183,8 @@ export default function SubscriptionManager() {
     setPendingPlanKey(planKey)
     setPendingPlanName(plan.name)
     setPendingPlanPrice(plan.price)
+    setPendingPlanPriceAnnual((plan as any).priceAnnual ?? (plan.price != null ? Math.round(plan.price * 10) : null))
+    setPendingBillingCycle('monthly')
     setShowPaymentDialog(true)
   }
 
@@ -194,40 +198,20 @@ export default function SubscriptionManager() {
         demo?: boolean
         message: string
         planName: string
-        newToken?: string
       }>('/subscription', {
         method: 'POST',
-        body: JSON.stringify({ planKey: pendingPlanKey }),
+        body: JSON.stringify({ planKey: pendingPlanKey, billingCycle: pendingBillingCycle }),
       })
 
       if (res.checkoutUrl && !res.demo) {
         // Real Stripe: redirect to checkout (same window for mobile, new tab for desktop)
         window.location.href = res.checkoutUrl
       } else if (res.demo) {
-        // Demo mode: instant activation — update token with new plan
-        if (res.newToken) {
-          localStorage.setItem('ech_token', res.newToken)
-        }
-        // Update user plan in localStorage
-        try {
-          const userRaw = localStorage.getItem('ech_user')
-          if (userRaw) {
-            const userData = JSON.parse(userRaw)
-            userData.subscriptionPlan = pendingPlanKey
-            localStorage.setItem('ech_user', JSON.stringify(userData))
-          }
-        } catch (e) {
-          console.error('[Subscription] Error updating ech_user in localStorage:', e)
-        }
-        // Close dialog
+        // Demo mode: instant activation
         setShowPaymentDialog(false)
-        // Dispatch plan-updated IMMEDIATELY — do NOT depend on fetchSubscription
-        // This ensures page.tsx updates the user state even if the re-fetch fails
-        window.dispatchEvent(new CustomEvent('plan-updated', { detail: { plan: pendingPlanKey } }))
-        // Re-fetch subscription data in background (non-blocking)
-        fetchSubscription().catch((err) => {
-          console.error('[Subscription] Background re-fetch failed:', err)
-        })
+        await fetchSubscription()
+        // Notify the app shell so the trial banner disappears and limits update
+        window.dispatchEvent(new CustomEvent('plan-updated'))
       }
     } catch (err: any) {
       console.error('Checkout error:', err)
@@ -277,6 +261,8 @@ export default function SubscriptionManager() {
       await apiFetch('/subscription', { method: 'DELETE' })
       setShowCancelDialog(false)
       await fetchSubscription()
+      // Notify app shell to update banner/limits
+      window.dispatchEvent(new CustomEvent('plan-updated'))
     } catch (err) {
       console.error('Cancel error:', err)
     } finally {
@@ -398,7 +384,10 @@ export default function SubscriptionManager() {
             const isEnterprise = key === 'enterprise'
             const colors = PLAN_COLORS[key]
             const Icon = PLAN_ICONS[key] || Shield
-            const priceDisplay = plan.price != null ? `$${plan.price}` : 'Contactar'
+            const priceMonthly = plan.price
+            const priceAnnual = (plan as any).priceAnnual as number | null | undefined
+            const priceDisplay = priceMonthly != null ? `$${priceMonthly}` : 'Contactar'
+            const monthlyEquiv = priceAnnual != null ? Math.round(priceAnnual / 12) : null
 
             return (
               <Card
@@ -422,10 +411,19 @@ export default function SubscriptionManager() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="text-center pb-4">
-                  <div className="flex items-baseline justify-center gap-1 mb-4">
+                  <div className="flex items-baseline justify-center gap-1 mb-1">
                     <span className="text-3xl font-bold text-slate-800">{priceDisplay}</span>
-                    {plan.price != null && <span className="text-sm text-slate-500">/mes</span>}
+                    {priceMonthly != null && <span className="text-sm text-slate-500">/mes</span>}
                   </div>
+                  {priceAnnual != null && priceMonthly != null && (
+                    <p className="text-xs text-slate-500 mb-3">
+                      <span className="line-through">${priceMonthly * 12}/año</span>
+                      {' '}<span className="font-semibold text-emerald-600">${priceAnnual}/año</span>
+                      {monthlyEquiv !== null && (
+                        <span className="text-emerald-600"> (${Math.round(((priceMonthly * 12 - priceAnnual) / (priceMonthly * 12)) * 100)}% dto — ~${monthlyEquiv}/mes)</span>
+                      )}
+                    </p>
+                  )}
                   <ul className="space-y-2 text-left mb-4">
                     {plan.features.map((feature, i) => (
                       <li key={i} className="flex items-start gap-2 text-sm">
@@ -700,11 +698,68 @@ export default function SubscriptionManager() {
               <span className="text-sm text-slate-600">Plan</span>
               <span className="font-semibold text-slate-800">{pendingPlanName}</span>
             </div>
+
+            {/* Billing Cycle Toggle */}
+            {pendingPlanPriceAnnual != null && pendingPlanPrice != null && (
+              <>
+                <Separator />
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-2">Ciclo de facturación</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPendingBillingCycle('monthly')}
+                      className={`p-3 rounded-lg border-2 text-left transition-all ${
+                        pendingBillingCycle === 'monthly'
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <p className={`text-sm font-semibold ${pendingBillingCycle === 'monthly' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                        Mensual
+                      </p>
+                      <p className={`text-lg font-bold ${pendingBillingCycle === 'monthly' ? 'text-emerald-600' : 'text-slate-600'}`}>
+                        ${pendingPlanPrice} USD
+                      </p>
+                      <p className="text-[10px] text-slate-400">/mes</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingBillingCycle('annual')}
+                      className={`p-3 rounded-lg border-2 text-left transition-all relative ${
+                        pendingBillingCycle === 'annual'
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {pendingPlanPriceAnnual < pendingPlanPrice * 12 && (
+                        <span className="absolute -top-2.5 -right-2 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                          -{Math.round((1 - pendingPlanPriceAnnual / (pendingPlanPrice * 12)) * 100)}%
+                        </span>
+                      )}
+                      <p className={`text-sm font-semibold ${pendingBillingCycle === 'annual' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                        Anual
+                      </p>
+                      <p className={`text-lg font-bold ${pendingBillingCycle === 'annual' ? 'text-emerald-600' : 'text-slate-600'}`}>
+                        ${pendingPlanPriceAnnual} USD
+                      </p>
+                      <p className="text-[10px] text-slate-400">/año ({pendingPlanPriceAnnual !== null && pendingPlanPrice !== null ? `$${Math.round(pendingPlanPriceAnnual / 12)}/mes` : ''})</p>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
             <Separator />
             <div className="flex justify-between items-center">
-              <span className="text-sm text-slate-600">Precio mensual</span>
+              <span className="text-sm text-slate-600">
+                {pendingBillingCycle === 'annual' ? 'Total anual' : 'Precio mensual'}
+              </span>
               <span className="font-bold text-lg text-emerald-600">
-                {pendingPlanPrice != null ? `$${pendingPlanPrice}` : '—'} USD
+                {pendingBillingCycle === 'annual'
+                  ? (pendingPlanPriceAnnual != null ? `$${pendingPlanPriceAnnual}` : '—')
+                  : (pendingPlanPrice != null ? `$${pendingPlanPrice}` : '—')}{' '}
+                USD
               </span>
             </div>
             {data?.isDemoMode && (

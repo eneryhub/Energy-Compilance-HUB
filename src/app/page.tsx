@@ -12,57 +12,20 @@ import SystemOverview from '@/components/dashboard/system-overview'
 import AuditTrail from '@/components/audit/audit-trail'
 import DocumentManager from '@/components/documents/document-manager'
 import SubscriptionManager from '@/components/subscription/subscription-manager'
-import UpgradeModal from '@/components/subscription/upgrade-modal'
 import RiskTypeManager from '@/components/risk-types/risk-type-manager'
 import TelemetryBoard from '@/components/scada/telemetry-board'
-import LocationsManager from '@/components/scada/locations-manager'
-import LocationImport from '@/components/import/location-import'
 import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
 import ReportsDashboard from '@/components/reports/reports-dashboard'
-import RiskHeatMap from '@/components/risk/risk-heatmap'
 import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
-import SupportChat from '@/components/support/support-chat'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
-import { PlusCircle, List, Crown, Lock } from 'lucide-react'
+import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
-
-// Plan-gated modules mirror (must match app-shell.tsx PLAN_GATES)
-const PLAN_GATES: Record<string, { minPlan: string; upsellMessage: string }> = {
-  scada: {
-    minPlan: 'business',
-    upsellMessage: 'Pásate al plan Business para monitorear tus sensores en tiempo real con telemetría SCADA.',
-  },
-  predictive: {
-    minPlan: 'business',
-    upsellMessage: 'Pásate al plan Business para acceder al análisis predictivo con Inteligencia Artificial.',
-  },
-  reports: {
-    minPlan: 'business',
-    upsellMessage: 'Pásate al plan Business para generar reportes analíticos avanzados de tu operación.',
-  },
-  'risk-map': {
-    minPlan: 'enterprise',
-    upsellMessage: 'Pásate al plan Enterprise para acceder a los mapas de calor de riesgo con análisis avanzado.',
-  },
-}
-
-const PLAN_PRIORITY: Record<string, number> = {
-  starter: 0,
-  business: 1,
-  enterprise: 2,
-}
-
-function isModuleAccessible(moduleId: string, plan: string): boolean {
-  const gate = PLAN_GATES[moduleId]
-  if (!gate) return true
-  return (PLAN_PRIORITY[plan] ?? 0) >= (PLAN_PRIORITY[gate.minPlan] ?? 0)
-}
 
 type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting'
 
@@ -76,11 +39,56 @@ export default function Home() {
   const [permitView, setPermitView] = useState<'list' | 'form'>('list')
   const [subscriptionBlocked, setSubscriptionBlocked] = useState(false)
   const [subscriptionMessage, setSubscriptionMessage] = useState('')
+  const [subscriptionBanner, setSubscriptionBanner] = useState<{
+    visible: boolean
+    message: string
+    type: 'info' | 'warning' | 'error'
+    isTrial: boolean
+    trialDaysRemaining: number | null
+    trialTotalDays: number | null
+    trialPercent: number | null
+    subscriptionDaysRemaining: number | null
+    billingCycle: string | null
+    planName: string | null
+  } | null>(null)
 
-  // Upgrade modal state
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false)
-  const [upgradeModuleName, setUpgradeModuleName] = useState('')
-  const [upgradeMessage, setUpgradeMessage] = useState('')
+  // Reusable: fetch subscription status (trial countdown, renewal, blocking)
+  const fetchSubscriptionStatus = useCallback(async () => {
+    const token = getToken()
+    if (!token) return
+    try {
+      const subRes = await fetch('/api/subscription/status', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!subRes.ok) return
+      const subData = await subRes.json()
+      if (subData.blockAccess) {
+        setSubscriptionBlocked(true)
+        setSubscriptionMessage(subData.message || 'Suscripción expirada. Actualice su plan.')
+      } else {
+        setSubscriptionBlocked(false)
+        setSubscriptionMessage('')
+      }
+      if (subData.message) {
+        setSubscriptionBanner({
+          visible: true,
+          message: subData.message,
+          type: subData.bannerType || 'info',
+          isTrial: !!subData.isTrial,
+          trialDaysRemaining: subData.trialDaysRemaining,
+          trialTotalDays: subData.trialTotalDays,
+          trialPercent: subData.trialPercent,
+          subscriptionDaysRemaining: subData.subscriptionDaysRemaining,
+          billingCycle: subData.billingCycle,
+          planName: subData.planName,
+        })
+      } else {
+        setSubscriptionBanner(null)
+      }
+    } catch {
+      // Network error — ignore
+    }
+  }, [])
 
   // Detect token on client-side only (after mount) to prevent SSR hydration mismatch.
   // Server renders login (no localStorage), client detects saved token.
@@ -114,70 +122,15 @@ export default function Home() {
           setComplianceStatus(data.isCompliant ? 'COMPLIANT' : 'NON_COMPLIANT')
         }
 
-        // Check subscription status — sync plan from server (authoritative source)
-        // Always read the latest token from localStorage (may have been updated by upgrade)
-        const latestToken = getToken()
-        const subRes = await fetch('/api/subscription/status', {
-          headers: { Authorization: `Bearer ${latestToken}` },
-        })
-        if (subRes.ok) {
-          const subData = await subRes.json()
-          if (subData.blockAccess) {
-            setSubscriptionBlocked(true)
-            setSubscriptionMessage(subData.message || 'Suscripción expirada. Actualice su plan.')
-          }
-          // ALWAYS sync subscriptionPlan from server — it's the authoritative source
-          // This handles edge cases where localStorage may be stale or corrupted
-          if (subData.plan) {
-            setUserState((prev) => {
-              if (!prev) return prev
-              if (prev.subscriptionPlan === subData.plan) return prev // no change needed
-              return { ...prev, subscriptionPlan: subData.plan }
-            })
-          }
-        }
-        // Other errors (500, etc.) — keep user logged in, skip compliance data
+        // Check subscription status (trial countdown, renewal reminder)
+        await fetchSubscriptionStatus()
       } catch {
         // Network error — ignore, user is already logged in
       }
     }
 
     restoreSession()
-  }, [])
-
-  // Listen for plan updates from SubscriptionManager (no full reload needed)
-  // Uses functional state update to avoid stale closure — no dependency on `user`
-  useEffect(() => {
-    const handlePlanUpdated = ((e: CustomEvent) => {
-      const newPlan = (e as CustomEvent<{ plan: string }>).detail?.plan
-      if (!newPlan) return
-      // Functional update: always reads latest state, no stale closure risk
-      setUserState((prev) => {
-        if (!prev) return prev
-        return { ...prev, subscriptionPlan: newPlan }
-      })
-    }) as EventListener
-
-    window.addEventListener('plan-updated', handlePlanUpdated)
-    return () => window.removeEventListener('plan-updated', handlePlanUpdated)
-  }, []) // Empty deps — registered once, uses functional state update
-
-  // Persist user state to localStorage whenever it changes (keeps ech_user in sync)
-  useEffect(() => {
-    if (user) {
-      setUser(user)
-    }
-  }, [user])
-
-  const handleLogout = useCallback(() => {
-    removeToken()
-    setUserState(null)
-    setAppState('login')
-    setCurrentView('dashboard')
-    setPermitView('list')
-    setSubscriptionBlocked(false)
-    setSubscriptionMessage('')
-  }, [])
+  }, [fetchSubscriptionStatus])
 
   const checkCompliance = useCallback(() => {
     const token = getToken()
@@ -199,52 +152,43 @@ export default function Home() {
       })
   }, [])
 
+  const handleLogout = useCallback(() => {
+    removeToken()
+    setUserState(null)
+    setAppState('login')
+    setCurrentView('dashboard')
+    setPermitView('list')
+    setSubscriptionBlocked(false)
+    setSubscriptionMessage('')
+    setSubscriptionBanner(null)
+  }, [])
+
+  // Listen for plan-updated events (dispatched by SubscriptionManager after upgrades)
+  useEffect(() => {
+    const handler = async () => {
+      await fetchSubscriptionStatus()
+      // Also refresh compliance in case plan changed limits
+      checkCompliance()
+    }
+    window.addEventListener('plan-updated', handler)
+    return () => window.removeEventListener('plan-updated', handler)
+  }, [fetchSubscriptionStatus, checkCompliance])
+
   const handleLogin = (userData: LoginResponse['user']) => {
     setUserState(userData)
     setUser(userData)
     setAppState('app')
     setSubscriptionBlocked(false)
     setSubscriptionMessage('')
+    setSubscriptionBanner(null)
     checkCompliance()
+    // Fetch subscription status to show trial countdown banner on login
+    fetchSubscriptionStatus()
   }
 
   const refreshCompliance = () => {
     checkCompliance()
   }
-
-  // Handle upgrade request from sidebar (candado clic)
-  const handleUpgradeRequest = useCallback((moduleId: string, moduleName: string, upsellMessage: string) => {
-    setUpgradeModuleName(moduleName)
-    setUpgradeMessage(upsellMessage)
-    setUpgradeModalOpen(true)
-  }, [])
-
-  const handleUpgradeToSubscription = useCallback(() => {
-    setCurrentView('subscription')
-  }, [])
-
-  // Handle upgrade request for Enterprise features
-  const handleEnterpriseUpgrade = useCallback(() => {
-    setUpgradeModuleName('Mapa de Riesgo')
-    setUpgradeMessage('Pásate al plan Enterprise para acceder a mapas de calor de riesgo, chat de soporte y recursos ilimitados.')
-    setUpgradeModalOpen(true)
-  }, [])
-
-  // Handle view change: block if plan-gated module and user doesn't have access
-  const handleViewChange = useCallback((view: ViewType) => {
-    const userPlan = user?.subscriptionPlan || 'starter'
-    if (!isModuleAccessible(view, userPlan)) {
-      const gate = PLAN_GATES[view]
-      if (gate) {
-        setUpgradeModuleName(gate.upsellMessage.includes('SCADA') ? 'SCADA' : gate.upsellMessage.includes('IA') ? 'IA Predictiva' : 'Reportes')
-        setUpgradeMessage(gate.upsellMessage)
-        setUpgradeModalOpen(true)
-        return
-      }
-    }
-    setCurrentView(view)
-    if (view !== 'permits') setPermitView('list')
-  }, [user?.subscriptionPlan])
 
   // Show nothing while mounting (prevents hydration mismatch flash)
   if (appState === 'mounting') {
@@ -286,46 +230,169 @@ export default function Home() {
     )
   }
 
-  const userPlan = user?.subscriptionPlan || 'starter'
-
   // App views
   return (
     <AppShell
       currentView={currentView}
-      onViewChange={handleViewChange}
+      onViewChange={(view) => {
+        setCurrentView(view)
+        if (view !== 'permits') setPermitView('list')
+      }}
       user={user!}
       complianceStatus={complianceStatus}
       onLogout={handleLogout}
-      onUpgradeRequest={handleUpgradeRequest}
     >
-      {/* Upgrade Modal */}
-      <UpgradeModal
-        open={upgradeModalOpen}
-        onOpenChange={setUpgradeModalOpen}
-        moduleName={upgradeModuleName}
-        upsellMessage={upgradeMessage}
-        currentPlan={userPlan}
-        onUpgrade={handleUpgradeToSubscription}
-      />
+      {/* Subscription Info Banner (Trial countdown + Renewal reminder) */}
+      {subscriptionBanner?.visible && currentView !== 'subscription' && !subscriptionBlocked && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`mb-4 rounded-xl border p-4 ${
+            subscriptionBanner.type === 'warning'
+              ? 'border-amber-300 bg-amber-50'
+              : subscriptionBanner.type === 'error'
+              ? 'border-red-300 bg-red-50'
+              : 'border-blue-200 bg-blue-50'
+          }`}
+        >
+          {subscriptionBanner.isTrial ? (
+            /* ===== TRIAL COUNTDOWN BANNER ===== */
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                  (subscriptionBanner.trialDaysRemaining ?? 7) <= 2
+                    ? 'bg-amber-200'
+                    : 'bg-blue-100'
+                }`}>
+                  <Clock className={`w-5 h-5 ${
+                    (subscriptionBanner.trialDaysRemaining ?? 7) <= 2
+                      ? 'text-amber-600'
+                      : 'text-blue-600'
+                  }`} />
+                </div>
+                <div>
+                  <p className={`text-sm font-semibold ${
+                    subscriptionBanner.type === 'warning' ? 'text-amber-800' : 'text-blue-800'
+                  }`}>
+                    {subscriptionBanner.trialDaysRemaining === 1
+                      ? '¡Último día de prueba!'
+                      : subscriptionBanner.trialDaysRemaining === 0
+                      ? '¡Tu prueba expira hoy!'
+                      : `Período de prueba — ${subscriptionBanner.trialDaysRemaining} día(s) restante(s)`}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">{subscriptionBanner.message}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* Trial progress bar */}
+                <div className="hidden sm:block w-32">
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                    <span>Progreso</span>
+                    <span>{Math.round(subscriptionBanner.trialPercent ?? 0)}%</span>
+                  </div>
+                  <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        (subscriptionBanner.trialPercent ?? 0) >= 70 ? 'bg-amber-500' : 'bg-blue-500'
+                      }`}
+                      style={{ width: `${subscriptionBanner.trialPercent ?? 0}%` }}
+                    />
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setCurrentView('subscription')}
+                  className={`text-sm gap-1.5 ${
+                    (subscriptionBanner.trialDaysRemaining ?? 7) <= 2
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+                >
+                  <Crown className="w-4 h-4" />
+                  Suscribirme
+                </Button>
+              </div>
+            </div>
+          ) : subscriptionBanner.subscriptionDaysRemaining !== null ? (
+            /* ===== SUBSCRIPTION RENEWAL REMINDER ===== */
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                  (subscriptionBanner.subscriptionDaysRemaining ?? 30) <= 3
+                    ? 'bg-amber-200'
+                    : 'bg-emerald-100'
+                }`}>
+                  <CreditCard className={`w-5 h-5 ${
+                    (subscriptionBanner.subscriptionDaysRemaining ?? 30) <= 3
+                      ? 'text-amber-600'
+                      : 'text-emerald-600'
+                  }`} />
+                </div>
+                <div>
+                  <p className={`text-sm font-semibold ${
+                    subscriptionBanner.type === 'warning' ? 'text-amber-800' : 'text-emerald-800'
+                  }`}>
+                    {subscriptionBanner.subscriptionDaysRemaining <= 1
+                      ? '¡Tu suscripción vence hoy!'
+                      : `Suscripción renueva en ${subscriptionBanner.subscriptionDaysRemaining} día(s)`}
+                    {subscriptionBanner.billingCycle === 'annual' && (
+                      <span className="ml-1.5 text-xs font-normal text-slate-500">(plan anual)</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">{subscriptionBanner.message}</p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCurrentView('subscription')}
+                className="text-sm gap-1.5"
+              >
+                <CreditCard className="w-4 h-4" />
+                Ver Suscripción
+              </Button>
+            </div>
+          ) : (
+            /* ===== GENERIC INFO BANNER ===== */
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <Crown className="w-5 h-5 text-blue-600" />
+                <p className="text-sm text-blue-800">{subscriptionBanner.message}</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCurrentView('subscription')}
+                className="text-sm gap-1.5"
+              >
+                Ver Planes
+              </Button>
+            </div>
+          )}
+        </motion.div>
+      )}
 
-      {/* Subscription Block Banner */}
+      {/* Subscription Block Banner (expired — blocks access) */}
       {subscriptionBlocked && currentView !== 'subscription' && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-4 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 flex items-center justify-between"
+          className="mb-4 rounded-xl border-2 border-red-400 bg-red-50 p-4 flex items-center justify-between"
         >
           <div className="flex items-center gap-3">
-            <Crown className="w-6 h-6 text-amber-600" />
+            <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center">
+              <ShieldAlert className="w-5 h-5 text-red-600" />
+            </div>
             <div>
-              <p className="text-sm font-semibold text-amber-800">Acceso Limitado</p>
-              <p className="text-xs text-amber-600">{subscriptionMessage}</p>
+              <p className="text-sm font-semibold text-red-800">Acceso Bloqueado</p>
+              <p className="text-xs text-red-600">{subscriptionMessage}</p>
             </div>
           </div>
           <Button
             onClick={() => setCurrentView('subscription')}
-            className="bg-amber-600 hover:bg-amber-700 text-white text-sm gap-1.5"
+            className="bg-red-600 hover:bg-red-700 text-white text-sm gap-1.5"
           >
+            <Crown className="w-4 h-4" />
             Actualizar Plan
           </Button>
         </motion.div>
@@ -397,13 +464,6 @@ export default function Home() {
             <RiskTypeManager />
           )}
 
-          {currentView === 'locations' && (
-            <div className="space-y-4">
-              <LocationsManager />
-              <LocationImport />
-            </div>
-          )}
-
           {currentView === 'scada' && (
             <TelemetryBoard />
           )}
@@ -441,10 +501,6 @@ export default function Home() {
             <ReportsDashboard />
           )}
 
-          {currentView === 'risk-map' && (
-            <RiskHeatMap />
-          )}
-
           {currentView === 'system' && (
             <SystemOverview />
           )}
@@ -462,11 +518,6 @@ export default function Home() {
           )}
         </motion.div>
       </AnimatePresence>
-
-      {/* Support Chat Widget — Enterprise only */}
-      <SupportChat plan={userPlan} onUpgradeRequest={handleEnterpriseUpgrade} />
     </AppShell>
   )
 }
-
-
