@@ -21,6 +21,7 @@ import ReportsDashboard from '@/components/reports/reports-dashboard'
 import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
+import GlobalOperationsCenter from '@/components/admin/global-operations-center'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert } from 'lucide-react'
@@ -516,8 +517,13 @@ export default function Home() {
           {currentView === 'diagnostics' && (
             <DiagnosticDashboard />
           )}
+
+          {currentView === 'goc' && user?.role === 'SUPER_ADMIN' && (
+            <GlobalOperationsCenter />
+          )}
         </motion.div>
       </AnimatePresence>
     </AppShell>
   )
 }
+

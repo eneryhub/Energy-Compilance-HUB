@@ -3,6 +3,7 @@
 
 import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
+import { emitGOCAlert } from '@/lib/goc-alerts'
 
 export interface AuditParams {
   companyId: string
@@ -18,7 +19,7 @@ export interface AuditParams {
  * Use this instead of raw db.auditLog.create() for consistent tracking.
  */
 export async function createAuditLog(params: AuditParams, request?: NextRequest) {
-  return db.auditLog.create({
+  const log = await db.auditLog.create({
     data: {
       companyId: params.companyId,
       userId: params.userId,
@@ -34,4 +35,28 @@ export async function createAuditLog(params: AuditParams, request?: NextRequest)
         : null,
     },
   })
+
+  // ── GOC Side Effect: Auto-emit GOC alert for critical actions ──
+  if (params.action === 'SYSTEM_ERROR' || params.action === 'SECURITY_BREACH') {
+    try {
+      emitGOCAlert({
+        companyId: params.companyId,
+        type: params.action === 'SECURITY_BREACH' ? 'SECURITY_BREACH' : 'SYSTEM_ERROR',
+        severity: params.action === 'SECURITY_BREACH' ? 'CRITICAL' : 'HIGH',
+        title: params.action === 'SECURITY_BREACH'
+          ? `Violación de Seguridad Detectada — ${params.entityType}`
+          : `Error del Sistema Detectado — ${params.entityType}`,
+        message: params.details
+          ? JSON.stringify(params.details).slice(0, 500)
+          : `Acción ${params.action} registrada para entidad ${params.entityType}`,
+        metadata: params.details as Record<string, unknown> | undefined,
+        relatedEntityId: params.entityId,
+        relatedEntityType: params.entityType,
+      })
+    } catch {
+      // Fire-and-forget: don't block the audit log if GOC alert fails
+    }
+  }
+
+  return log
 }

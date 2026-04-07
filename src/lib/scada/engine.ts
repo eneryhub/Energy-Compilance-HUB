@@ -4,7 +4,9 @@
 // ============================================================
 
 import { db } from '@/lib/db'
-import type { Sensor, SensorReading } from '@prisma/client'
+import { demoModeCache } from '@/lib/demo-mode-cache'
+import { emitGOCAlert } from '@/lib/goc-alerts'
+import type { Sensor } from '@prisma/client'
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -322,6 +324,34 @@ export async function ingestSensorData(
     },
   })
 
+  // ── GOC Side Effect: Emit alert when sensor is CRITICO ──
+  if (status === 'CRITICO') {
+    try {
+      emitGOCAlert({
+        companyId: sensor.companyId,
+        type: 'SENSOR_CRITICAL',
+        severity: 'CRITICAL',
+        title: `Sensor Crítico: ${sensor.name}`,
+        message: `El sensor ${sensor.name} (${sensor.type}) ha alcanzado un valor crítico de ${value} ${sensor.unit}. Umbral: ${sensor.thresholdCritical} ${sensor.unit}.`,
+        metadata: {
+          sensorId: sensor.id,
+          sensorName: sensor.name,
+          sensorType: sensor.type,
+          value,
+          unit: sensor.unit,
+          thresholdCritical: sensor.thresholdCritical,
+          thresholdWarning: sensor.thresholdWarning,
+          locationId: sensor.locationId,
+          source,
+        },
+        relatedEntityId: sensor.id,
+        relatedEntityType: 'SENSOR',
+      })
+    } catch {
+      // Fire-and-forget: don't block sensor ingestion
+    }
+  }
+
   // Cleanup old readings (keep last 200 per sensor)
   const oldReadings = await db.sensorReading.findMany({
     where: { sensorId },
@@ -388,6 +418,34 @@ export async function runSimulationTick(companyId: string): Promise<TelemetryPoi
         status,
       },
     })
+
+    // ── GOC Side Effect: Emit alert when sensor is CRITICO ──
+    if (status === 'CRITICO') {
+      try {
+        emitGOCAlert({
+          companyId: sensor.companyId,
+          type: 'SENSOR_CRITICAL',
+          severity: 'CRITICAL',
+          title: `Sensor Crítico: ${sensor.name}`,
+          message: `El sensor ${sensor.name} (${sensor.type}) ha alcanzado un valor crítico de ${newValue} ${sensor.unit}. Umbral: ${sensor.thresholdCritical} ${sensor.unit}.`,
+          metadata: {
+            sensorId: sensor.id,
+            sensorName: sensor.name,
+            sensorType: sensor.type,
+            value: newValue,
+            unit: sensor.unit,
+            thresholdCritical: sensor.thresholdCritical,
+            thresholdWarning: sensor.thresholdWarning,
+            locationId: sensor.locationId,
+            source: 'simulation',
+          },
+          relatedEntityId: sensor.id,
+          relatedEntityType: 'SENSOR',
+        })
+      } catch {
+        // Fire-and-forget: don't block simulation tick
+      }
+    }
 
     results.push({
       sensorId: sensor.id,
@@ -488,71 +546,55 @@ export async function getSensorReadings(
   }))
 }
 
-// ── Demo Mode State (persisted per-company in DB) ─────────
+// ── Demo Mode State (persisted in database per company) ───
 
-// In-memory cache to avoid hitting the DB on every request
-const companyDemoModeCache = new Map<string, boolean>()
-
-export async function isDemoMode(companyId?: string): Promise<boolean> {
-  // If no companyId (legacy call), default to true
-  if (!companyId) return true
-
-  // Check cache first
-  if (companyDemoModeCache.has(companyId)) {
-    return companyDemoModeCache.get(companyId)!
-  }
-
-  // Read from DB
+/**
+ * Check if demo/simulation mode is enabled for a company.
+ * DB is the PRIMARY source of truth. Cache is a secondary fast path.
+ */
+export async function isDemoMode(companyId: string): Promise<boolean> {
   try {
-    const { db } = await import('@/lib/db')
     const company = await db.company.findUnique({
       where: { id: companyId },
       select: { scadaDemoMode: true },
     })
-    const mode = company?.scadaDemoMode ?? true
-    companyDemoModeCache.set(companyId, mode)
-    return mode
-  } catch {
+    const dbValue = company?.scadaDemoMode ?? true
+
+    // Update cache with the authoritative DB value
+    demoModeCache.set(companyId, dbValue)
+    return dbValue
+  } catch (error) {
+    console.error('[SCADA] isDemoMode DB read failed, using cache:', error instanceof Error ? error.message : error)
+    // DB failed — check cache as fallback
+    const cached = demoModeCache.get(companyId)
+    if (cached !== undefined) return cached
+    // No cache either — safest default is demo mode ON
     return true
   }
 }
 
-export async function setDemoMode(enabled: boolean, companyId?: string): Promise<boolean> {
-  if (!companyId) return enabled
-
-  // Update DB
+/**
+ * Set demo/simulation mode for a company.
+ * Persists to DB FIRST (primary), then updates cache (secondary).
+ */
+export async function setDemoMode(companyId: string, enabled: boolean): Promise<boolean> {
   try {
-    const { db } = await import('@/lib/db')
-    await db.company.update({
+    // 1) Persist to DB — this is the source of truth
+    const company = await db.company.update({
       where: { id: companyId },
       data: { scadaDemoMode: enabled },
-    })
-  } catch {
-    // Continue even if DB update fails
-  }
-
-  // Update cache
-  companyDemoModeCache.set(companyId, enabled)
-  return enabled
-}
-
-// Synchronous version for internal engine use (uses cached value only)
-export function isDemoModeCached(companyId?: string): boolean {
-  if (!companyId) return true
-  return companyDemoModeCache.get(companyId) ?? true
-}
-
-// Warm cache for a company (call on startup/login)
-export async function warmDemoModeCache(companyId: string): Promise<void> {
-  try {
-    const { db } = await import('@/lib/db')
-    const company = await db.company.findUnique({
-      where: { id: companyId },
       select: { scadaDemoMode: true },
     })
-    const mode = company?.scadaDemoMode ?? true
-    companyDemoModeCache.set(companyId, mode)
-  } catch {
-    // Ignore
+    const confirmedValue = company.scadaDemoMode
+
+    // 2) Update cache to stay in sync
+    demoModeCache.set(companyId, confirmedValue)
+
+    return confirmedValue
+  } catch (error) {
+    console.error('[SCADA] setDemoMode DB write failed, using cache:', error instanceof Error ? error.message : error)
+    // DB failed — still update cache so current instance works
+    demoModeCache.set(companyId, enabled)
+    return enabled
   }
 }

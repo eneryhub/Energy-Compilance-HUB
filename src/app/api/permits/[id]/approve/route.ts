@@ -6,6 +6,7 @@ import { generatePermitPDF } from '@/lib/pdf-generator'
 import { checkGeofence } from '@/lib/gps'
 import { hashSignature } from '@/lib/gps'
 import { createAuditLog } from '@/lib/audit'
+import { emitGOCAlert } from '@/lib/goc-alerts'
 
 // POST /api/permits/[id]/approve - Approve or reject a permit
 export async function POST(
@@ -121,6 +122,37 @@ export async function POST(
           deviceInfo: deviceInfo ? JSON.stringify(deviceInfo) : null
         }
       })
+
+      // ── GOC Side Effect: Geofence breach alert ──
+      if (isOutsideGeofence && geoResult && hasGps) {
+        try {
+          emitGOCAlert({
+            companyId: session.companyId,
+            type: 'GEOFENCE_BREACH',
+            severity: 'HIGH',
+            title: `Geocerca Violada: Permiso ${permit.permitNumber}`,
+            message: `Supervisor ${session.name} aprobó el permiso ${permit.permitNumber} fuera de la geocerca. Distancia: ${Math.round(geoResult.distanceMeters)}m, Radio máximo: ${effectiveRadius}m.`,
+            metadata: {
+              permitId: permit.id,
+              permitNumber: permit.permitNumber,
+              supervisorName: session.name,
+              supervisorId: session.userId,
+              gpsLatitude,
+              gpsLongitude,
+              gpsAccuracy,
+              workLatitude: permit.workLatitude,
+              workLongitude: permit.workLongitude,
+              distanceMeters: Math.round(geoResult.distanceMeters),
+              effectiveRadius,
+              justification: approveJustification,
+            },
+            relatedEntityId: permit.id,
+            relatedEntityType: 'PERMIT',
+          })
+        } catch {
+          // Fire-and-forget: don't block permit approval
+        }
+      }
 
       // Update permit
       const updatedPermit = await db.permit.update({

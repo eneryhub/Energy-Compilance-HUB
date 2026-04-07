@@ -24,7 +24,7 @@ import {
   Wrench,
   Stethoscope,
   Lock,
-  Sparkles,
+  Radar,
   MapPin,
   Flame,
 } from 'lucide-react'
@@ -38,7 +38,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { removeToken } from '@/lib/api'
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc'
 
 interface AppShellProps {
   currentView: ViewType
@@ -107,6 +107,7 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'user-manual', label: 'Manual de Usuario', icon: BookOpen },
   { id: 'technical-manual', label: 'Manual Técnico', icon: Wrench, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'diagnostics', label: 'Diagnóstico', icon: Stethoscope, roles: ['ADMIN', 'SUPER_ADMIN'] },
+  { id: 'goc', label: 'GOC', icon: Radar, roles: ['SUPER_ADMIN'] },
 ]
 
 function getInitials(name: string) {

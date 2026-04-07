@@ -51,7 +51,7 @@ model Company {
   invoices           SubscriptionInvoice[]
   sensors            Sensor[]
   apiKeys            ApiKey[]
-  supportMessages    SupportMessage[]
+  systemAlerts       SystemAlert[]
   scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
 }
 
@@ -399,18 +399,46 @@ model SubscriptionInvoice {
   @@index([paidAt])
 }
 
-// ============ SUPPORT MESSAGES (Chat / Tickets) ============
-model SupportMessage {
-  id          String   @id @default(cuid())
-  companyId   String
-  userId      String?
-  userName    String?
-  message     String
-  senderType  String   @default("USER") // USER, SYSTEM, SUPPORT
-  isRead      Boolean  @default(false)
-  createdAt   DateTime @default(now())
+// ============ SYSTEM ALERTS (GOC — Global Operations Center) ============
+model SystemAlert {
+  id                String   @id @default(cuid())
+  companyId         String
+  type              String   // SENSOR_CRITICAL, GEOFENCE_BREACH, SYSTEM_ERROR, SECURITY_BREACH, SUBSCRIPTION_ALERT
+  severity          String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  title             String
+  message           String
+  metadata          String?  // JSON string with extra context (sensor data, GPS coords, error stack, etc.)
+  isAcknowledged    Boolean  @default(false)
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  relatedEntityId   String?  // e.g. sensorId, permitId, auditLogId
+  relatedEntityType String?  // e.g. SENSOR, PERMIT, AUDIT_LOG
+  createdAt         DateTime @default(now())
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@index([companyId, createdAt])
+  @@index([companyId])
+  @@index([type])
+  @@index([severity])
+  @@index([isAcknowledged])
+  @@index([createdAt])
+}
+
+// ============ KNOWLEDGE BASE (GOC — Solutions Repository) ============
+model KnowledgeBase {
+  id              String   @id @default(cuid())
+  errorCode       String   @unique // e.g. ERR_GPS_01, ERR_SENSOR_CRITICO, ERR_GEOFENCE_01
+  category        String   // GPS, SCADA, GEOFENCE, AUTH, SUBSCRIPTION, SYSTEM
+  title           String   // Human-readable title
+  rootCause       String   // What causes this error
+  appliedSolution String   // Step-by-step solution for the guard/operator
+  severity        String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  referenceUrl    String?  // External documentation link
+  timesUsed       Int      @default(0) // How many times this solution was referenced
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([category])
+  @@index([errorCode])
+  @@index([severity])
 }
