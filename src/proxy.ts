@@ -10,10 +10,15 @@ const JWT_SECRET = new TextEncoder().encode(
 const PLAN_PROTECTED_PATHS: Record<string, string> = {
   '/api/sensors': 'business',
   '/api/sensors/telemetry': 'business',
-  '/api/sensors/simulation': 'business',
   '/api/predictive': 'business',
   '/api/reports/generate': 'business',
 }
+
+// Paths that are EXCLUDED from plan gating even if they match a protected prefix.
+// These are configuration/auth endpoints, not premium data modules.
+const PLAN_EXCLUDED_PATHS: string[] = [
+  '/api/sensors/simulation',   // Demo mode toggle — config control, not premium data
+]
 
 const PLAN_PRIORITY: Record<string, number> = {
   starter: 0,
@@ -23,6 +28,11 @@ const PLAN_PRIORITY: Record<string, number> = {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
+
+  // Skip plan check for excluded paths (config endpoints)
+  if (PLAN_EXCLUDED_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))) {
+    return NextResponse.next()
+  }
 
   // Only intercept API routes that are plan-gated
   const matchedPath = Object.keys(PLAN_PROTECTED_PATHS).find(
