@@ -1236,7 +1236,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
   ]
 }`} />
 
-          <SubTitle>DELETE /api/api-keys?id={keyId} — Revocar Credencial</SubTitle>
+          <SubTitle>DELETE /api/api-keys?id={'{'}keyId{'}'} — Revocar Credencial</SubTitle>
           <Paragraph>
             Revoca permanentemente una API Key. Las peticiones futuras con esa clave devolverán 401.
           </Paragraph>
