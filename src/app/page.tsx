@@ -21,6 +21,7 @@ import ReportsDashboard from '@/components/reports/reports-dashboard'
 import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
+import RiskHeatMap from '@/components/risk/risk-heatmap'
 import GlobalOperationsCenter from '@/components/admin/global-operations-center'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
@@ -518,6 +519,10 @@ export default function Home() {
             <DiagnosticDashboard />
           )}
 
+          {currentView === 'risk-map' && (
+            <RiskHeatMap />
+          )}
+
           {currentView === 'goc' && user?.role === 'SUPER_ADMIN' && (
             <GlobalOperationsCenter />
           )}
@@ -526,4 +531,3 @@ export default function Home() {
     </AppShell>
   )
 }
-

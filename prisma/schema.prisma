@@ -6,229 +6,193 @@ datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
-} 
-
-// ============================================================
-// ENERGY-COMPLIANCE HUB - UNIFIED SCHEMA
-// Fusion: Energy-Compliance (Operations) + HSE Guard (Compliance)
-// All IDs use CUID for unified identification
-// ============================================================
-
-// ============ COMPANY / TENANCY ============
-model Company {
-  id                   String   @id @default(cuid())
-  name                 String
-  taxId                String?  @unique
-  email                String   @unique
-  phone                String?
-  address              String?
-  logo                 String?
-  subscriptionPlan     String   @default("starter") // starter, business, enterprise
-  subscriptionStatus   String   @default("TRIAL")   // TRIAL, ACTIVE, PAST_DUE, CANCELLED
-  billingCycle         String   @default("monthly") // monthly, annual
-  subscriptionExpiresAt DateTime?
-  maxUsers             Int      @default(10)
-  maxPermitsPerMonth   Int      @default(200)
-  isActive             Boolean  @default(true)
-
-  // Stripe integration
-  stripeCustomerId     String?  @unique
-  stripeSubscriptionId String?  @unique
-  stripePriceId        String?
-  billingEmail         String?
-  trialEndsAt          DateTime?
-  currentPeriodStart   DateTime?
-  currentPeriodEnd     DateTime?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  users        User[]
-  permits      Permit[]
-  documents    HseDocument[]
-  alertConfigs AlertConfig[]
-  workLocations WorkLocation[]
-  auditLogs    AuditLog[]
-  riskTypes          RiskTypeConfig[]
-  checklistItems     ChecklistItemConfig[]
-  invoices           SubscriptionInvoice[]
-  sensors            Sensor[]
-  apiKeys            ApiKey[]
-  systemAlerts       SystemAlert[]
-  scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
 }
 
-// ============ USER / RBAC ============
-model User {
-  id            String    @id @default(cuid())
-  companyId     String
-  email         String
-  passwordHash  String?
-  name          String
-  role          String    @default("TECHNICIAN") // ADMIN, SUPERVISOR, TECHNICIAN, MANAGER, VIEWER
-  isActive      Boolean   @default(true)
-  lastLoginAt   DateTime?
-  avatarUrl     String?
-  phone         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+model Company {
+  id                    String                @id @default(cuid())
+  name                  String
+  taxId                 String?               @unique
+  email                 String                @unique
+  phone                 String?
+  address               String?
+  logo                  String?
+  subscriptionPlan      String                @default("starter")
+  subscriptionStatus    String                @default("TRIAL")
+  subscriptionExpiresAt DateTime?
+  maxUsers              Int                   @default(10)
+  maxPermitsPerMonth    Int                   @default(200)
+  isActive              Boolean               @default(true)
+  stripeCustomerId      String?               @unique
+  stripeSubscriptionId  String?               @unique
+  stripePriceId         String?
+  billingEmail          String?
+  trialEndsAt           DateTime?
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  scadaDemoMode         Boolean               @default(true)
+  billingCycle          String                @default("monthly")
+  alertConfigs          AlertConfig[]
+  apiKeys               ApiKey[]
+  auditLogs             AuditLog[]
+  checklistItems        ChecklistItemConfig[]
+  documents             HseDocument[]
+  permits               Permit[]
+  riskTypes             RiskTypeConfig[]
+  sensors               Sensor[]
+  invoices              SubscriptionInvoice[]
+  systemAlerts          SystemAlert[]
+  users                 User[]
+  workLocations         WorkLocation[]
+}
 
-  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  permitsCreated Permit[] @relation("CreatedBy")
-  permitsApproved Permit[] @relation("ApprovedBy")
-  permitsRejected Permit[] @relation("RejectedBy")
-  signatures   Signature[]
-  auditLogs    AuditLog[]
-  documents    HseDocument[]
+model User {
+  id                String        @id @default(cuid())
+  companyId         String
+  email             String
+  passwordHash      String?
+  name              String
+  role              String        @default("TECHNICIAN")
+  isActive          Boolean       @default(true)
+  lastLoginAt       DateTime?
+  avatarUrl         String?
+  phone             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  auditLogs         AuditLog[]
   reviewedDocuments HseDocument[] @relation("DocumentReviewer")
+  documents         HseDocument[]
+  permitsApproved   Permit[]      @relation("ApprovedBy")
+  permitsCreated    Permit[]      @relation("CreatedBy")
+  permitsRejected   Permit[]      @relation("RejectedBy")
+  signatures        Signature[]
+  company           Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([email, companyId])
 }
 
-// ============ PERMITS (Operations) ============
 model Permit {
-  id                String    @id @default(cuid())
-  companyId         String
-  permitNumber      String    @unique
-  riskType          String    // ALTURA, ELECTRICO, CONFINADO, CALIENTE
-  status            String    @default("PENDING") // PENDING, APPROVED, REJECTED, CANCELLED
-  safetyChecks      String    @default("{}") // JSON string of checklist responses
-  technicianName    String
-  supervisorName    String
-  workLocation      String
-  workDescription   String
-  rejectionReason       String?
-  approveJustification  String?  // Supervisor justification when approving outside geofence
-  technicianSignature   String? // JSON string with signature data + GPS
-  supervisorSignature   String? // JSON string with signature data + GPS
-  photos            String?   // JSON string array of photos
-  photosCount       Int       @default(0)
-  createdById       String?
-  createdByName     String?
-  createdByRole     String?
-  approvedById      String?
-  approvedByName    String?
-  rejectedById      String?
-  rejectedByName    String?
-
-  // GPS / Geofence fields
-  workLatitude      Float?
-  workLongitude     Float?
-  workRadius        Int       @default(100) // meters
-  workLocationId    String?
-  locationSource    String    @default("manual") // gps, manual, saved
-
-  approvedAt        DateTime?
-  rejectedAt        DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  company           Company       @relation(fields: [companyId], references: [id])
-  createdBy         User?         @relation("CreatedBy", fields: [createdById], references: [id])
-  approvedBy        User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
-  rejectedBy        User?         @relation("RejectedBy", fields: [rejectedById], references: [id])
-  workLocationRef   WorkLocation? @relation(fields: [workLocationId], references: [id])
-  signatures        Signature[]
+  id                   String        @id @default(cuid())
+  companyId            String
+  permitNumber         String        @unique
+  riskType             String
+  status               String        @default("PENDING")
+  safetyChecks         String        @default("{}")
+  technicianName       String
+  supervisorName       String
+  workLocation         String
+  workDescription      String
+  rejectionReason      String?
+  technicianSignature  String?
+  supervisorSignature  String?
+  photos               String?
+  photosCount          Int           @default(0)
+  createdById          String?
+  createdByName        String?
+  createdByRole        String?
+  approvedById         String?
+  approvedByName       String?
+  rejectedById         String?
+  rejectedByName       String?
+  workLatitude         Float?
+  workLongitude        Float?
+  workRadius           Int           @default(100)
+  workLocationId       String?
+  locationSource       String        @default("manual")
+  approvedAt           DateTime?
+  rejectedAt           DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  approveJustification String?
+  approvedBy           User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
+  company              Company       @relation(fields: [companyId], references: [id])
+  createdBy            User?         @relation("CreatedBy", fields: [createdById], references: [id])
+  rejectedBy           User?         @relation("RejectedBy", fields: [rejectedById], references: [id])
+  workLocationRef      WorkLocation? @relation(fields: [workLocationId], references: [id])
+  signatures           Signature[]
 
   @@index([companyId])
   @@index([status])
   @@index([createdById])
 }
 
-// ============ WORK LOCATIONS (GPS / Geofence) ============
 model WorkLocation {
-  id                String   @id @default(cuid())
-  companyId         String
-  name              String
-  address           String?
-  latitude          Float
-  longitude         Float
-  radiusMeters      Int      @default(100)
-  verificationMethod String?  // GPS, QR_CODE, BEACON
-  verifiedAt        DateTime @default(now())
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  // QR Code verification
-  qrCodeSecret      String?  @unique // Auto-generated secret used in QR token
-  qrCodeData        String?  // Full QR payload JSON stored for download
-
-  // Beacon BLE verification
-  beaconUuid        String?  @unique // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
-  beaconMajor       Int?     // Major value (0-65535)
-  beaconMinor       Int?     // Minor value (0-65535)
-  beaconRssi        Int      @default(-70) // Signal strength threshold (dBm)
-
-  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  permits  Permit[]
-  sensors  Sensor[]
+  id                 String   @id @default(cuid())
+  companyId          String
+  name               String
+  address            String?
+  latitude           Float
+  longitude          Float
+  radiusMeters       Int      @default(100)
+  verificationMethod String?
+  verifiedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  beaconMajor        Int?
+  beaconMinor        Int?
+  beaconRssi         Int      @default(-70)
+  beaconUuid         String?  @unique
+  qrCodeData         String?
+  qrCodeSecret       String?  @unique
+  permits            Permit[]
+  sensors            Sensor[]
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([latitude, longitude])
 }
 
-// ============ DIGITAL SIGNATURES ============
 model Signature {
-  id              String   @id @default(cuid())
-  permitId        String
-  signerType      String   // TECHNICIAN, SUPERVISOR
-  signerName      String
-  signerId        String?
-  signatureData   String   // Base64 PNG image
-  signatureHash   String   @unique // SHA256 for integrity
-  signedAt        DateTime @default(now())
-
-  // GPS at signing time
-  latitude        Float?
-  longitude       Float?
-  accuracyMeters  Float?
-
-  // Geofence validation
-  isWithinGeofence      Boolean?
-  distanceToWorkMeters  Float?
-
-  // Device info
-  deviceInfo      String?  // JSON string
-  ipAddress       String?
-
-  createdAt       DateTime @default(now())
-
-  permit Permit @relation(fields: [permitId], references: [id], onDelete: Cascade)
-  signer User?   @relation(fields: [signerId], references: [id])
+  id                   String   @id @default(cuid())
+  permitId             String
+  signerType           String
+  signerName           String
+  signerId             String?
+  signatureData        String
+  signatureHash        String   @unique
+  signedAt             DateTime @default(now())
+  latitude             Float?
+  longitude            Float?
+  accuracyMeters       Float?
+  isWithinGeofence     Boolean?
+  distanceToWorkMeters Float?
+  deviceInfo           String?
+  ipAddress            String?
+  createdAt            DateTime @default(now())
+  permit               Permit   @relation(fields: [permitId], references: [id], onDelete: Cascade)
+  signer               User?    @relation(fields: [signerId], references: [id])
 
   @@index([permitId])
 }
 
-// ============ HSE DOCUMENTS (Compliance Module) ============
 model HseDocument {
-  id            String   @id @default(cuid())
-  companyId     String
-  userId        String?  // assigned user
-  title         String
-  documentType  String   // certificado_medico, licencia_operativa, permiso_ambiental, etc.
-  category      String   // PERSONAL, EQUIPOS, LEGAL, AMBIENTAL
-  criticality   String   @default("NORMAL") // CRITICAL, NORMAL, LOW
-  status        String   @default("ACTIVE") // ACTIVE, EXPIRED, REVOKED, PENDING_RENEWAL
-  issueDate     DateTime?
-  expiryDate    DateTime?
-  holderName    String?
-  description   String?
-  fileUrl       String?
-  fileName      String?
-  fileSize      Int?
-  mimeType      String?
-  aiExtractedData String? // JSON string with AI-extracted data
-  aiConfidence  Float?
-  tags          String?  // JSON array string
-
-  reviewedById  String?
-  reviewedAt    DateTime?
-
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  assignedUser User?   @relation(fields: [userId], references: [id])
-  reviewedBy   User?   @relation("DocumentReviewer", fields: [reviewedById], references: [id])
-  alertConfigs AlertConfig[]
+  id              String        @id @default(cuid())
+  companyId       String
+  userId          String?
+  title           String
+  documentType    String
+  category        String
+  criticality     String        @default("NORMAL")
+  status          String        @default("ACTIVE")
+  issueDate       DateTime?
+  expiryDate      DateTime?
+  holderName      String?
+  description     String?
+  fileUrl         String?
+  fileName        String?
+  fileSize        Int?
+  mimeType        String?
+  aiExtractedData String?
+  aiConfidence    Float?
+  tags            String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  alertConfigs    AlertConfig[]
+  company         Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewedBy      User?         @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  assignedUser    User?         @relation(fields: [userId], references: [id])
 
   @@index([companyId])
   @@index([userId])
@@ -237,81 +201,73 @@ model HseDocument {
   @@index([status])
 }
 
-// ============ CUSTOM RISK TYPES (per company) ============
 model RiskTypeConfig {
-  id            String   @id @default(cuid())
-  companyId     String
-  key           String   // unique key like ALTURA, ELECTRICO, or custom: EXCAVACION
-  label         String
-  color         String   @default("#6366f1")
-  description   String?
-  icon          String   @default("AlertTriangle")
-  isActive      Boolean  @default(true)
-  sortOrder     Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  checklist ChecklistItemConfig[]
+  id          String                @id @default(cuid())
+  companyId   String
+  key         String
+  label       String
+  color       String                @default("#6366f1")
+  description String?
+  icon        String                @default("AlertTriangle")
+  isActive    Boolean               @default(true)
+  sortOrder   Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  checklist   ChecklistItemConfig[]
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, key])
   @@index([companyId])
 }
 
-// ============ CUSTOM CHECKLIST ITEMS (per risk type) ============
 model ChecklistItemConfig {
-  id            String   @id @default(cuid())
-  companyId     String
-  riskTypeKey   String
-  itemKey       String   // unique key like has_harness
-  label         String
-  required      Boolean  @default(false)
-  sortOrder     Int      @default(0)
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  riskType RiskTypeConfig   @relation(fields: [riskTypeKey, companyId], references: [key, companyId], onDelete: Cascade)
+  id          String         @id @default(cuid())
+  companyId   String
+  riskTypeKey String
+  itemKey     String
+  label       String
+  required    Boolean        @default(false)
+  sortOrder   Int            @default(0)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  riskType    RiskTypeConfig @relation(fields: [riskTypeKey, companyId], references: [key, companyId], onDelete: Cascade)
 
   @@unique([companyId, riskTypeKey, itemKey])
   @@index([companyId])
   @@index([riskTypeKey])
 }
 
-// ============ ALERT CONFIGS ============
 model AlertConfig {
-  id            String   @id @default(cuid())
-  companyId     String
-  documentId    String?
-  name          String
-  alertType     String   // EMAIL, IN_APP, WHATSAPP
-  triggerDaysBefore Int @default(30) // days before expiry
-  isActive      Boolean  @default(true)
-  lastTriggeredAt DateTime?
-  message       String?  // AI-generated alert message
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  document HseDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  id                String       @id @default(cuid())
+  companyId         String
+  documentId        String?
+  name              String
+  alertType         String
+  triggerDaysBefore Int          @default(30)
+  isActive          Boolean      @default(true)
+  lastTriggeredAt   DateTime?
+  message           String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  company           Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  document          HseDocument? @relation(fields: [documentId], references: [id])
 }
 
-// ============ AUDIT LOG ============
 model AuditLog {
-  id          String   @id @default(cuid())
-  companyId   String
-  userId      String?
-  action      String   // LOGIN, LOGOUT, CREATE, APPROVE, REJECT, VIEW, UPDATE, DELETE
-  entityType  String   // USER, PERMIT, DOCUMENT, COMPANY, SIGNATURE
-  entityId    String?
-  details     String?  // JSON string with additional context
-  ipAddress   String?
-  userAgent   String?
-  createdAt   DateTime @default(now())
-
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user    User?    @relation(fields: [userId], references: [id])
+  id         String   @id @default(cuid())
+  companyId  String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  details    String?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id])
 
   @@index([companyId])
   @@index([userId])
@@ -319,26 +275,24 @@ model AuditLog {
   @@index([createdAt])
 }
 
-// ============ SCADA SENSORS (Telemetry) ============
 model Sensor {
-  id                String   @id @default(cuid())
+  id                String          @id @default(cuid())
   companyId         String
   locationId        String?
   name              String
-  type              String   // PRESION, TEMPERATURA, GAS, VOLTAJE
+  type              String
   currentValue      Float?
-  unit              String   // psi, °C, %LEL, V
+  unit              String
   thresholdCritical Float
-  thresholdWarning  Float    @default(0)
-  isSimulated       Boolean  @default(true)
-  isActive          Boolean  @default(true)
+  thresholdWarning  Float           @default(0)
+  isSimulated       Boolean         @default(true)
+  isActive          Boolean         @default(true)
   lastReadingAt     DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  location  WorkLocation?    @relation(fields: [locationId], references: [id])
-  readings  SensorReading[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  company           Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location          WorkLocation?   @relation(fields: [locationId], references: [id])
+  readings          SensorReading[]
 
   @@index([companyId])
   @@index([locationId])
@@ -346,78 +300,70 @@ model Sensor {
   @@index([isActive])
 }
 
-// ============ SENSOR READINGS (Historical Telemetry) ============
 model SensorReading {
   id        String   @id @default(cuid())
   sensorId  String
   value     Float
-  status    String   // NORMAL, WARNING, CRITICO
+  status    String
   timestamp DateTime @default(now())
-
   sensor    Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
 
   @@index([sensorId, timestamp])
   @@index([sensorId])
 }
 
-// ============ API KEYS (Sensor Integrations) ============
 model ApiKey {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   companyId   String
-  userId      String   // Who created the key
-  name        String   // Label like "Gateway Planta Norte"
-  keyPrefix   String   // First 8 chars shown in UI: "ech_live_abc12345"
-  keyHash     String   @unique // SHA-256 hash of the full key (never stored plain)
-  permissions String   @default("sensor:ingest") // Comma-separated permissions
+  name        String
+  keyPrefix   String
+  keyHash     String    @unique
+  permissions String    @default("sensor:ingest")
   lastUsedAt  DateTime?
   expiresAt   DateTime?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  userId      String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
   @@index([keyHash])
   @@index([isActive])
 }
 
-// ============ SUBSCRIPTION INVOICE HISTORY ============
 model SubscriptionInvoice {
   id              String   @id @default(cuid())
   companyId       String
   stripeInvoiceId String?  @unique
   amount          Float?
   currency        String   @default("usd")
-  status          String   @default("paid") // paid, pending, failed, refunded
+  status          String   @default("paid")
   planName        String
   description     String?
   invoicePdfUrl   String?
   paidAt          DateTime @default(now())
   createdAt       DateTime @default(now())
-
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
   @@index([paidAt])
 }
 
-// ============ SYSTEM ALERTS (GOC — Global Operations Center) ============
 model SystemAlert {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   companyId         String
-  type              String   // SENSOR_CRITICAL, GEOFENCE_BREACH, SYSTEM_ERROR, SECURITY_BREACH, SUBSCRIPTION_ALERT
-  severity          String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  type              String
+  severity          String    @default("MEDIUM")
   title             String
   message           String
-  metadata          String?  // JSON string with extra context (sensor data, GPS coords, error stack, etc.)
-  isAcknowledged    Boolean  @default(false)
+  metadata          String?
+  isAcknowledged    Boolean   @default(false)
   acknowledgedById  String?
   acknowledgedAt    DateTime?
-  relatedEntityId   String?  // e.g. sensorId, permitId, auditLogId
-  relatedEntityType String?  // e.g. SENSOR, PERMIT, AUDIT_LOG
-  createdAt         DateTime @default(now())
-
-  company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  relatedEntityId   String?
+  relatedEntityType String?
+  createdAt         DateTime  @default(now())
+  company           Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
   @@index([type])
@@ -426,17 +372,16 @@ model SystemAlert {
   @@index([createdAt])
 }
 
-// ============ KNOWLEDGE BASE (GOC — Solutions Repository) ============
 model KnowledgeBase {
   id              String   @id @default(cuid())
-  errorCode       String   @unique // e.g. ERR_GPS_01, ERR_SENSOR_CRITICO, ERR_GEOFENCE_01
-  category        String   // GPS, SCADA, GEOFENCE, AUTH, SUBSCRIPTION, SYSTEM
-  title           String   // Human-readable title
-  rootCause       String   // What causes this error
-  appliedSolution String   // Step-by-step solution for the guard/operator
-  severity        String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
-  referenceUrl    String?  // External documentation link
-  timesUsed       Int      @default(0) // How many times this solution was referenced
+  errorCode       String   @unique
+  category        String
+  title           String
+  rootCause       String
+  appliedSolution String
+  severity        String   @default("MEDIUM")
+  referenceUrl    String?
+  timesUsed       Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
