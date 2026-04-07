@@ -13,7 +13,6 @@ export interface LoginResponse {
     role: string
     companyId: string
     companyName?: string
-    subscriptionPlan?: string
   }
 }
 
@@ -236,34 +235,20 @@ export async function apiFetch<T = unknown>(
   return res.json()
 }
 
-// ============ API Fetch with Meta (offline detection) ============
+// ============ API Fetch with Metadata (Service Worker offline detection) ============
+
+export interface ApiResponseMeta {
+  offline: boolean
+  cached: boolean
+  status: number
+}
 
 export async function apiFetchWithMeta<T = unknown>(
   path: string,
   options?: RequestInit
-): Promise<{ data: T; meta: { offline: boolean; cached: boolean } }> {
+): Promise<{ data: T; meta: ApiResponseMeta }> {
   const token = getToken()
-  const url = `${API_BASE}${path}`
-
-  // Try to detect if we're offline
-  const offline = typeof navigator !== 'undefined' && !navigator.onLine
-
-  if (offline) {
-    // Try Service Worker cache
-    try {
-      const cache = await caches.open('ech-api-cache')
-      const cachedResponse = await cache.match(new Request(url, { method: 'GET' }))
-      if (cachedResponse) {
-        const data = await cachedResponse.json()
-        return { data: data as T, meta: { offline: true, cached: true } }
-      }
-    } catch {
-      // Cache not available
-    }
-    throw new Error('Sin conexión a internet')
-  }
-
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -272,13 +257,17 @@ export async function apiFetchWithMeta<T = unknown>(
     },
   })
 
+  const meta: ApiResponseMeta = {
+    offline: res.headers.get('X-Offline-Data') === 'true',
+    cached: res.headers.get('X-Cache') === 'HIT',
+    status: res.status,
+  }
+
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
     throw new Error(data.error || `Error ${res.status}: Error de servidor`)
   }
 
   const data = await res.json()
-  // Check if response came from cache (Service Worker)
-  const cached = res.headers.get('x-sw-cache') === 'HIT'
-  return { data: data as T, meta: { offline: false, cached } }
+  return { data, meta }
 }

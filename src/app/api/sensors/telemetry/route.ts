@@ -16,10 +16,12 @@ export async function GET(req: NextRequest) {
 
     const result = await getTelemetry(payload.companyId, runSimulation)
 
+    // IMPORTANT: Do NOT return demoMode in telemetry response.
+    // demoMode is managed exclusively by /api/sensors/simulation endpoint.
+    // Including it here caused race conditions where polling reverted the user's toggle.
     return NextResponse.json({
       points: result.points,
       siteSafety: result.siteSafety,
-      demoMode,
       timestamp: new Date().toISOString(),
     })
   } catch (error: any) {

@@ -115,7 +115,8 @@ interface SensorConfig {
 interface TelemetryResponse {
   points: TelemetryPoint[]
   siteSafety: SiteSafety
-  demoMode: boolean
+  // NOTE: demoMode was REMOVED from this response to prevent polling race conditions.
+  // demoMode is managed exclusively by loadDemoMode() and toggleSimulation().
   timestamp: string
 }
 
@@ -253,7 +254,9 @@ export default function TelemetryBoard() {
     try {
       const result = await apiFetchWithMeta<TelemetryResponse>('/sensors/telemetry')
       setTelemetry(result.data)
-      setDemoMode(result.data.demoMode)
+      // IMPORTANT: Do NOT update demoMode from telemetry polling.
+      // demoMode is managed exclusively by loadDemoMode() and toggleSimulation().
+      // This prevents any race condition from reverting the user's toggle.
       setLastUpdate(new Date().toLocaleTimeString('es'))
       // Detect offline data from Service Worker
       setSensorOffline(result.meta.offline)
@@ -264,7 +267,7 @@ export default function TelemetryBoard() {
         setNetworkError(true)
         setSensorOffline(true)
       } else {
-        setTelemetry({ points: [], siteSafety: { isSafe: true, criticalSensors: [], warningSensors: [] }, demoMode: true, timestamp: new Date().toISOString() })
+        setTelemetry({ points: [], siteSafety: { isSafe: true, criticalSensors: [], warningSensors: [] }, timestamp: new Date().toISOString() })
         setLastUpdate(new Date().toLocaleTimeString('es'))
       }
     } finally {
@@ -272,11 +275,24 @@ export default function TelemetryBoard() {
     }
   }, [])
 
+  // ── Load demo mode ONCE on mount (not from polling) ──
+  // This is the ONLY place demoMode state is set from the server.
+  // telemetry polling must NEVER touch demoMode state.
+  const loadDemoMode = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ demoMode: boolean }>('/sensors/simulation')
+      setDemoMode(data.demoMode)
+    } catch {
+      // If it fails, keep the default (true)
+    }
+  }, [])
+
   useEffect(() => {
     loadSensors()
     loadLocations()
     loadFullLocations(); loadApiKeys()
-  }, [loadSensors, loadLocations, loadFullLocations, loadApiKeys])
+    loadDemoMode()  // Load demo mode once on mount
+  }, [loadSensors, loadLocations, loadFullLocations, loadApiKeys, loadDemoMode])
 
   // Cleanup beacon detect timer
   useEffect(() => {
@@ -322,16 +338,22 @@ export default function TelemetryBoard() {
   }, [selectedSensor])
 
   // ── Toggle simulation ──────────────────────────────────
-
+  // OPTIMISTIC UPDATE: sets UI immediately, then confirms with server.
+  // If server rejects, reverts. This prevents any polling interference.
   const toggleSimulation = useCallback(async (enabled: boolean) => {
+    // 1) Optimistic UI update — immediate feedback
+    setDemoMode(enabled)
     try {
-      await apiFetch('/sensors/simulation', {
+      // 2) Server confirmation — persists to DB
+      const confirmed = await apiFetch<{ demoMode: boolean }>('/sensors/simulation', {
         method: 'POST',
         body: JSON.stringify({ enabled }),
       })
-      setDemoMode(enabled)
+      // 3) Use server-confirmed value (not our optimistic guess)
+      setDemoMode(confirmed.demoMode)
     } catch {
-      // keep previous state
+      // 4) Revert on failure — restore previous state
+      setDemoMode(!enabled)
     }
   }, [])
 
