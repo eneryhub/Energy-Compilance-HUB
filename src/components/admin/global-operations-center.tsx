@@ -27,6 +27,7 @@ import {
   Heart,
   BookOpen,
   X,
+  Users,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -549,8 +550,35 @@ export default function GlobalOperationsCenter() {
     }
   }, [])
 
+  // ============ API: Enterprise Companies Quota ============
+  const [enterpriseCompanies, setEnterpriseCompanies] = useState<Array<{
+    id: string
+    name: string
+    subscriptionStatus: string
+    maxUsers: number
+    _count: { users: number }
+  }> | null>(null)
+
+  const fetchEnterpriseQuota = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ companies: Array<{
+        id: string
+        name: string
+        subscriptionPlan: string
+        subscriptionStatus: string
+        maxUsers: number
+        _count: { users: number }
+      }> }>('/admin/companies')
+      const enterprise = (data.companies || []).filter(c => c.subscriptionPlan === 'enterprise')
+      setEnterpriseCompanies(enterprise)
+    } catch {
+      // silently fail
+    }
+  }, [])
+
   useEffect(() => {
     fetchSystemHealth()
+    fetchEnterpriseQuota()
     healthIntervalRef.current = setInterval(fetchSystemHealth, 30000)
     return () => {
       if (healthIntervalRef.current) clearInterval(healthIntervalRef.current)
@@ -1178,6 +1206,69 @@ export default function GlobalOperationsCenter() {
           </Card>
         </div>
       </div>
+
+      {/* ===== ENTERPRISE USER QUOTA CARDS ===== */}
+      {enterpriseCompanies && enterpriseCompanies.length > 0 && (
+        <Card className="bg-slate-900 border-slate-700/50">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-amber-400" />
+              <CardTitle className="text-sm font-semibold text-slate-200">
+                Cuota Enterprise — Usuarios
+              </CardTitle>
+              <Badge className="text-[10px] bg-amber-500/20 text-amber-400 border-amber-500/30 ml-auto">
+                {enterpriseCompanies.length} empresa{enterpriseCompanies.length !== 1 ? 's' : ''}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {enterpriseCompanies.map((company) => {
+                const percent = company.maxUsers > 0 ? Math.round((company._count.users / company.maxUsers) * 100) : 0
+                const isNearLimit = percent >= 90
+                const isAtLimit = percent >= 100
+                return (
+                  <div key={company.id} className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-300 font-medium truncate max-w-[200px]">
+                        {company.name}
+                      </span>
+                      <span className={cn(
+                        'text-xs font-mono font-semibold',
+                        isAtLimit ? 'text-red-400' : isNearLimit ? 'text-amber-400' : 'text-slate-400'
+                      )}>
+                        {company._count.users} / {company.maxUsers}
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all duration-500',
+                          isAtLimit ? 'bg-red-500' : isNearLimit ? 'bg-amber-500' : percent >= 60 ? 'bg-emerald-500' : 'bg-emerald-400'
+                        )}
+                        style={{ width: `${Math.min(percent, 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-slate-600">{percent}% utilizado</span>
+                      {isAtLimit && (
+                        <span className="text-[10px] text-red-400 font-medium">
+                          Límite alcanzado
+                        </span>
+                      )}
+                      {isNearLimit && !isAtLimit && (
+                        <span className="text-[10px] text-amber-400">
+                          Cercano al límite
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ===== KNOWLEDGE DIALOG (Expanded View) ===== */}
       <Dialog open={!!knowledgeDialog || knowledgeLoading} onOpenChange={(open) => {

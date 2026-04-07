@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getPlan, isDemoMode } from '@/lib/plans'
 import { createStripeCheckoutSession, cancelSubscription, isStripeConfigured } from '@/lib/stripe'
-import { getTokenPayload, createSession } from '@/lib/auth'
+import { getTokenPayload } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 
 // GET /api/subscription - Get current subscription details
@@ -103,17 +103,9 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { planKey } = body
+    const { planKey, billingCycle } = body // billingCycle: 'monthly' | 'annual'
 
-    // Enterprise plan must go through contact sales form, not API
-    if (planKey === 'enterprise') {
-      return NextResponse.json(
-        { error: 'El plan Enterprise requiere contacto comercial. Usa el formulario de contacto.' },
-        { status: 400 }
-      )
-    }
-
-    if (!planKey || !['starter', 'business'].includes(planKey)) {
+    if (!planKey || !['starter', 'business', 'enterprise'].includes(planKey)) {
       return NextResponse.json({ error: 'Plan inválido' }, { status: 400 })
     }
 
@@ -128,8 +120,14 @@ export async function POST(req: NextRequest) {
 
     const plan = getPlan(planKey)
     const now = new Date()
+    const isAnnual = billingCycle === 'annual'
     const periodEnd = new Date(now)
-    periodEnd.setMonth(periodEnd.getMonth() + 1)
+    if (isAnnual) {
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1)
+    } else {
+      periodEnd.setMonth(periodEnd.getMonth() + 1)
+    }
+    const chargePrice = isAnnual ? (plan.priceAnnual ?? plan.price) : plan.price
 
     // ============ DEMO MODE: instant activation (no Stripe) ============
     if (isDemoMode()) {
@@ -143,19 +141,19 @@ export async function POST(req: NextRequest) {
           maxPermitsPerMonth: plan.maxPermitsPerMonth,
           currentPeriodStart: now,
           currentPeriodEnd: periodEnd,
-          subscriptionExpiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+          subscriptionExpiresAt: new Date(periodEnd.getTime()),
         },
       })
 
       // Create demo invoice (skip for Enterprise which has no price)
-      if (plan.price != null && plan.price > 0) {
+      if (chargePrice != null && chargePrice > 0) {
         await db.subscriptionInvoice.create({
           data: {
             companyId: payload.companyId,
-            amount: plan.price,
+            amount: chargePrice,
             status: 'paid',
             planName: plan.name,
-            description: `Upgrade a plan ${plan.name} (Demo)`,
+            description: `Plan ${plan.name} (${isAnnual ? 'Anual' : 'Mensual'}) — Demo`,
           },
         })
       }
@@ -170,23 +168,12 @@ export async function POST(req: NextRequest) {
         details: { field: 'subscriptionPlan', from: company.subscriptionPlan, to: planKey },
       }, req)
 
-      // Generate new JWT with updated plan so modules unlock instantly
-      const newToken = await createSession({
-        id: payload.userId,
-        companyId: payload.companyId,
-        role: payload.role,
-        email: payload.email,
-        name: payload.name,
-        subscriptionPlan: planKey,
-      })
-
       return NextResponse.json({
         success: true,
         message: `Plan actualizado a ${plan.name} (Modo Demo)`,
         plan: planKey,
         planName: plan.name,
         demo: true,
-        newToken, // Client should replace stored token with this
       })
     }
 
@@ -195,7 +182,8 @@ export async function POST(req: NextRequest) {
       payload.companyId,
       company.email,
       company.name,
-      planKey
+      planKey,
+      isAnnual
     )
 
     return NextResponse.json({

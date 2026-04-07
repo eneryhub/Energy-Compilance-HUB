@@ -117,6 +117,15 @@ export async function POST(request: NextRequest) {
 
     if (currentUsers >= company.maxUsers) {
       const plan = getPlan(company.subscriptionPlan)
+      if (plan.enterprise) {
+        return NextResponse.json(
+          {
+            error: `Límite de plan alcanzado (${company.maxUsers}/${company.maxUsers}). Para ampliar su capacidad de usuarios, contacte con nuestro equipo de ventas en ventas@energycompliancehub.com`,
+            code: 'SUBSCRIPTION_LIMIT_ENTERPRISE'
+          },
+          { status: 403 }
+        )
+      }
       return NextResponse.json(
         {
           error: `Límite de usuarios alcanzado (${company.maxUsers}/${company.maxUsers}). Plan actual: ${plan.name}. Actualice su suscripción para agregar más usuarios.`,

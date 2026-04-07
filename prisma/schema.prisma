@@ -6,7 +6,8 @@ datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
-}
+} 
+
 // ============================================================
 // ENERGY-COMPLIANCE HUB - UNIFIED SCHEMA
 // Fusion: Energy-Compliance (Operations) + HSE Guard (Compliance)
@@ -24,6 +25,7 @@ model Company {
   logo                 String?
   subscriptionPlan     String   @default("starter") // starter, business, enterprise
   subscriptionStatus   String   @default("TRIAL")   // TRIAL, ACTIVE, PAST_DUE, CANCELLED
+  billingCycle         String   @default("monthly") // monthly, annual
   subscriptionExpiresAt DateTime?
   maxUsers             Int      @default(10)
   maxPermitsPerMonth   Int      @default(200)

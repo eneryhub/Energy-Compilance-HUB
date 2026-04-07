@@ -275,20 +275,22 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     },
     {
       name: "Enterprise",
-      price: "",
-      period: "",
-      desc: "Solución a medida para su organización",
+      price: "$4,500",
+      period: "/mes",
+      annualPrice: "$45,900",
+      annualPeriod: "/año",
+      desc: "Solución a medida para grandes corporaciones",
       features: [
-        "Usuarios ilimitados",
+        "Hasta 500 usuarios activos",
         "Permisos ilimitados",
         "SCADA multi-sitio",
         "IA predictiva avanzada",
         "Cumplimiento regulatorio completo",
         "SLA garantizado 99.99%",
-        "Soporte dedicado",
+        "Soporte dedicado 24/7",
         "Integraciones personalizadas",
       ],
-      cta: "Contactar Ventas",
+      cta: "Comenzar con Enterprise",
       popular: false,
       enterprise: true,
     },
@@ -657,6 +659,11 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                         <>
                           <span className="text-4xl font-extrabold tracking-tight">{plan.price}</span>
                           <span className="text-muted-foreground">{plan.period}</span>
+                          {(plan as any).annualPrice && (
+                            <span className="ml-2 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                              {(plan as any).annualPrice}{(plan as any).annualPeriod} — Ahorra 15%
+                            </span>
+                          )}
                         </>
                       ) : (
                         <span className="text-2xl font-bold text-amber-600 dark:text-amber-400">
@@ -680,13 +687,12 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                   <CardFooter>
                     {plan.enterprise ? (
                       <Button
-                        variant="outline"
-                        className="w-full border-amber-500/50 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                        className="w-full bg-amber-500 hover:bg-amber-600 text-white"
                         asChild
                       >
-                        <a href="mailto:ventas@energycompliance.com">
+                        <a href="/register">
                           <Mail className="mr-1.5 h-4 w-4" />
-                          Contactar Ventas
+                          {plan.cta}
                         </a>
                       </Button>
                     ) : (

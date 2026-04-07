@@ -1,6 +1,7 @@
 export interface Plan {
   name: string
   price: number | null // null = "Contactar con Ventas"
+  priceAnnual: number | null // annual price (null = contact sales), 12-month billing
   priceLabel: string // display label
   maxUsers: number
   maxPermitsPerMonth: number
@@ -17,6 +18,7 @@ export const PLANS: Record<string, Plan> = {
   starter: {
     name: 'Starter',
     price: 149,
+    priceAnnual: 1490, // ~$124/mes (2 meses gratis)
     priceLabel: '$149',
     maxUsers: 10,
     maxPermitsPerMonth: 200,
@@ -36,59 +38,50 @@ export const PLANS: Record<string, Plan> = {
   business: {
     name: 'Business',
     price: 499,
+    priceAnnual: 4990, // ~$416/mes (2 meses gratis)
     priceLabel: '$499',
     maxUsers: 50,
     maxPermitsPerMonth: 2000,
     trialDays: 7,
-    description: 'Para empresas en crecimiento que necesitan telemetría SCADA, análisis predictivo y reportes profesionales.',
+    description: 'Para empresas en crecimiento que necesitan geocerca, IA y analíticas avanzadas.',
     icon: 'TrendingUp',
     popular: true,
-    features: [
-      'firma_avanzada', 'dashboard_avanzado', 'soporte_prioritario',
-      'geocerca', 'offline', 'api_access', 'reportes_analitica',
-      'scada_basico', 'ia_predictiva', 'importacion_masiva',
-    ],
+    features: ['firma_avanzada', 'dashboard_avanzado', 'soporte_prioritario', 'geocerca', 'offline', 'api_access', 'reportes_analitica', 'scada_basico', 'ia_predictiva'],
     featureLabels: {
-      firma_avanzada: 'Firma digital con GPS y geocerca',
+      firma_avanzada: 'Firma digital avanzada con GPS',
       dashboard_avanzado: 'Dashboard analítico',
       soporte_prioritario: 'Soporte prioritario',
       geocerca: 'Validación por geocerca',
       offline: 'Modo offline completo',
-      api_access: 'API REST básica',
+      api_access: 'Acceso a API',
       reportes_analitica: 'Reportes y analíticas',
       scada_basico: 'SCADA Telemetría en tiempo real',
       ia_predictiva: 'Análisis predictivo con IA',
-      importacion_masiva: 'Importación masiva CSV/XLSX',
     },
   },
   enterprise: {
     name: 'Enterprise',
-    price: null,
-    priceLabel: 'Contactar Ventas',
-    maxUsers: 999999,
-    maxPermitsPerMonth: 999999,
+    price: 4500,
+    priceAnnual: 45900, // $4,500 × 12 × 0.85 = $45,900 (15% descuento anual)
+    priceLabel: '$4,500',
+    maxUsers: 500,
+    maxPermitsPerMonth: 100000,
     trialDays: 0,
-    description: 'Solución completa para grandes corporaciones con mapas de calor, soporte en plataforma y recursos ilimitados.',
+    description: 'Solución completa para grandes corporaciones con ERP, auditoría regulatoria y gerente dedicado.',
     icon: 'Building2',
     enterprise: true,
-    features: [
-      'todo_business',
-      'mapas_calor', 'soporte_chat', 'api_keys',
-      'exportacion_profesional', 'auditoria_completa',
-      'diagnostico_sistema', 'ingesta_webhook',
-      'usuarios_ilimitados', 'permisos_ilimitados',
-    ],
+    features: ['firma_legal', 'dashboard_personalizado', 'soporte_247', 'mapas_calor', 'integracion_erp', 'auditoria_entes', 'gerente_cuenta', 'scada_avanzado', 'ia_avanzada', 'api_full'],
     featureLabels: {
-      todo_business: 'Todo lo incluido en plan Business',
+      firma_legal: 'Firma con validez legal',
+      dashboard_personalizado: 'Dashboard personalizable',
+      soporte_247: 'Soporte 24/7',
       mapas_calor: 'Mapas de calor de riesgo',
-      soporte_chat: 'Chat de soporte en plataforma',
-      api_keys: 'API completa + API Keys ilimitadas',
-      exportacion_profesional: 'Exportación PDF + Excel profesional',
-      auditoria_completa: 'Auditoría completa con trazabilidad',
-      diagnostico_sistema: 'Diagnóstico del sistema',
-      ingesta_webhook: 'Ingesta de sensores por Webhook',
-      usuarios_ilimitados: 'Usuarios ilimitados',
-      permisos_ilimitados: 'Permisos ilimitados',
+      integracion_erp: 'Integración ERP',
+      auditoria_entes: 'Auditoría para entes reguladores',
+      gerente_cuenta: 'Gerente de cuenta dedicado',
+      scada_avanzado: 'SCADA avanzado con ML',
+      ia_avanzada: 'IA predictiva avanzada',
+      api_full: 'API completa + Webhooks',
     },
   },
 }

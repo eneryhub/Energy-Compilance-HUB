@@ -166,6 +166,7 @@ function UserFormDialog({
     confirmPassword: '',
   })
   const [error, setError] = useState('')
+  const [showSalesModal, setShowSalesModal] = useState(false)
 
   const isEditing = !!editingUser
 
@@ -242,7 +243,9 @@ function UserFormDialog({
       onClose()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error del servidor'
-      if (message.includes('SUBSCRIPTION_LIMIT')) {
+      if (message.includes('SUBSCRIPTION_LIMIT_ENTERPRISE')) {
+        setShowSalesModal(true)
+      } else if (message.includes('SUBSCRIPTION_LIMIT')) {
         setError('Límite de usuarios alcanzado. Actualiza tu plan de suscripción.')
       } else if (message.includes('ya existe')) {
         setError('Ya existe un usuario con este email en la empresa.')
@@ -255,6 +258,7 @@ function UserFormDialog({
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
@@ -378,6 +382,47 @@ function UserFormDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {/* ===== Enterprise Sales Contact Modal ===== */}
+    <Dialog open={showSalesModal} onOpenChange={setShowSalesModal}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-amber-600">
+            <AlertTriangle className="w-5 h-5" />
+            Límite de Plan Alcanzado
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="p-4 rounded-lg bg-amber-50 border border-amber-200">
+            <p className="text-sm font-semibold text-amber-800">
+              Límite de plan alcanzado (500/500)
+            </p>
+            <p className="text-sm text-amber-700 mt-2">
+              Para ampliar su capacidad de usuarios, contacte con nuestro equipo de ventas en:
+            </p>
+            <a
+              href="mailto:ventas@energycompliancehub.com"
+              className="inline-flex items-center gap-1.5 mt-2 text-sm font-semibold text-amber-800 hover:text-amber-900 underline"
+            >
+              <Mail className="w-4 h-4" />
+              ventas@energycompliancehub.com
+            </a>
+          </div>
+          <p className="text-xs text-slate-500">
+            Nuestro equipo comercial le ayudará a encontrar la solución que mejor se adapte a las necesidades de su organización.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button
+            onClick={() => setShowSalesModal(false)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            Entendido
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }
 

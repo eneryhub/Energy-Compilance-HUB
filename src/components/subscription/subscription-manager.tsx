@@ -171,15 +171,7 @@ export default function SubscriptionManager() {
     const plan = data?.plans[planKey]
     if (!plan) return
 
-    // Enterprise always shows contact form
-    if (planKey === 'enterprise') {
-      setPendingPlanKey(planKey)
-      setPendingPlanName(plan.name)
-      setShowContactDialog(true)
-      return
-    }
-
-    // For paid plans, show confirmation dialog
+    // For all plans (including Enterprise now with real pricing), show confirmation dialog
     setPendingPlanKey(planKey)
     setPendingPlanName(plan.name)
     setPendingPlanPrice(plan.price)
@@ -455,15 +447,13 @@ export default function SubscriptionManager() {
                       ) : (
                         <>
                           {isEnterprise ? (
-                            <MessageSquare className="w-4 h-4" />
+                            <Crown className="w-4 h-4" />
                           ) : data.isDemoMode ? (
                             <Sparkles className="w-4 h-4" />
                           ) : (
                             <Banknote className="w-4 h-4" />
                           )}
-                          {isEnterprise
-                            ? 'Contactar Ventas'
-                            : data.isDemoMode
+                          {data.isDemoMode
                             ? 'Activar Demo'
                             : 'Suscribirme'}
                         </>

@@ -46,8 +46,9 @@ export async function POST(req: NextRequest) {
       data: {
         subscriptionPlan: 'enterprise',
         subscriptionStatus: 'ACTIVE',
-        maxUsers: 999999,
-        maxPermitsPerMonth: 999999,
+        billingCycle: 'monthly',
+        maxUsers: 500,
+        maxPermitsPerMonth: 100000,
         subscriptionExpiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
       },
     })
