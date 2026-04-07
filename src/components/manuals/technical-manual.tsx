@@ -234,7 +234,7 @@ export default function TechnicalManual() {
               </p>
               <div className="flex items-center gap-3 mt-3">
                 <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-[10px]">
-                  v2.0
+                  v3.0
                 </Badge>
                 <Badge className="bg-slate-700 text-slate-300 text-[10px]">
                   Arquitectura Next.js 15
@@ -253,7 +253,7 @@ export default function TechnicalManual() {
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
             { label: 'Métodos de Integración', value: '4', icon: <Wifi className="w-4 h-4" /> },
-            { label: 'Endpoints API', value: '6+', icon: <Code className="w-4 h-4" /> },
+            { label: 'Endpoints API', value: '10+', icon: <Code className="w-4 h-4" /> },
             { label: 'Tipos de Sensor', value: '4', icon: <Cpu className="w-4 h-4" /> },
             { label: 'Seguridad', value: 'JWT + API Key', icon: <Shield className="w-4 h-4" /> },
           ].map((stat) => (
@@ -380,6 +380,10 @@ export default function TechnicalManual() {
               ['API CRUD Sensores', '/api/sensors/*', 'GET/POST/PUT/DELETE — Gestión de sensores'],
               ['Panel Frontend', 'src/components/scada/telemetry-board.tsx', 'Tablero con polling, gráficos y LED'],
               ['Safety Gate', 'isSiteSafe() / isCompanySafe()', 'Bloquea aprobación cuando sensores = CRÍTICO'],
+              ['Geofence System', 'src/lib/gps.ts + /api/permits/[id]/approve', 'Verificación GPS Haversine para firma y aprobación/rechazo'],
+              ['API Keys CRUD', '/api/api-keys', 'POST/GET/DELETE — Creación, listado y revocación de credenciales API'],
+              ['Middleware Proxy', 'src/proxy.ts', 'Gateo de plan (starter/business/enterprise) para endpoints protegidos'],
+              ['Service Worker', 'public/sw.js', 'Cache offline con estrategias networkOnlyWithLastCache + staleWhileRevalidate'],
             ]}
           />
 
@@ -551,7 +555,7 @@ setInterval(async () => {
 │               │                          │   PC Industrial)  │
 │  • Presión    │                          └────────┬──────────┘
 │  • Temp.      │                                   │
-│  • Gas LEL    │                                   │ HTTP POST
+│  • Gas LEL    │                                   HTTP POST
 │  • Voltaje    │                                   ▼
 └──────────────┘                          ┌───────────────────┐
                                            │  API Ingest       │
@@ -650,7 +654,7 @@ if __name__ == "__main__":
         print("Gateway detenido.")`} />
 
           <InfoBox type="info">
-            Para <strong>Modbus RTU</strong> (serial RS-485), reemplace <code className="font-mono text-xs">ModbusTcpClient</code> por <code className="font-mono text-xs">ModbusSerialClient</code> con los parámetros de puerto serial (<code className="font-mono text-xs">port='/dev/ttyUSB0'</code>, <code className="font-mono text-xs">baudrate=9600</code>).
+            Para <strong>Modbus RTU</strong> (serial RS-485), reemplace <code className="font-mono text-xs">ModbusTcpClient</code> por <code className="font-mono text-xs">ModbusSerialClient</code> con los parámetros de puerto serial (<code className="font-mono text-xs">port=&apos;/dev/ttyUSB0&apos;</code>, <code className="font-mono text-xs">baudrate=9600</code>).
           </InfoBox>
 
           <SubTitle>2.3 MQTT (Vía Message Broker)</SubTitle>
@@ -898,7 +902,7 @@ if __name__ == "__main__":
           badge="REST"
         >
           <Paragraph>
-            Todos los endpoints de la API REST siguen el patrón <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">/api/sensors/*</code> y requieren autenticación JWT. Los endpoints de ingest externos additionally aceptan API Keys vía header.
+            Todos los endpoints de la API REST siguen el patrón <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">/api/sensors/*</code> y requieren autenticación JWT. Los endpoints de ingest externos adicionalmente aceptan API Keys vía header.
           </Paragraph>
 
           <InfoBox type="info">
@@ -1157,6 +1161,177 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
   "demoMode": false,
   "message": "Modo demo desactivado. Se esperan datos reales."
 }`} />
+
+          {/* ── API Keys Endpoints (NEW in v3.0) ── */}
+          <SubTitle>3.x API Keys — Gestión de Credenciales</SubTitle>
+          <Paragraph>
+            Endpoints dedicados para la creación, listado y revocación de API Keys. Las API Keys son la forma recomendada de autenticar integraciones de sensores y gateways externos de forma permanente.
+          </Paragraph>
+
+          <SubTitle>POST /api/api-keys — Crear Nueva Credencial API</SubTitle>
+          <Paragraph>
+            Genera una nueva API Key para la compañía del usuario autenticado. La clave completa solo se muestra una vez al momento de la creación.
+          </Paragraph>
+
+          <CodeBlock language="Request — POST /api/api-keys" code={`POST /api/api-keys HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+{
+  "name": "Gateway Planta Norte",
+  "permissions": "write",
+  "expiresInDays": 90
+}`} />
+
+          <SpecTable
+            headers={['Parámetro', 'Tipo', 'Requerido', 'Descripción']}
+            rows={[
+              ['name', 'string', 'Sí', 'Nombre descriptivo para la clave'],
+              ['permissions', 'string', 'No', 'Nivel: "read", "write", o "admin" (default: "write")'],
+              ['expiresInDays', 'number', 'No', 'Días hasta expiración (null = sin expiración)'],
+            ]}
+          />
+
+          <CodeBlock language="Response — 201 Created" code={`{
+  "success": true,
+  "id": "clkey_abc123...",
+  "name": "Gateway Planta Norte",
+  "prefix": "ech_live_a1b2c3d4",
+  "key": "ech_live_a1b2c3d4e5f6789012345678901234ab",
+  "permissions": "write",
+  "expiresAt": "2025-04-15T00:00:00.000Z",
+  "createdAt": "2025-01-15T14:30:00.000Z"
+}`} />
+
+          <InfoBox type="warning">
+            La clave completa (<code className="font-mono text-xs">key</code>) solo se muestra en la respuesta de creación. En futuras consultas (GET), solo se mostrará el <code className="font-mono text-xs">prefix</code>. Guarde la clave en un lugar seguro.
+          </InfoBox>
+
+          <SubTitle>GET /api/api-keys — Listar Credenciales Activas</SubTitle>
+          <Paragraph>
+            Retorna todas las API Keys activas (no expiradas y no revocadas) de la compañía del usuario.
+          </Paragraph>
+
+          <CodeBlock language="Response — 200 OK" code={`{
+  "success": true,
+  "keys": [
+    {
+      "id": "clkey_abc123...",
+      "name": "Gateway Planta Norte",
+      "prefix": "ech_live_a1b2c3d4",
+      "permissions": "write",
+      "expiresAt": "2025-04-15T00:00:00.000Z",
+      "lastUsedAt": "2025-01-15T12:30:00.000Z",
+      "createdAt": "2025-01-15T14:30:00.000Z"
+    },
+    {
+      "id": "clkey_def456...",
+      "name": "Sensor Gas Zona A",
+      "prefix": "ech_live_x9y8z7w6",
+      "permissions": "read",
+      "expiresAt": null,
+      "lastUsedAt": null,
+      "createdAt": "2025-01-10T09:00:00.000Z"
+    }
+  ]
+}`} />
+
+          <SubTitle>DELETE /api/api-keys?id={keyId} — Revocar Credencial</SubTitle>
+          <Paragraph>
+            Revoca permanentemente una API Key. Las peticiones futuras con esa clave devolverán 401.
+          </Paragraph>
+
+          <CodeBlock language="Request — DELETE /api/api-keys" code={`DELETE /api/api-keys?id=clkey_abc123... HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`} />
+
+          <CodeBlock language="Response — 200 OK" code={`{
+  "success": true,
+  "message": "API Key revocada correctamente",
+  "revokedKeyId": "clkey_abc123..."
+}`} />
+
+          <CodeBlock language="Response — 404 Not Found" code={`{
+  "success": false,
+  "error": "API Key no encontrada o ya revocada"
+}`} />
+
+          {/* ── Geofence Verification (NEW in v3.0) ── */}
+          <SubTitle>3.x Geofence — Verificación de Ubicación GPS</SubTitle>
+          <Paragraph>
+            Los endpoints de aprobación y rechazo de permisos (<code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">POST /api/permits/[id]/approve</code>) verifican automáticamente la ubicación GPS del supervisor contra el radio definido en la WorkLocation del permiso usando la fórmula de <strong>distancia Haversine</strong>.
+          </Paragraph>
+
+          <CodeBlock language="typescript — Algoritmo Haversine (src/lib/gps.ts)" code={`/**
+ * Calcula la distancia en metros entre dos coordenadas GPS
+ * usando la fórmula de Haversine.
+ */
+function calculateDistance(
+  lat1: number, lon1: number,
+  lat2: number, lon2: number
+): number {
+  const R = 6371000 // Radio de la Tierra en metros
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat/2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) ** 2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+  return R * c
+}
+
+/**
+ * Verifica si un punto GPS está dentro del radio de una geocerca.
+ * Retorna { isInside, distanceMeters, effectiveRadius }
+ */
+function checkGeofence(
+  pointLat: number, pointLon: number,
+  centerLat: number, centerLon: number,
+  radiusMeters: number
+) {
+  const distance = calculateDistance(pointLat, pointLon, centerLat, centerLon)
+  return {
+    isInside: distance <= radiusMeters,
+    distanceMeters: Math.round(distance),
+    effectiveRadius: radiusMeters
+  }
+}`} />
+
+          <SpecTable
+            headers={['Campo del Request', 'Tipo', 'Descripción']}
+            rows={[
+              ['gpsLatitude', 'number', 'Latitud del supervisor al momento de la firma'],
+              ['gpsLongitude', 'number', 'Longitud del supervisor al momento de la firma'],
+              ['gpsAccuracy', 'number', 'Precisión GPS en metros (info para auditoría)'],
+              ['approveJustification', 'string', 'Justificación cuando fuera de geocerca (mín. 10 chars)'],
+              ['rejectGeofenceJustification', 'string', 'Justificación de rechazo fuera de geocerca (mín. 10 chars)'],
+            ]}
+          />
+
+          <CodeBlock language="Response — Aprobación con geofence OK" code={`{
+  "success": true,
+  "permit": { ... },
+  "geofence": {
+    "isInside": true,
+    "distanceMeters": 42,
+    "effectiveRadius": 100
+  }
+}`} />
+
+          <CodeBlock language="Response — 403 Fuera de geocerca (requiere justificación)" code={`{
+  "success": false,
+  "error": "GEOFENCE_JUSTIFICATION_REQUIRED",
+  "message": "El supervisor está fuera de la geocerca. Se requiere justificación.",
+  "geofence": {
+    "isInside": false,
+    "distanceMeters": 187,
+    "effectiveRadius": 100
+  }
+}`} />
+
+          <InfoBox type="tip">
+            El radio efectivo se calcula como <code className="font-mono text-xs">WorkLocation.radius || permit.workRadius || 100</code> metros. Si la WorkLocation no tiene radio configurado, se usa el del permiso, y si tampoco tiene, se default a 100m.
+          </InfoBox>
         </Section>
 
         {/* ============================================================
@@ -1364,19 +1539,69 @@ curl -s https://su-plataforma.com/api/sensors/telemetry \\
             Al desactivar el modo demo, los sensores que siguen marcados como <code className="font-mono text-xs">isSimulated: true</code> dejarán de actualizarse automáticamente. Asegúrese de que todos sus sensores físicos estén configurados correctamente antes de desactivar la simulación.
           </InfoBox>
 
-          <SubTitle>Importación Masiva de Sensores</SubTitle>
+          <SubTitle>5.4 Importación Masiva de Sensores</SubTitle>
           <Paragraph>
-            Si necesita registrar muchos sensores a la vez, puede usar la función de <strong>importación masiva</strong> del módulo SCADA:
+            Para registrar grandes volúmenes de sensores de forma eficiente, el sistema ofrece un endpoint de importación masiva vía <strong>CSV o XLSX</strong>. El sistema soporta alias de columnas en español e inglés para facilitar la migración desde diferentes fuentes.
+          </Paragraph>
+
+          <CodeBlock language="Request — POST /api/v1/import/sensors" code={`POST /api/v1/import/sensors HTTP/1.1
+Content-Type: multipart/form-data
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="sensores.csv"
+Content-Type: text/csv
+
+nombre,tipo,ubicacion,unidad,critico,advertencia
+Presión Compresor 1,PRESION,Planta Norte,psi,120,95
+Temp. Sala Control,TEMPERATURA,Planta Norte,°C,90,78
+Gas Zona A,GAS,Planta Sur,%LEL,5.0,3.5
+Voltaje Principal,VOLTAJE,Planta Norte,V,250,240
+--boundary--`} />
+
+          <SubTitle>Alias de Columnas Soportados</SubTitle>
+          <SpecTable
+            headers={['Campo', 'Alias Soportados', 'Requerido', 'Default']}
+            rows={[
+              ['Nombre', 'name / nombre / sensor', 'Sí', '—'],
+              ['Tipo', 'type / tipo', 'Sí', 'PRESION'],
+              ['Ubicación', 'location / ubicación', 'No', 'Sin ubicación'],
+              ['Unidad', 'unit / unidad', 'No', 'Según tipo'],
+              ['Umbral Crítico', 'threshold_critical / critico', 'No', 'Según perfil'],
+              ['Umbral Advertencia', 'threshold_warning / advertencia', 'No', '0'],
+            ]}
+          />
+
+          <SubTitle>Lógica Upsert</SubTitle>
+          <Paragraph>
+            La importación utiliza una estrategia <strong>upsert</strong> basada en <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">nombre + companyId</code>:
           </Paragraph>
           <StepList
             steps={[
-              'Navegue a SCADA → Tab "Importar".',
-              'Descargue la plantilla XLSX con los encabezados correctos.',
-              'Complete el archivo con los datos de sus sensores (nombre, tipo, ubicación, umbrales).',
-              'Suba el archivo y revise la vista previa con validación por fila.',
-              'Confirme la importación. Se crean/actualizan los sensores en lote.',
+              'Si no existe un sensor con ese nombre en la misma compañía → se CREA.',
+              'Si ya existe un sensor con ese nombre en la compañía → se ACTUALIZA (umbrales, tipo, ubicación).',
+              'Filas con errores de validación se SKIPEAN individualmente (no falla toda la importación).',
+              'Se procesan máximo 500 filas por petición.',
             ]}
           />
+
+          <CodeBlock language="Response — 200 OK" code={`{
+  "success": true,
+  "created": 8,
+  "updated": 3,
+  "skipped": 0,
+  "errors": [
+    {
+      "row": 12,
+      "nombre": "Sensor Invalido",
+      "error": "Tipo no reconocido: RADAR. Tipos válidos: PRESION, TEMPERATURA, GAS, VOLTAJE"
+    }
+  ]
+}`} />
+
+          <InfoBox type="tip">
+            Puede descargar una <strong>plantilla XLSX de ejemplo</strong> directamente desde la UI (SCADA → Importar → "Descargar plantilla"). La plantilla incluye 4 filas de ejemplo con los encabezados correctos.
+          </InfoBox>
         </Section>
 
         {/* ============================================================
@@ -1581,7 +1806,54 @@ async function isCompanySafe(companyId: string): Promise<SiteSafetyCheck> {
             ]}
           />
 
-          <SubTitle>7.4 Mejores Prácticas de Seguridad</SubTitle>
+          <SubTitle>7.4 API Keys Management</SubTitle>
+          <Paragraph>
+            Las API Keys funcionan como un método de autenticación alternativo diseñado para integraciones automatizadas. Se pueden usar vía <strong>header HTTP</strong> o <strong>query parameter</strong>:
+          </Paragraph>
+          <CodeBlock language="http — Dos formas de enviar una API Key" code={`# Forma 1: Header HTTP (recomendado para producción)
+X-API-Key: ech_live_a1b2c3d4e5f6789012345678901234ab
+
+# Forma 2: Query parameter (útil para pruebas rápidas)
+GET /api/sensors/telemetry?X-API-Key=ech_live_a1b2c3d4...`} />
+
+          <SubTitle>Creación de API Key</SubTitle>
+          <SpecTable
+            headers={['Parámetro', 'Tipo', 'Descripción']}
+            rows={[
+              ['name', 'string', 'Nombre descriptivo identificador'],
+              ['permissions', 'string', '"read" (lectura), "write" (lectura+escritura), "admin" (total)'],
+              ['expiresInDays', 'number|null', 'Días hasta expiración; null = sin expiración'],
+            ]}
+          />
+
+          <SubTitle>Formato de la Clave</SubTitle>
+          <Paragraph>
+            Cada API Key tiene un formato con prefijo identificativo:
+          </Paragraph>
+          <CodeBlock language="text — Formato de API Key" code={`Prefijo visible:  ech_live_a1b2c3d4
+Clave completa:  ech_live_a1b2c3d4e5f6789012345678901234ab
+                ↑ prefijo    ↑ 32 caracteres aleatorios (hex)
+
+- El prefijo se muestra en listados GET /api/api-keys
+- La clave COMPLETA solo se muestra UNA VEZ al crearla
+- El servidor almacena solo SHA-256(key), nunca la clave en texto plano`} />
+
+          <SubTitle>Flujo de Revocación</SubTitle>
+          <StepList
+            steps={[
+              'El administrador envía DELETE /api/api-keys?id={keyId}.',
+              'El servidor marca la clave como revocada en la base de datos.',
+              'Peticiones futuras con esa clave devuelven 401 Unauthorized.',
+              'Las operaciones en curso NO se interrumpen (sin sesión stateful).',
+            ]}
+          />
+
+          <SubTitle>Auto-Expiración</SubTitle>
+          <Paragraph>
+            Si una API Key fue creada con <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">expiresInDays</code>, el middleware de autenticación verifica la fecha de expiración en cada petición. Las claves expiradas se rechazan automáticamente con un 401 y un mensaje descriptivo. Las claves con <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">expiresInDays: null</code> no expiran.
+          </Paragraph>
+
+          <SubTitle>7.5 Mejores Prácticas de Seguridad</SubTitle>
           <StepList
             steps={[
               'Use HTTPS en todas las comunicaciones (nunca HTTP en producción).',
@@ -1606,7 +1878,7 @@ SCADA_API_KEY_SECONDARY=ech_live_x9y8z7w6v5u4...
 # ⚠ NUNCA commitee este archivo al control de versiones
 # Añada .env a .gitignore`} />
 
-          <SubTitle>7.5 Rate Limiting</SubTitle>
+          <SubTitle>7.6 Rate Limiting</SubTitle>
           <Paragraph>
             Para proteger el servidor contra sobrecarga, se recomienda implementar rate limiting en los endpoints de ingest:
           </Paragraph>
@@ -1706,7 +1978,80 @@ curl -s https://su-plataforma.com/api/sensors/site-safe \\
   -H "Authorization: Bearer $TOKEN" | jq '.isSafe'
 # Esperado: true`} />
 
-          <SubTitle>8.4 Prueba de End-to-End Completa</SubTitle>
+          <SubTitle>8.4 Geofence Testing</SubTitle>
+          <Paragraph>
+            Los endpoints de aprobación y rechazo de permisos verifican la ubicación GPS del supervisor contra el radio de la WorkLocation. A continuación se detallan los procedimientos de prueba.
+          </Paragraph>
+
+          <SubTitle>Prueba de Geofence en Aprobación</SubTitle>
+          <StepList
+            steps={[
+              'Cree un permiso de trabajo con WorkLocation que tenga coordenadas GPS y radio definido (ej: radio 100m).',
+              'Firme el permiso con el técnico desde un dispositivo GPS.',
+              'En el Panel de Aprobaciones, el supervisor abra el permiso y firme.',
+              'El sistema calculará la distancia Haversine entre la ubicación GPS del supervisor y el centro de la WorkLocation.',
+              'Si el supervisor está DENTRO del radio (distance &lt;= radius): la aprobación se procesa normalmente.',
+              'Si el supervisor está FUERA del radio: aparece un diálogo de justificación (mínimo 10 caracteres).',
+              'Complete la justificación y confirme la aprobación. El motivo se almacena en la auditoría.',
+            ]}
+          />
+
+          <CodeBlock language="bash — Aprobación dentro de geocerca" code={`# Simular aprobación con GPS dentro del radio
+curl -X POST /api/permits/PERMIT_ID/approve \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "signature": "data:image/png;base64,...",
+    "gpsLatitude": 4.7110,
+    "gpsLongitude": -74.0721,
+    "gpsAccuracy": 12
+  }'
+# Respuesta esperada:
+# { success: true, geofence: { isInside: true, distanceMeters: 42 } }`} />
+
+          <CodeBlock language="bash — Aprobación fuera de geocerca (sin justificación)" code={`# Intentar aprobar desde fuera de la geocerca SIN justificación
+curl -X POST /api/permits/PERMIT_ID/approve \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "signature": "data:image/png;base64,...",
+    "gpsLatitude": 4.7200,
+    "gpsLongitude": -74.0800,
+    "gpsAccuracy": 15
+  }'
+# Respuesta esperada: 403
+# { error: "GEOFENCE_JUSTIFICATION_REQUIRED",
+#   geofence: { isInside: false, distanceMeters: 1234 } }`} />
+
+          <SubTitle>Prueba de Geofence en Rechazo</SubTitle>
+          <StepList
+            steps={[
+              'Seleccione un permiso pendiente en el Panel de Aprobaciones.',
+              'Haga clic en "Rechazar" mientras está FUERA de la geocerca del permiso.',
+              'El sistema detecta la ubicación GPS y muestra un campo de justificación adicional.',
+              'Escriba una justificación de al menos 10 caracteres explicando por qué rechaza fuera de la geocerca.',
+              'Confirme el rechazo. La justificación se prepende al motivo de rechazo almacenado.',
+            ]}
+          />
+
+          <SubTitle>Prueba del Diálogo "Fuera de Rango"</SubTitle>
+          <StepList
+            steps={[
+              'Abra las herramientas de desarrollador del navegador (F12) → pestaña "Sensors" o use una extensión de simulación GPS.',
+              'Establezca una ubicación GPS simulada que esté fuera del radio de la WorkLocation.',
+              'Firme el permiso (SignaturePad) — el callback onSign calculará la geofence automáticamente.',
+              'Verifique que aparezca el indicador ámbar "Fuera de Geocerca" bajo el pad de firma.',
+              'Verifique que al hacer "Aprobar" se abra el diálogo de justificación.',
+              'Ingrese menos de 10 caracteres y confirme — debe mostrar error de validación.',
+              'Ingrese 10+ caracteres y confirme — la aprobación debe procesarse con éxito.',
+            ]}
+          />
+
+          <InfoBox type="tip">
+            <strong>Consejo de simulación GPS:</strong> En Chrome, abra DevTools → tres puntos → More tools → Sensors → Location. Establezca una coordenada lejos del lugar de trabajo. En dispositivos móviles reales, simplemente camine fuera del radio definido en la WorkLocation.
+          </InfoBox>
+
+          <SubTitle>8.5 Prueba de End-to-End Completa</SubTitle>
           <Paragraph>
             Ejecute esta checklist antes de pasar a producción:
           </Paragraph>
@@ -1717,7 +2062,7 @@ curl -s https://su-plataforma.com/api/sensors/site-safe \\
               'Ingesta de valor ≥ thresholdWarning → status "WARNING".',
               'Ingesta de valor ≥ thresholdCritical → status "CRITICO".',
               'Safety Gate se activa cuando cualquier sensor = CRITICO.',
-              'Safety Gate se desactiva cuando todos los sensores < CRITICO.',
+              'Safety Gate se desactiva cuando todos los sensores &lt; CRITICO.',
               'Telemetría GET retorna el sensor con su último valor.',
               'Historial de lecturas (GET /readings) muestra las lecturas enviadas.',
               'Toggle demo ON/OFF persiste correctamente en la base de datos.',
@@ -1732,7 +2077,7 @@ curl -s https://su-plataforma.com/api/sensors/site-safe \\
             ))}
           </div>
 
-          <SubTitle>8.5 Herramientas de Diagnóstico</SubTitle>
+          <SubTitle>8.6 Herramientas de Diagnóstico</SubTitle>
           <CodeBlock language="bash — Script de diagnóstico completo" code={`#!/bin/bash
 # diag_scada.sh — Diagnóstico de integración SCADA
 
@@ -1914,6 +2259,91 @@ mosquitto_sub -h mqtt.su-servidor.com -p 8883 \\
     └── SÍ → ¿Los estados son correctos?
         ├── NO → Revisar umbrales (warning < critical)
         └── SÍ → ✓ Integración exitosa`} />
+
+          {/* ── NEW in v3.0 ── */}
+          <SubTitle>9.9 Modo Demo nunca se desactiva</SubTitle>
+          <SpecTable
+            headers={['Síntoma', 'Causa Raíz', 'Solución']}
+            rows={[
+              ['Toggle muestra "desactivado" pero vuelve a ON', 'Argumentos invertidos en setDemoMode()', 'Verificar que setDemoMode(companyId, enabled) tenga el orden correcto: companyId primero, enabled después'],
+              ['El toggle envía POST pero no persiste', 'setDemoMode() falla silenciosamente (catch devuelve valor optimista)', 'Revisar logs del servidor; el engine.ts debe re-lanzar errores en lugar de atraparlos'],
+              ['Se desactiva pero el polling lo reactiva', 'Condición de carrera entre polling y toggle (v&lt;2.0)', 'Actualizar frontend: loadTelemetry() NO debe tocar demoMode. Solo loadDemoMode() al montar'],
+            ]}
+          />
+          <CodeBlock language="typescript — Verificación correcta del orden de argumentos" code={`// ❌ INCORRECTO — argumentos invertidos
+setDemoMode(enabled, companyId)  // Esto escribiría enabled como companyId
+
+// ✓ CORRECTO — companyId primero, enabled después
+setDemoMode(companyId, false)     // Desactiva modo demo para esta compañía`} />
+
+          <InfoBox type="warning">
+            Si el problema persiste, verifique que el archivo <code className="font-mono text-xs">src/lib/demo-mode-cache.ts</code> exista. En versiones anteriores este archivo faltaba, causando que <code className="font-mono text-xs">isDemoMode()</code> siempre retornara <code className="font-mono text-xs">true</code>.
+          </InfoBox>
+
+          <SubTitle>9.10 Geofence: Error GEOFENCE_JUSTIFICATION_REQUIRED</SubTitle>
+          <Paragraph>
+            Cuando un supervisor intenta aprobar o rechazar un permiso fuera del radio de la geocerca definida en la WorkLocation, el sistema retorna un error 403 con código <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">GEOFENCE_JUSTIFICATION_REQUIRED</code>.
+          </Paragraph>
+          <SpecTable
+            headers={['Campo', 'Detalle']}
+            rows={[
+              ['Código HTTP', '403 Forbidden'],
+              ['Error code', 'GEOFENCE_JUSTIFICATION_REQUIRED'],
+              ['Cuándo ocurre', 'Al aprobar/rechazar un permiso cuando la distancia GPS del supervisor al centro de WorkLocation es mayor al radio configurado'],
+              ['Requisito', 'Justificación de mínimo 10 caracteres'],
+              ['Cómo resolver (Aprobación)', 'Incluir el campo "approveJustification" en el request con al menos 10 caracteres'],
+              ['Cómo resolver (Rechazo)', 'Incluir el campo "rejectGeofenceJustification" en el request con al menos 10 caracteres'],
+            ]}
+          />
+          <CodeBlock language="json — Request con justificación de geofence" code={`{
+  "signature": "data:image/png;base64,...",
+  "gpsLatitude": 4.7200,
+  "gpsLongitude": -74.0800,
+  "gpsAccuracy": 15,
+  "approveJustification": "Emergencia en planta — autorización remota necesaria por falla de traslado"
+}`} />
+
+          <InfoBox type="info">
+            El radio efectivo se calcula como: <code className="font-mono text-xs">WorkLocation.radius</code> (primero), <code className="font-mono text-xs">permit.workRadius</code> (segundo), o <code className="font-mono text-xs">100 metros</code> (default). La distancia se calcula con la fórmula Haversine implementada en <code className="font-mono text-xs">src/lib/gps.ts</code>.
+          </InfoBox>
+
+          <SubTitle>9.11 Service Worker cache serving stale data</SubTitle>
+          <Paragraph>
+            Si la aplicación muestra datos antiguos o código JavaScript desactualizado después de un despliegue, es probable que el Service Worker esté sirviendo versiones en caché.
+          </Paragraph>
+          <SpecTable
+            headers={['Síntoma', 'Causa', 'Solución']}
+            rows={[
+              ['Cambios en la UI no se reflejan', 'Service Worker con estrategia Cache First para scripts', 'Actualizar a sw.js v3+ que usa Network First para scripts'],
+              ['Endpoint de API retorna datos antiguos', 'Service Worker cacheando respuestas GET', 'Limpiar caché del navegador o usar Network First'],
+              ['El toggle de demo no refleja cambios', 'JS bundle cacheado en Service Worker', 'Forzar actualización: DevTools → Application → Service Workers → Update'],
+            ]}
+          />
+          <CodeBlock language="javascript — Estrategias de caché en sw.js (v3)" code={`// Versionado de caché — actualizar para forzar clear en todos los clientes
+const CACHE_VERSION = 'ech-v3'
+
+// Estrategia: Network First para scripts (siempre latest JS)
+// self.addEventListener('fetch', (event) => {
+//   if (req.url.includes('/_next/static/') || req.url.includes('/api/')) {
+//     event.respondWith(networkFirstWithLastCache(req))
+//   }
+// })
+
+// Estrategia: Stale While Revalidate para assets estáticos
+// self.addEventListener('fetch', (event) => {
+//   if (req.url.match(/\\.(png|jpg|svg|woff2)$/)) {
+//     event.respondWith(staleWhileRevalidate(req))
+//   }
+// })
+
+// Para forzar limpieza manual:
+// 1. Abrir DevTools (F12)
+// 2. Application → Storage → Clear site data
+// 3. O: DevTools → Application → Service Workers → Unregister + Reload`} />
+
+          <InfoBox type="tip">
+            <strong>Cache Busting:</strong> Cada vez que se actualiza el Service Worker, se debe incrementar <code className="font-mono text-xs">CACHE_VERSION</code> en <code className="font-mono text-xs">public/sw.js</code>. Esto fuerza a todos los clientes a descargar los nuevos recursos. La versión actual es <code className="font-mono text-xs">ech-v3</code>.
+          </InfoBox>
         </Section>
       </div>
 
@@ -1925,7 +2355,7 @@ mosquitto_sub -h mqtt.su-servidor.com -p 8883 \\
             <span className="text-sm font-semibold text-slate-700">Energy-Compliance Hub — Manual Técnico SCADA</span>
           </div>
           <p className="text-xs text-slate-400">
-            Documento de referencia para integración de sensores físicos • Versión 2.0
+            Documento de referencia para integración de sensores físicos • Versión 3.0
           </p>
           <div className="flex items-center justify-center gap-4 mt-3">
             <Badge variant="outline" className="text-[10px] text-slate-400 border-slate-200">

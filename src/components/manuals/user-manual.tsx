@@ -320,7 +320,7 @@ export default function UserManual() {
             </div>
             <div>
               <Badge className="bg-white/20 text-white border-white/30 text-xs">
-                Manual de Usuario v2.0
+                Manual de Usuario v3.0
               </Badge>
             </div>
           </div>
@@ -450,6 +450,10 @@ export default function UserManual() {
                       <Badge className="bg-slate-100 text-slate-700 text-[10px] mt-0.5">TECHNICIAN</Badge>
                       <span>Técnicos que monitorean sensores SCADA</span>
                     </li>
+                    <li className="flex items-start gap-2">
+                      <Badge className="bg-purple-100 text-purple-700 text-[10px] mt-0.5">SUPER_ADMIN</Badge>
+                      <span>Gestiona múltiples compañías, activa planes Enterprise</span>
+                    </li>
                   </ul>
                 </SubSection>
 
@@ -498,33 +502,43 @@ export default function UserManual() {
                           <th className="p-2 text-center font-semibold text-slate-700 border border-slate-200">SUPERVISOR</th>
                           <th className="p-2 text-center font-semibold text-slate-700 border border-slate-200">MANAGER</th>
                           <th className="p-2 text-center font-semibold text-slate-700 border border-slate-200">TECHNICIAN</th>
+                          <th className="p-2 text-center font-semibold text-purple-700 border border-purple-200 bg-purple-50">SUPER_ADMIN</th>
                         </tr>
                       </thead>
                       <tbody>
                         {[
-                          ['Dashboard', '✅', '✅', '✅', '✅'],
-                          ['Permisos', '✅', '✅', '✅', '✅'],
-                          ['Documentos HSE', '✅', '✅', '✅', '✅'],
-                          ['Aprobaciones', '✅', '✅', '✅', '❌'],
-                          ['Tipos de Riesgo', '✅', '✅', '❌', '❌'],
-                          ['SCADA', '✅', '✅', '✅', '✅'],
-                          ['IA Predictiva', '✅', '✅', '✅', '❌'],
-                          ['Reportes', '✅', '✅', '✅', '❌'],
-                          ['Suscripción', '✅', '❌', '❌', '❌'],
-                          ['Auditoría', '✅', '❌', '❌', '❌'],
-                          ['Usuarios', '✅', '❌', '❌', '❌'],
-                          ['Plataforma', '✅', '❌', '❌', '❌'],
+                          ['Dashboard', '✅', '✅', '✅', '✅', '✅'],
+                          ['Permisos', '✅', '✅', '✅', '✅', '✅'],
+                          ['Documentos HSE', '✅', '✅', '✅', '✅', '✅'],
+                          ['Aprobaciones', '✅', '✅', '✅', '❌', '✅'],
+                          ['Tipos de Riesgo', '✅', '✅', '❌', '❌', '✅'],
+                          ['SCADA', '✅', '✅', '✅', '✅', '✅'],
+                          ['IA Predictiva', '✅', '✅', '✅', '❌', '✅'],
+                          ['Reportes', '✅', '✅', '✅', '❌', '✅'],
+                          ['Suscripción', '✅', '❌', '❌', '❌', '✅'],
+                          ['Auditoría', '✅', '❌', '❌', '❌', '✅'],
+                          ['Usuarios', '✅', '❌', '❌', '❌', '✅'],
+                          ['Plataforma', '✅', '❌', '❌', '❌', '✅'],
+                          ['Centro de Mando', '❌', '❌', '❌', '❌', '✅'],
                         ].map(([module, ...roles]) => (
                           <tr key={module as string}>
                             <td className="p-2 border border-slate-200 font-medium text-slate-700">{module as string}</td>
                             {roles.map((r, i) => (
-                              <td key={i} className="p-2 border border-slate-200 text-center">{r}</td>
+                              <td key={i} className={cn(
+                                'p-2 border text-center',
+                                i === 4 ? 'border-purple-200' : 'border-slate-200'
+                              )}>{r}</td>
                             ))}
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+                  <InfoBox>
+                    <strong>SUPER_ADMIN:</strong> Este rol tiene acceso a todos los módulos de la plataforma incluyendo
+                    el &quot;Centro de Mando&quot;, un panel especial para gestionar múltiples compañías, activar planes
+                    Enterprise y revisar auditorías globales.
+                  </InfoBox>
                 </SubSection>
               </div>
             </CollapsibleContent>
@@ -565,7 +579,7 @@ export default function UserManual() {
                       { risk: 'ALTURA', desc: 'Trabajos en alturas superiores a 1.8 metros. Incluye andamios, techos y estructuras elevadas.', color: 'bg-red-100 text-red-700 border-red-200' },
                       { risk: 'ELECTRICO', desc: 'Trabajos con energía eléctrica. Requiere bloqueo/etiquetado (LOTO) y verificación de ausencia de voltaje.', color: 'bg-amber-100 text-amber-700 border-amber-200' },
                       { risk: 'CONFINADO', desc: 'Espacios confinados como tanques, túneles o ductos. Requiere ventilación y monitoreo de gases continuo.', color: 'bg-purple-100 text-purple-700 border-purple-200' },
-                      { risk: 'CALIENTE', desc: 'Trabajos de soldadura, corte o cualquier actividad que genere chispas. Requiere permiso de fuego.', color: 'bg-orange-100 text-orange-700 border-orange-200' },
+                      { risk: 'CALIENTE', desc: 'Trabajos de soldadura, corte o cualquier actividad que genera chispas. Requiere permiso de fuego.', color: 'bg-orange-100 text-orange-700 border-orange-200' },
                     ].map((r) => (
                       <div key={r.risk} className={cn('p-3 rounded-lg border', r.color)}>
                         <Badge className="text-xs font-bold">{r.risk}</Badge>
@@ -652,14 +666,48 @@ export default function UserManual() {
                       description: 'El sistema verifica que no haya documentos críticos vencidos. Si los hay, se muestra "OPERACIONES BLOQUEADAS" y los botones quedan deshabilitados.',
                     },
                     {
+                      title: 'Verificar Geofence (Ubicación GPS)',
+                      description: 'Al firmar, el sistema calcula la distancia entre su GPS actual y la ubicación del trabajo. Si está dentro del radio permitido, se muestra "Dentro de la geocerca" en verde. Si está fuera, se muestra "Fuera de Geocerca" en ámbar con la distancia al sitio.',
+                    },
+                    {
                       title: 'Firmar y aprobar',
                       description: 'Si todo está en orden, firme digitalmente y haga clic en "Aprobar". El permiso cambia a estado APROBADO y el solicitante es notificado.',
+                    },
+                    {
+                      title: 'Justificación si está fuera de geocerca',
+                      description: 'Si el sistema detecta que está fuera del radio de la ubicación, se abre un diálogo de justificación. Debe escribir una justificación de mínimo 10 caracteres explicando por qué firma fuera del área. El sistema permite la aprobación con justificación (la seguridad es acción obligatoria).',
                     },
                   ]} />
                   <WarningBox>
                     <strong>Importante:</strong> Las operaciones se bloquean automáticamente cuando hay sensores SCADA
                     en estado CRÍTICO o documentos críticos vencidos. Debe resolver ambas condiciones antes de aprobar permisos.
                   </WarningBox>
+                </SubSection>
+
+                <SubSection title="Rechazar permiso con Geofence">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    El proceso de <strong>rechazo</strong> también incluye la verificación de geofence para garantizar la
+                    trazabilidad del supervisor. Al intentar rechazar un permiso, el sistema verifica la ubicación GPS del
+                    supervisor de la misma forma que en la aprobación:
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-sm text-slate-600">
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 mt-1 flex-shrink-0" />
+                      <span><strong>Dentro de la geocerca:</strong> Se muestra &quot;Dentro de la geocerca&quot; en verde y el rechazo procede normalmente.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-amber-500 mt-1 flex-shrink-0" />
+                      <span><strong>Fuera de la geocerca:</strong> Se muestra &quot;Fuera de Geocerca&quot; en ámbar con la distancia. Se abre un diálogo de justificación donde debe escribir el motivo (mínimo 10 caracteres). El rechazo es una acción de seguridad y siempre se permite con justificación.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-red-500 mt-1 flex-shrink-0" />
+                      <span><strong>Sin justificación:</strong> Si está fuera de geocerca y no proporciona una justificación válida (mínimo 10 caracteres), el sistema no permite el rechazo y muestra el error <code className="text-xs bg-red-50 px-1 rounded">GEOFENCE_JUSTIFICATION_REQUIRED</code>.</span>
+                    </li>
+                  </ul>
+                  <InfoBox>
+                    <strong>Nota:</strong> Tanto la justificación de geofence como las coordenadas GPS del supervisor
+                    quedan registradas en la auditoría del permiso para trazabilidad completa.
+                  </InfoBox>
                 </SubSection>
 
                 <SubSection title="Generación de PDF">
@@ -707,6 +755,18 @@ export default function UserManual() {
                         'Espere 10-30 segundos para que el GPS obtenga una lectura precisa (mínimo 5 metros de precisión).',
                         'Si está en interiores, acérquese a una ventana o salga al exterior para mejorar la señal GPS.',
                         'Verifique que la ubicación de trabajo en el sistema tenga el radio correcto. Acceda a SCADA → Ubicaciones.',
+                      ]}
+                    />
+                    <ErrorBlock
+                      title="Geofence: Justificación requerida fuera de geocerca"
+                      description="Al intentar aprobar o rechazar, aparece un diálogo pidiendo justificación con el mensaje 'Fuera de Geocerca' y la distancia al sitio."
+                      solution="El supervisor está fuera del radio GPS definido para la ubicación del permiso."
+                      steps={[
+                        'Verifique su ubicación física — ¿está en el sitio correcto del trabajo?',
+                        'Active GPS de alta precisión en su dispositivo.',
+                        'Si legítimamente no está en el sitio, escriba una justificación clara (mínimo 10 caracteres).',
+                        'La justificación queda registrada en la auditoría del permiso.',
+                        'Para evitar este diálogo en el futuro, asegúrese de firmar desde el sitio del trabajo.',
                       ]}
                     />
                     <ErrorBlock
@@ -937,7 +997,7 @@ export default function UserManual() {
               <div className="p-5 pt-3 space-y-5">
                 <p className="text-sm text-slate-600 leading-relaxed">
                   El módulo <strong>SCADA Telemetría</strong> proporciona monitoreo en tiempo real de sensores
-                  industriales. Presenta un panel tipo "sala de control" con indicadores LED, gráficos de
+                  industriales. Presenta un panel tipo &quot;sala de control&quot; con indicadores LED, gráficos de
                   tendencias y umbrales de alerta para garantizar la seguridad operacional.
                 </p>
 
@@ -1050,6 +1110,13 @@ export default function UserManual() {
                     </div>
                   </div>
                   <InfoBox>
+                    <strong>Persistencia del modo demo:</strong> El estado del modo demo se almacena en la base de datos por
+                    compañía (campo <code className="text-xs bg-emerald-100 px-1 rounded">scadaDemoMode</code>), por lo que sobrevive
+                    reinicios del servidor. El toggle es inmediato en la interfaz (localStorage) y se confirma con el servidor.
+                    El polling de telemetría NO interfiere con el estado del modo demo. Cada compañía tiene una configuración
+                    independiente.
+                  </InfoBox>
+                  <InfoBox>
                     <strong>Acceso:</strong> Solo los roles ADMIN, SUPERVISOR y MANAGER pueden activar/desactivar
                     el modo demo. Los técnicos solo pueden ver los datos.
                   </InfoBox>
@@ -1057,7 +1124,7 @@ export default function UserManual() {
 
                 <SubSection title="Pestañas del módulo SCADA">
                   <p className="text-sm text-slate-600 leading-relaxed">
-                    El módulo SCADA se organiza en tres pestañas principales:
+                    El módulo SCADA se organiza en pestañas principales:
                   </p>
                   <div className="mt-2 space-y-2">
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
@@ -1071,6 +1138,99 @@ export default function UserManual() {
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                       <p className="text-xs font-bold text-slate-800">📥 Importar</p>
                       <p className="text-xs text-slate-600 mt-0.5">Importación masiva de sensores desde archivos CSV o Excel con vista previa y validación.</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-xs font-bold text-slate-800">🔑 Credenciales API</p>
+                      <p className="text-xs text-slate-600 mt-0.5">Gestión de claves API para autenticación de sistemas externos e integraciones IoT.</p>
+                    </div>
+                  </div>
+                </SubSection>
+
+                <SubSection title="Pestaña Credenciales API">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    La pestaña <strong>Credenciales API</strong> permite gestionar claves de autenticación para que
+                    sistemas externos (dispositivos IoT, gateways, integraciones) puedan enviar datos al módulo SCADA
+                    sin necesidad de un usuario interactivo.
+                  </p>
+                  <div className="mt-3 space-y-3">
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-xs font-bold text-slate-800">Crear una API Key</p>
+                      <ul className="mt-1.5 space-y-1 text-xs text-slate-600">
+                        <li>• Asigne un nombre descriptivo (ej: &quot;Gateway Planta Norte&quot;)</li>
+                        <li>• Seleccione los permisos: <Badge className="text-[9px] bg-blue-100 text-blue-700">read</Badge> lectura, <Badge className="text-[9px] bg-emerald-100 text-emerald-700">write</Badge> escritura, <Badge className="text-[9px] bg-red-100 text-red-700">admin</Badge> administración</li>
+                        <li>• Defina la fecha de expiración (opcional)</li>
+                        <li>• La clave se muestra <strong>solo una vez</strong> al crearla — cópiela y guárdela de forma segura</li>
+                      </ul>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-xs font-bold text-slate-800">Lista de claves activas</p>
+                      <ul className="mt-1.5 space-y-1 text-xs text-slate-600">
+                        <li>• Prefijo de la clave (los últimos caracteres están ocultos por seguridad)</li>
+                        <li>• Permisos asignados</li>
+                        <li>• Fecha de último uso</li>
+                        <li>• Fecha de expiración</li>
+                        <li>• Botón para revocar la clave (requiere confirmación)</li>
+                      </ul>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-xs font-bold text-slate-800">Uso de la API Key</p>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Para autenticar solicitudes, incluya la clave en el header <code className="bg-slate-100 px-1 rounded">X-API-Key</code>
+                        {' '}de cada petición HTTP al servidor.
+                      </p>
+                    </div>
+                  </div>
+                  <WarningBox>
+                    <strong>Seguridad:</strong> Las API Keys son equivalentes a credenciales de usuario. Revoque
+                    inmediatamente cualquier clave comprometida y rote las claves periódicamente.
+                  </WarningBox>
+                </SubSection>
+
+                <SubSection title="Importar sensores masivamente">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    La pestaña <strong>Importar</strong> permite cargar un gran número de sensores de forma eficiente
+                    mediante un asistente de 3 pasos:
+                  </p>
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center">
+                        <span className="text-emerald-700 font-bold text-sm">1</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Carga de archivo</p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Arrastre un archivo CSV o XLSX al área de carga o haga clic para seleccionar.
+                          Se proporciona una plantilla descargable con el formato correcto.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center">
+                        <span className="text-emerald-700 font-bold text-sm">2</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Vista previa</p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Tabla con código de colores: <span className="text-emerald-600 font-medium">verde = válido</span>,
+                          {' '}<span className="text-amber-600 font-medium">ámbar = advertencia</span>,
+                          {' '}<span className="text-red-600 font-medium">rojo = error</span>.
+                          Cada fila muestra badges <Badge className="text-[9px] bg-emerald-100 text-emerald-700">CREATE</Badge> o
+                          {' '}<Badge className="text-[9px] bg-blue-100 text-blue-700">UPDATE</Badge> según si el sensor
+                          es nuevo o ya existe (upsert).
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center">
+                        <span className="text-emerald-700 font-bold text-sm">3</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Resultados</p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          Resumen con cantidad de sensores creados, actualizados y omitidos, junto con
+                          el detalle de errores por fila si los hay.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </SubSection>
@@ -1370,7 +1530,7 @@ export default function UserManual() {
               <div className="p-5 pt-3 space-y-5">
                 <p className="text-sm text-slate-600 leading-relaxed">
                   El módulo de <strong>Gestión de Ubicaciones</strong> se encuentra integrado dentro del módulo SCADA
-                  (pestaña "Ubicaciones") y es compartido con el módulo de Permisos. Permite definir las áreas
+                  (pestaña &quot;Ubicaciones&quot;) y es compartido con el módulo de Permisos. Permite definir las áreas
                   de trabajo con coordenadas GPS, radio de cobertura y método de verificación.
                 </p>
 
@@ -1414,6 +1574,65 @@ export default function UserManual() {
                       <p className="text-xs text-blue-600 mt-0.5">Detecta señales Bluetooth Low Energy (BLE) de beacons instalados en el sitio.</p>
                     </div>
                   </div>
+                </SubSection>
+
+                <SubSection title="Método QR Code">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    El método de verificación por <strong>QR Code</strong> permite generar un código QR único vinculado
+                    a la ubicación de trabajo. Los trabajadores pueden escanear el código desde el sitio para verificar
+                    automáticamente su presencia.
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-sm text-slate-600">
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-violet-500 mt-1 flex-shrink-0" />
+                      <span><strong>Generación:</strong> Al crear una ubicación con método de verificación QR_CODE, se genera automáticamente un código QR con un payload encriptado que contiene el ID de la ubicación y un secreto único.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-violet-500 mt-1 flex-shrink-0" />
+                      <span><strong>Escaneo:</strong> El trabajador escanea el QR desde la aplicación en el sitio de trabajo. El sistema decodifica el payload y verifica la coincidencia con la ubicación registrada.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-violet-500 mt-1 flex-shrink-0" />
+                      <span><strong>Check-in automático:</strong> Si el QR es válido, se registra automáticamente el check-in del trabajador en esa ubicación con marca de tiempo.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-violet-500 mt-1 flex-shrink-0" />
+                      <span><strong>Descarga:</strong> El QR puede descargarse como imagen PNG para imprimirlo y colocarlo físicamente en el sitio de trabajo.</span>
+                    </li>
+                  </ul>
+                  <WarningBox>
+                    <strong>Seguridad:</strong> El payload del QR contiene un secreto encriptado. No comparta ni
+                    fotocopie códigos QR de una ubicación a otra, ya que cada uno es único e irreplicable.
+                  </WarningBox>
+                </SubSection>
+
+                <SubSection title="Método Beacon BLE">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    El método de verificación por <strong>Beacon BLE</strong> (Bluetooth Low Energy) se utiliza para
+                    detección de presencia en interiores donde la señal GPS es poco confiable.
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-sm text-slate-600">
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 mt-1 flex-shrink-0" />
+                      <span><strong>Configuración:</strong> Se configuran los parámetros del beacon: UUID (identificador único universal), Major (código de grupo), Minor (código individual) y RSSI (potencia de señal esperada).</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 mt-1 flex-shrink-0" />
+                      <span><strong>Detección:</strong> La aplicación detecta las señales BLE del beacon mediante la Web Bluetooth API del navegador. Actualmente la detección está simulada en la versión actual, preparada para integración con hardware real.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 mt-1 flex-shrink-0" />
+                      <span><strong>Caso de uso:</strong> Ideal para espacios interiores como salas de control, áreas confinadas, o instalaciones subterráneas donde el GPS no tiene cobertura adecuada.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 mt-1 flex-shrink-0" />
+                      <span><strong>Ventaja:</strong> A diferencia del GPS, los beacons funcionan independientemente de la visibilidad del cielo, proporcionando una verificación más precisa en interiores.</span>
+                    </li>
+                  </ul>
+                  <InfoBox>
+                    <strong>Nota:</strong> La detección BLE requiere que el Bluetooth del dispositivo esté activado.
+                    En la versión actual, la funcionalidad está preparada para integración con beacons físicos.
+                  </InfoBox>
                 </SubSection>
 
                 <SubSection title="Guía paso a paso: Crear una ubicación">
@@ -1609,7 +1828,7 @@ export default function UserManual() {
                     />
                     <ErrorBlock
                       title="No se reciben alertas visibles"
-                      description={'El sistema muestra “Cumplimiento OK” pero hay documentos vencidos o sensores en alerta.'}
+                      description={'El sistema muestra "Cumplimiento OK" pero hay documentos vencidos o sensores en alerta.'}
                       solution="Puede ser un problema de caché o que la verificación de cumplimiento no se ejecutó correctamente."
                       steps={[
                         'Recargue completamente la página (Ctrl+Shift+R).',
@@ -1670,7 +1889,45 @@ export default function UserManual() {
                       <p className="text-xs font-bold text-slate-800">🔍 Auditoría</p>
                       <p className="text-xs text-slate-600 mt-0.5">Registro de todas las acciones realizadas en la plataforma para trazabilidad y cumplimiento. Accesible desde "Auditoría" en el menú.</p>
                     </div>
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-xs font-bold text-slate-800">🔑 Credenciales API</p>
+                      <p className="text-xs text-slate-600 mt-0.5">Gestión de claves API para autenticación de sistemas externos e IoT. Accesible desde SCADA → Credenciales API.</p>
+                    </div>
                   </div>
+                </SubSection>
+
+                <SubSection title="Credenciales API">
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    La gestión de <strong>Credenciales API</strong> permite a los administradores crear, gestionar
+                    y revocar claves de acceso para que sistemas externos (dispositivos IoT, gateways, integraciones
+                    de terceros) puedan autenticarse en la plataforma sin necesidad de una sesión de usuario interactiva.
+                  </p>
+                  <StepGuide steps={[
+                    {
+                      title: 'Navegar a Credenciales API',
+                      description: 'Vaya a SCADA en el menú lateral y haga clic en la pestaña "Credenciales API".',
+                    },
+                    {
+                      title: 'Crear una nueva API Key',
+                      description: 'Haga clic en "Crear API Key". Ingrese un nombre descriptivo, seleccione los permisos (read, write, admin) y opcionalmente defina una fecha de expiración.',
+                    },
+                    {
+                      title: 'Guardar la clave de forma segura',
+                      description: 'La clave completa se muestra SOLO una vez al crearla. Cópiela y guárdela en un lugar seguro (gestor de contraseñas). No se podrá volver a ver.',
+                    },
+                    {
+                      title: 'Usar la clave en solicitudes',
+                      description: 'Incluya la API Key en el header "X-API-Key" de cada petición HTTP al servidor.',
+                    },
+                    {
+                      title: 'Gestionar claves existentes',
+                      description: 'Revise la lista de claves activas para ver permisos, último uso y fecha de expiración. Revoque claves que ya no sean necesarias.',
+                    },
+                  ]} />
+                  <WarningBox>
+                    <strong>Seguridad:</strong> Revoque inmediatamente cualquier clave que haya sido comprometida.
+                    Las claves API tienen el mismo nivel de acceso que un usuario con los permisos asignados.
+                  </WarningBox>
                 </SubSection>
 
                 <SubSection title="Guía paso a paso: Gestionar tipos de riesgo">
@@ -1896,6 +2153,59 @@ export default function UserManual() {
                   </div>
                 </SubSection>
 
+                <SubSection title="Problemas de caché y Service Worker">
+                  <div className="space-y-3">
+                    <ErrorBlock
+                      title="Modo Demo atascado en ACTIVADO"
+                      description="El toggle de modo demo no responde o vuelve a activarse automáticamente después de desactivarlo."
+                      solution="El estado del modo demo se persiste en la base de datos por compañía. Puede haber un problema de caché local."
+                      steps={[
+                        'Limpie el localStorage del navegador: abra DevTools (F12) → Application → Local Storage → elimine la clave "ech_demo_mode".',
+                        'Verifique el estado en la base de datos: el campo scadaDemoMode de la tabla Company debe ser false.',
+                        'Recargue la página completa (Ctrl+Shift+R) para forzar una nueva lectura del servidor.',
+                        'Verifique que la respuesta del API /api/sensors/simulation contenga { demoMode: false }.',
+                        'Si el problema persiste, contacte al administrador para verificar el estado del servidor.',
+                      ]}
+                    />
+                    <ErrorBlock
+                      title="Error GEOFENCE_JUSTIFICATION_REQUIRED"
+                      description="Al intentar aprobar o rechazar un permiso fuera del área de geofence, se muestra el error 'GEOFENCE_JUSTIFICATION_REQUIRED'."
+                      solution="El supervisor está firmando fuera del radio GPS de la ubicación del trabajo y no proporcionó una justificación válida."
+                      steps={[
+                        'Verifique su ubicación física — ¿está en el sitio correcto del trabajo?',
+                        'Active GPS de alta precisión en su dispositivo.',
+                        'Si no está en el sitio, proporcione una justificación clara (mínimo 10 caracteres).',
+                        'El diálogo de justificación se abre automáticamente cuando se detecta que está fuera de geocerca.',
+                        'Si el diálogo no aparece, recargue la página e intente nuevamente.',
+                      ]}
+                    />
+                    <ErrorBlock
+                      title="API Key expirada"
+                      description="Las solicitudes con una API Key devuelven error 401 (Unauthorized) indicando que la clave ha expirado."
+                      solution="La API Key ha superado su fecha de expiración configurada."
+                      steps={[
+                        'Vaya a SCADA → Credenciales API.',
+                        'Verifique la fecha de expiración de la clave afectada.',
+                        'Cree una nueva API Key con una fecha de expiración adecuada.',
+                        'Actualice la configuración del sistema externo con la nueva clave.',
+                        'Revoque la clave expirada para mantener la limpieza de credenciales.',
+                      ]}
+                    />
+                    <ErrorBlock
+                      title="Service Worker mostrando datos antiguos"
+                      description="La plataforma muestra datos o versiones antiguas que no corresponden a la versión más reciente del sistema."
+                      solution="El Service Worker está sirviendo recursos desde la caché en lugar de la versión actual del servidor."
+                      steps={[
+                        'Limpie la caché del navegador: Configuración → Privacidad → Limpiar datos de navegación → Caché.',
+                        'En Chrome DevTools (F12): Application → Service Workers → Haga clic en "Unregister" para eliminar el SW.',
+                        'Recargue la página completa (Ctrl+Shift+R).',
+                        'El Service Worker se actualiza automáticamente cuando la versión del caché cambia (ech-v3 o superior).',
+                        'Si el problema persiste, use una ventana de incógnito para descartar problemas de caché.',
+                      ]}
+                    />
+                  </div>
+                </SubSection>
+
                 <SubSection title="Contacto y soporte">
                   <InfoBox>
                     <div className="space-y-2">
@@ -1930,13 +2240,16 @@ export default function UserManual() {
                     { term: 'HSE', def: 'Health, Safety and Environment — Salud, Seguridad y Medio Ambiente. Conjunto de prácticas para garantizar la seguridad laboral y protección ambiental.' },
                     { term: 'SCADA', def: 'Supervisory Control and Data Acquisition — Sistema de control supervisorio y adquisición de datos. Permite monitorear y controlar procesos industriales en tiempo real.' },
                     { term: 'GPS', def: 'Global Positioning System — Sistema de posicionamiento global. Tecnología de geolocalización por satélite.' },
-                    { term: 'Geofence', def: 'Cerca geográfica virtual. Define un área circular basada en coordenadas GPS y un radio para verificar la presencia de un usuario dentro del área permitida.' },
+                    { term: 'Geofence', def: 'Cerca virtual geográfica definida por coordenadas GPS y un radio en metros. Usada para verificar si un usuario está dentro del área permitida de trabajo.' },
+                    { term: 'Haversine', def: 'Fórmula matemática para calcular la distancia entre dos coordenadas GPS en la superficie de la Tierra. Usada por el sistema para verificar geofence.' },
                     { term: 'LOTO', def: 'Lock Out / Tag Out — Bloqueo y etiquetado. Procedimiento de seguridad para asegurar que equipos energizados no se reactiven durante mantenimientos.' },
                     { term: 'LED', def: 'Light Emitting Diode — Diodo emisor de luz. En la plataforma, se usan indicadores LED virtuales (verde, ámbar, rojo) para representar el estado de los sensores.' },
                     { term: 'LEL', def: 'Lower Explosive Limit — Límite inferior de explosividad. Concentración mínima de gas en el aire que puede causar una explosión. Medido en porcentaje.' },
                     { term: 'PPM', def: 'Parts Per Million — Partes por millón. Unidad de concentración usada para medir gases tóxicos.' },
                     { term: 'PSI', def: 'Pounds per Square Inch — Libras por pulgada cuadrada. Unidad de presión común en equipos industriales.' },
                     { term: 'BLE', def: 'Bluetooth Low Energy — Bluetooth de bajo consumo. Tecnología inalámbrica usada por los beacons para detección de proximidad.' },
+                    { term: 'Beacon BLE', def: 'Dispositivo Bluetooth Low Energy para verificación de ubicación en interiores. Configurado con UUID, Major, Minor y RSSI.' },
+                    { term: 'QR Code', def: 'Código QR generado para verificación de ubicación de trabajo. Contiene un payload encriptado con el ID de ubicación y un secreto único.' },
                     { term: 'Demo Mode', def: 'Modo de demostración. Función que simula datos de sensores sin necesidad de hardware real, ideal para capacitación y pruebas.' },
                     { term: 'Compliance', def: 'Cumplimiento normativo. Estado del sistema que indica si todos los requisitos HSE están satisfechos (documentos vigentes, sensores normales).' },
                     { term: 'Polling', def: 'Consultas periódicas. Mecanismo por el cual la plataforma consulta al servidor en intervalos regulares para obtener datos actualizados.' },
@@ -1946,7 +2259,10 @@ export default function UserManual() {
                     { term: 'IA', def: 'Inteligencia Artificial. Tecnología utilizada para extraer datos de documentos y generar análisis predictivos.' },
                     { term: 'OCR', def: 'Optical Character Recognition — Reconocimiento óptico de caracteres. Tecnología para convertir imágenes de texto en texto editable.' },
                     { term: 'Audit Log', def: 'Registro de auditoría. Historial inmutable de todas las acciones realizadas en la plataforma, usado para trazabilidad y cumplimiento.' },
-                    { term: 'QR Code', def: 'Quick Response Code — Código de respuesta rápida. Código bidimensional que puede ser escaneado con la cámara del dispositivo para verificar ubicaciones.' },
+                    { term: 'API Key', def: 'Credencial de autenticación alternativa al JWT, usada por sistemas externos e IoT. Se envía en el header X-API-Key de las solicitudes HTTP.' },
+                    { term: 'Service Worker', def: 'Script en segundo plano que habilita funciones offline y cacheo de recursos. La plataforma usa la versión ech-v3 para servir los últimos archivos JavaScript.' },
+                    { term: 'CUID2', def: 'Identificador único de 23 caracteres usado en la base de datos (ej: cmnotiu230000vc10nf7p9f9s). Generado automáticamente para cada registro.' },
+                    { term: 'Upsert', def: 'Operación que actualiza un registro si existe, o lo crea si no existe. Usada en la importación masiva de sensores y tipos de riesgo.' },
                   ].map((item) => (
                     <div key={item.term} className="flex gap-3 p-2 rounded-lg hover:bg-slate-50 transition-colors">
                       <Badge variant="outline" className="flex-shrink-0 text-[11px] font-mono px-2 py-0.5 border-emerald-300 text-emerald-700">
@@ -1969,7 +2285,7 @@ export default function UserManual() {
           <h3 className="text-sm font-bold text-slate-800">Energy-Compliance Hub</h3>
         </div>
         <p className="text-xs text-slate-500">
-          Manual de Usuario v2.0 — Última actualización: {new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}
+          Manual de Usuario v3.0 — Última actualización: {new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}
         </p>
         <p className="text-xs text-slate-400 mt-1">
           Documento confidencial — Solo para uso interno de la organización
