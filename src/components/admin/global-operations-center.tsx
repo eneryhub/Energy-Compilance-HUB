@@ -307,15 +307,25 @@ export default function GlobalOperationsCenter() {
 
   // ============ API: Fetch Knowledge Base ============
   const fetchKnowledge = useCallback(async (alert: GOCAlert) => {
-    if (!alert.errorCode) return
     setSelectedAlert(alert)
     setKnowledgeLoading(true)
     setKnowledgeNotFound(false)
     setKnowledgeDialog(null)
 
+    if (!alert.errorCode) {
+      // No errorCode — show info message instead of doing nothing
+      setKnowledgeLoading(false)
+      setKnowledgeNotFound(true)
+      return
+    }
+
     try {
-      const data = await apiFetch<KnowledgeEntry>(`/admin/goc/knowledge?code=${encodeURIComponent(alert.errorCode)}`)
-      setKnowledgeDialog(data)
+      const data = await apiFetch<{ entries: KnowledgeEntry[]; total: number }>(`/admin/goc/knowledge?code=${encodeURIComponent(alert.errorCode)}`)
+      if (data.entries && data.entries.length > 0) {
+        setKnowledgeDialog(data.entries[0])
+      } else {
+        setKnowledgeNotFound(true)
+      }
     } catch {
       setKnowledgeNotFound(true)
     } finally {
@@ -567,7 +577,7 @@ export default function GlobalOperationsCenter() {
                               alert.isEnterprise && !alert.isAcknowledged && 'animate-pulse border-red-500',
                               'hover:brightness-125'
                             )}
-                            onClick={() => alert.errorCode && fetchKnowledge(alert)}
+                            onClick={() => fetchKnowledge(alert)}
                           >
                             {/* Enterprise indicator */}
                             {alert.isEnterprise && (
@@ -773,12 +783,21 @@ export default function GlobalOperationsCenter() {
                   <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center mx-auto">
                     <Info className="w-5 h-5 text-slate-500" />
                   </div>
-                  <p className="text-xs text-slate-400 font-medium">Sin solución encontrada</p>
-                  <p className="text-[10px] text-slate-600">
-                    {selectedAlert?.errorCode
-                      ? `No existe entrada para ${selectedAlert.errorCode}`
-                      : 'Selecciona una alerta con código de error'}
-                  </p>
+                  {selectedAlert?.errorCode ? (
+                    <>
+                      <p className="text-xs text-slate-400 font-medium">Sin solución registrada</p>
+                      <p className="text-[10px] text-slate-600">
+                        No existe entrada para el código <span className="text-cyan-400 font-mono">{selectedAlert.errorCode}</span>
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-slate-400 font-medium">Sin diagnóstico disponible</p>
+                      <p className="text-[10px] text-slate-600">
+                        Esta alerta ({selectedAlert?.type}) no tiene código de error asociado. Solo las alertas de tipo Sistema, Seguridad, Sensor, Geofence y Suscripción tienen diagnóstico.
+                      </p>
+                    </>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
