@@ -142,11 +142,26 @@ const SENSOR_COLORS: Record<string, { normal: string; warning: string; critical:
 
 // ── Component ──────────────────────────────────────────────
 
+const DEMO_MODE_KEY = 'ech_demo_mode'
+
+// Read demo mode from localStorage (client-side persistence)
+function getLocalDemoMode(): boolean {
+  if (typeof window === 'undefined') return true
+  const stored = localStorage.getItem(DEMO_MODE_KEY)
+  return stored !== null ? stored === 'true' : true
+}
+
+function setLocalDemoMode(value: boolean): void {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(DEMO_MODE_KEY, String(value))
+}
+
 export default function TelemetryBoard() {
   const [telemetry, setTelemetry] = useState<TelemetryResponse | null>(null)
   const [sensors, setSensors] = useState<SensorConfig[]>([])
   const [loading, setLoading] = useState(true)
-  const [demoMode, setDemoMode] = useState(true)
+  // Initialize from localStorage for instant correct state
+  const [demoMode, setDemoMode] = useState(getLocalDemoMode)
   const [selectedSensor, setSelectedSensor] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryPoint[]>([])
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -276,14 +291,17 @@ export default function TelemetryBoard() {
   }, [])
 
   // ── Load demo mode ONCE on mount (not from polling) ──
-  // This is the ONLY place demoMode state is set from the server.
+  // This is the ONLY place demoMode state is synced from the server.
   // telemetry polling must NEVER touch demoMode state.
   const loadDemoMode = useCallback(async () => {
     try {
       const data = await apiFetch<{ demoMode: boolean }>('/sensors/simulation')
+      console.log('[DEMO MODE] Server returned demoMode:', data.demoMode)
       setDemoMode(data.demoMode)
-    } catch {
-      // If it fails, keep the default (true)
+      setLocalDemoMode(data.demoMode)
+    } catch (err) {
+      console.warn('[DEMO MODE] Failed to load from server, using localStorage:', err)
+      // Keep the localStorage value (already set in useState)
     }
   }, [])
 
@@ -338,22 +356,39 @@ export default function TelemetryBoard() {
   }, [selectedSensor])
 
   // ── Toggle simulation ──────────────────────────────────
-  // OPTIMISTIC UPDATE: sets UI immediately, then confirms with server.
-  // If server rejects, reverts. This prevents any polling interference.
+  // PERSISTENT TOGGLE: saves to localStorage immediately (survives reload),
+  // then confirms with server. NEVER reverts on server failure —
+  // localStorage is the fallback source of truth.
+  const demoModeToggleRef = useRef(false) // prevents double-fire
   const toggleSimulation = useCallback(async (enabled: boolean) => {
-    // 1) Optimistic UI update — immediate feedback
+    // Prevent rapid double-toggling
+    if (demoModeToggleRef.current) {
+      console.log('[DEMO MODE] Toggle blocked — already processing')
+      return
+    }
+    demoModeToggleRef.current = true
+
+    console.log('[DEMO MODE] Toggle called:', enabled)
+
+    // 1) IMMEDIATE: save to localStorage and update UI
+    setLocalDemoMode(enabled)
     setDemoMode(enabled)
+
     try {
       // 2) Server confirmation — persists to DB
       const confirmed = await apiFetch<{ demoMode: boolean }>('/sensors/simulation', {
         method: 'POST',
         body: JSON.stringify({ enabled }),
       })
-      // 3) Use server-confirmed value (not our optimistic guess)
+      console.log('[DEMO MODE] Server confirmed:', confirmed.demoMode)
+      // 3) Sync with server-confirmed value
       setDemoMode(confirmed.demoMode)
-    } catch {
-      // 4) Revert on failure — restore previous state
-      setDemoMode(!enabled)
+      setLocalDemoMode(confirmed.demoMode)
+    } catch (err) {
+      console.error('[DEMO MODE] Server failed, keeping localStorage value:', err)
+      // DO NOT REVERT — localStorage is the fallback. The toggle stays.
+    } finally {
+      setTimeout(() => { demoModeToggleRef.current = false }, 500)
     }
   }, [])
 
