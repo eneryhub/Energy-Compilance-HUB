@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io, Socket } from 'socket.io-client'
 import {
   Radar,
   AlertTriangle,
@@ -12,7 +11,6 @@ import {
   CreditCard,
   MapPin,
   Bell,
-  BellOff,
   Search,
   CheckCircle2,
   XCircle,
@@ -24,8 +22,6 @@ import {
   Info,
   AlertOctagon,
   Server,
-  Wifi,
-  WifiOff,
   Clock,
   Zap,
   Heart,
@@ -77,9 +73,9 @@ interface KnowledgeEntry {
 interface SystemHealth {
   healthStatus: string
   totalErrors24h: number
-  topErrors: Array<{ action: string; count: number; companies: number }>
-  globalIncidents: Array<{ type: string; message: string; affectedCompanies: number }>
-  alertsSummary: { critical: number; unacknowledged: number; byType: Record<string, number> }
+  topErrors: Array<{ action: string; count: number; affectedCompanies: number }>
+  globalIncidents: Array<{ action: string; affectedCompanies: number; companyNames: string[] }>
+  alerts24h: { total: number; critical: number; unacknowledged: number; byType: Record<string, number> }
   lastChecked: string
 }
 
@@ -192,7 +188,6 @@ function playCriticalBeep() {
 export default function GlobalOperationsCenter() {
   // State
   const [alerts, setAlerts] = useState<GOCAlert[]>([])
-  const [socketConnected, setSocketConnected] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [currentTime, setCurrentTime] = useState('')
   const [loading, setLoading] = useState(true)
@@ -217,10 +212,10 @@ export default function GlobalOperationsCenter() {
   const [healthLoading, setHealthLoading] = useState(true)
 
   // Refs
-  const socketRef = useRef<Socket | null>(null)
   const alertsEndRef = useRef<HTMLDivElement>(null)
   const newAlertIdsRef = useRef<Set<string>>(new Set())
   const healthIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const alertsPollingRef = useRef<NodeJS.Timeout | null>(null)
 
   // ============ Clock ============
   useEffect(() => {
@@ -236,67 +231,30 @@ export default function GlobalOperationsCenter() {
     return () => clearInterval(interval)
   }, [])
 
-  // ============ Socket.IO Connection ============
-  useEffect(() => {
-    const socket = io('/?XTransformPort=3005', {
-      transports: ['websocket', 'polling'],
-    })
-
-    socketRef.current = socket
-
-    socket.on('connect', () => {
-      setSocketConnected(true)
-    })
-
-    socket.on('disconnect', () => {
-      setSocketConnected(false)
-    })
-
-    socket.on('goc:recent', (data: GOCAlert[]) => {
-      const reversed = [...data].reverse()
-      reversed.forEach((a) => newAlertIdsRef.current.add(a.id))
-      setAlerts(reversed)
+  // ============ HTTP Polling for Alerts (production-safe, no Socket.IO needed) ============
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ alerts: GOCAlert[]; total: number; unacknowledged: number }>('/admin/goc/alerts?limit=100')
+      const newAlerts = res.alerts || []
+      setAlerts(newAlerts)
       setLoading(false)
-      // Compute stats
       setStats({
-        total: reversed.length,
-        unacknowledged: reversed.filter((a) => !a.isAcknowledged).length,
-        critical: reversed.filter((a) => a.severity === 'CRITICAL').length,
+        total: res.total ?? newAlerts.length,
+        unacknowledged: res.unacknowledged ?? newAlerts.filter((a) => !a.isAcknowledged).length,
+        critical: newAlerts.filter((a) => a.severity === 'CRITICAL').length,
       })
-    })
-
-    socket.on('goc:stats', (data: { total: number; unacknowledged: number; critical: number }) => {
-      setStats(data)
-    })
-
-    socket.on('goc:alert', (alert: GOCAlert) => {
-      newAlertIdsRef.current.add(alert.id)
-      setAlerts((prev) => [alert, ...prev])
-
-      // Update stats
-      setStats((prev) => ({
-        total: prev.total + 1,
-        unacknowledged: prev.unacknowledged + (alert.isAcknowledged ? 0 : 1),
-        critical: prev.critical + (alert.severity === 'CRITICAL' ? 1 : 0),
-      }))
-
-      // Play sound for critical alerts
-      if (alert.severity === 'CRITICAL' && soundEnabled) {
-        playCriticalBeep()
-      }
-    })
-
-    return () => {
-      socket.disconnect()
-      socketRef.current = null
+    } catch {
+      setLoading(false)
     }
   }, [])
 
-  // Sync soundEnabled ref for socket event
-  const soundEnabledRef = useRef(soundEnabled)
   useEffect(() => {
-    soundEnabledRef.current = soundEnabled
-  }, [soundEnabled])
+    fetchAlerts()
+    alertsPollingRef.current = setInterval(fetchAlerts, 10000)
+    return () => {
+      if (alertsPollingRef.current) clearInterval(alertsPollingRef.current)
+    }
+  }, [fetchAlerts])
 
   // ============ Filtered alerts ============
   const filteredAlerts = useMemo(() => {
@@ -431,17 +389,10 @@ export default function GlobalOperationsCenter() {
 
           {/* Connection Status */}
           <div className="flex items-center gap-2">
-            {socketConnected ? (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30">
-                <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-xs font-medium text-emerald-400">En vivo</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 border border-red-500/30">
-                <WifiOff className="w-3.5 h-3.5 text-red-400" />
-                <span className="text-xs font-medium text-red-400">Desconectado</span>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+              <Activity className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-xs font-medium text-emerald-400">Polling</span>
+            </div>
           </div>
 
           {/* Stats Pills */}
@@ -567,11 +518,11 @@ export default function GlobalOperationsCenter() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={fetchSystemHealth}
+                  onClick={() => { fetchAlerts(); fetchSystemHealth() }}
                   className="text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Salud
+                  Refrescar
                 </Button>
               </div>
             </CardHeader>
@@ -914,9 +865,9 @@ export default function GlobalOperationsCenter() {
                       <p className="text-[10px] text-slate-500 uppercase tracking-wider">Sin ACK</p>
                       <p className={cn(
                         'text-lg font-bold',
-                        systemHealth.alertsSummary.unacknowledged > 0 ? 'text-orange-400' : 'text-emerald-400'
+                        (systemHealth.alerts24h?.unacknowledged ?? 0) > 0 ? 'text-orange-400' : 'text-emerald-400'
                       )}>
-                        {systemHealth.alertsSummary.unacknowledged}
+                        {systemHealth.alerts24h?.unacknowledged ?? 0}
                       </p>
                     </div>
                   </div>
@@ -935,7 +886,7 @@ export default function GlobalOperationsCenter() {
                             </span>
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <Badge variant="outline" className="text-[10px] border-slate-600 text-slate-400 px-1.5 py-0">
-                                {err.companies} empresa{err.companies !== 1 ? 's' : ''}
+                                {err.affectedCompanies} empresa{err.affectedCompanies !== 1 ? 's' : ''}
                               </Badge>
                               <span className="text-[10px] text-red-400 font-mono font-semibold">
                                 {err.count}x
@@ -962,8 +913,8 @@ export default function GlobalOperationsCenter() {
                             <div className="flex items-start gap-2">
                               <AlertOctagon className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
                               <div className="flex-1 min-w-0">
-                                <p className="text-[11px] text-red-300 font-medium">{incident.type}</p>
-                                <p className="text-[10px] text-red-400/70 mt-0.5">{incident.message}</p>
+                                <p className="text-[11px] text-red-300 font-medium">{incident.action}</p>
+                                <p className="text-[10px] text-red-400/70 mt-0.5">{incident.companyNames?.join(', ') || incident.action}</p>
                                 <p className="text-[10px] text-red-400/50 mt-0.5">
                                   {incident.affectedCompanies} empresa{incident.affectedCompanies !== 1 ? 's' : ''} afectada{incident.affectedCompanies !== 1 ? 's' : ''}
                                 </p>
@@ -976,13 +927,13 @@ export default function GlobalOperationsCenter() {
                   )}
 
                   {/* Alerts by Type Summary */}
-                  {Object.keys(systemHealth.alertsSummary.byType).length > 0 && (
+                  {systemHealth.alerts24h?.byType && Object.keys(systemHealth.alerts24h.byType).length > 0 && (
                     <div>
                       <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
                         Alertas por Tipo
                       </p>
                       <div className="grid grid-cols-2 gap-1.5">
-                        {Object.entries(systemHealth.alertsSummary.byType).map(([type, count]) => (
+                        {Object.entries(systemHealth.alerts24h.byType).map(([type, count]) => (
                           <div key={type} className="flex items-center justify-between p-2 rounded-lg bg-slate-800/50">
                             <span className="text-[10px] text-slate-400">{getAlertTypeLabel(type)}</span>
                             <span className="text-xs text-slate-300 font-semibold">{count as number}</span>
