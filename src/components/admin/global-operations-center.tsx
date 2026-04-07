@@ -183,6 +183,189 @@ function playCriticalBeep() {
   }
 }
 
+// ============ Create Knowledge Dialog ============
+
+function CreateKnowledgeDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+  loading,
+  defaultErrorCode,
+  defaultSeverity,
+  alertTitle,
+  alertMessage,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSubmit: (data: { errorCode: string; category: string; title: string; rootCause: string; appliedSolution: string; severity: string }) => void
+  loading: boolean
+  defaultErrorCode: string
+  defaultSeverity: string
+  alertTitle: string
+  alertMessage: string
+}) {
+  const [errorCode, setErrorCode] = useState(defaultErrorCode)
+  const [category, setCategory] = useState('SCADA')
+  const [title, setTitle] = useState(alertTitle || '')
+  const [rootCause, setRootCause] = useState(alertMessage || '')
+  const [appliedSolution, setAppliedSolution] = useState('')
+  const [severity, setSeverity] = useState(defaultSeverity)
+  const prevOpen = useRef(false)
+
+  const categories = ['SCADA', 'SYSTEM', 'AUTH', 'PERMIT', 'COMPLIANCE', 'OPERACIONES']
+  const severities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!errorCode.trim() || !title.trim() || !rootCause.trim() || !appliedSolution.trim()) return
+    onSubmit({
+      errorCode: errorCode.trim(),
+      category,
+      title: title.trim(),
+      rootCause: rootCause.trim(),
+      appliedSolution: appliedSolution.trim(),
+      severity,
+    })
+  }
+
+  // Reset form when dialog opens (key-based approach avoids setState in effect)
+  useEffect(() => {
+    if (open && !prevOpen.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setErrorCode(defaultErrorCode)
+      setCategory('SCADA')
+      setTitle(alertTitle || '')
+      setRootCause(alertMessage || '')
+      setAppliedSolution('')
+      setSeverity(defaultSeverity)
+    }
+    prevOpen.current = open
+  }, [open, defaultErrorCode, defaultSeverity, alertTitle, alertMessage])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-slate-900 border-slate-700/50 text-slate-200 max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <BookOpen className="w-5 h-5 text-cyan-400" />
+            Nueva Entrada de Conocimiento
+          </DialogTitle>
+          <DialogDescription className="text-slate-500 text-xs">
+            Registra la causa raíz y la solución para este código de error
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Código de Error *</label>
+              <Input
+                value={errorCode}
+                onChange={(e) => setErrorCode(e.target.value)}
+                placeholder="ERR_SENSOR_COMM_01"
+                className="h-9 bg-slate-800 border-slate-700 text-cyan-400 font-mono text-xs"
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Severidad</label>
+              <select
+                value={severity}
+                onChange={(e) => setSeverity(e.target.value)}
+                className="w-full h-9 bg-slate-800 border border-slate-700 rounded-md px-3 text-xs text-slate-300 focus:ring-1 focus:ring-emerald-500/40"
+              >
+                {severities.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Categoría</label>
+            <div className="flex flex-wrap gap-1.5">
+              {categories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md text-[10px] font-medium transition-all border',
+                    category === c
+                      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40'
+                      : 'bg-slate-800 text-slate-500 border-slate-700 hover:text-slate-300'
+                  )}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Título *</label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Descripción breve del problema"
+              className="h-9 bg-slate-800 border-slate-700 text-slate-200 text-xs"
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] uppercase tracking-wider text-red-400 font-semibold">Causa Raíz *</label>
+            <textarea
+              value={rootCause}
+              onChange={(e) => setRootCause(e.target.value)}
+              placeholder="¿Por qué ocurre este error?"
+              rows={3}
+              className="w-full bg-slate-800 border border-slate-700 rounded-md p-3 text-xs text-slate-300 placeholder:text-slate-600 focus:ring-1 focus:ring-emerald-500/40 resize-none"
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">Solución Aplicada *</label>
+            <textarea
+              value={appliedSolution}
+              onChange={(e) => setAppliedSolution(e.target.value)}
+              placeholder="1. Paso uno&#10;2. Paso dos&#10;3. Paso tres"
+              rows={4}
+              className="w-full bg-slate-800 border border-slate-700 rounded-md p-3 text-xs text-slate-300 placeholder:text-slate-600 focus:ring-1 focus:ring-emerald-500/40 resize-none whitespace-pre-wrap"
+              required
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+              className="text-slate-400 hover:text-slate-200 text-xs"
+              disabled={loading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              disabled={loading || !errorCode.trim() || !title.trim() || !rootCause.trim() || !appliedSolution.trim()}
+              className="bg-cyan-600 hover:bg-cyan-500 text-white text-xs gap-1.5"
+            >
+              {loading ? (
+                <RefreshCw className="w-3 h-3 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-3 h-3" />
+              )}
+              Guardar Solución
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ============ Component ============
 
 export default function GlobalOperationsCenter() {
@@ -206,6 +389,8 @@ export default function GlobalOperationsCenter() {
   const [knowledgeLoading, setKnowledgeLoading] = useState(false)
   const [knowledgeNotFound, setKnowledgeNotFound] = useState(false)
   const [selectedAlert, setSelectedAlert] = useState<GOCAlert | null>(null)
+  const [showCreateKB, setShowCreateKB] = useState(false)
+  const [creatingKB, setCreatingKB] = useState(false)
 
   // System health
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
@@ -332,6 +517,26 @@ export default function GlobalOperationsCenter() {
       setKnowledgeLoading(false)
     }
   }, [])
+
+  // ============ API: Create Knowledge Base Entry ============
+  const createKnowledgeEntry = useCallback(async (data: { errorCode: string; category: string; title: string; rootCause: string; appliedSolution: string; severity: string }) => {
+    setCreatingKB(true)
+    try {
+      await apiFetch('/admin/goc/knowledge', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      })
+      setShowCreateKB(false)
+      // Re-fetch knowledge for this alert now
+      if (selectedAlert) {
+        fetchKnowledge(selectedAlert)
+      }
+    } catch {
+      // Silently fail — could add toast here
+    } finally {
+      setCreatingKB(false)
+    }
+  }, [selectedAlert, fetchKnowledge])
 
   // ============ API: System Health ============
   const fetchSystemHealth = useCallback(async () => {
@@ -801,7 +1006,8 @@ export default function GlobalOperationsCenter() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="mt-2 text-xs border-slate-600 text-slate-400 hover:bg-slate-800"
+                    onClick={() => setShowCreateKB(true)}
+                    className="mt-2 text-xs border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
                   >
                     Crear Solución
                   </Button>
@@ -1072,7 +1278,8 @@ export default function GlobalOperationsCenter() {
               </div>
               <Button
                 variant="outline"
-                className="mt-2 border-slate-600 text-slate-400 hover:bg-slate-800"
+                onClick={() => setShowCreateKB(true)}
+                className="mt-2 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
               >
                 <BookOpen className="w-4 h-4 mr-2" />
                 Crear Entrada de Conocimiento
@@ -1081,6 +1288,18 @@ export default function GlobalOperationsCenter() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {/* ===== CREATE KNOWLEDGE BASE ENTRY DIALOG ===== */}
+      <CreateKnowledgeDialog
+        open={showCreateKB}
+        onOpenChange={setShowCreateKB}
+        onSubmit={createKnowledgeEntry}
+        loading={creatingKB}
+        defaultErrorCode={selectedAlert?.errorCode || ''}
+        defaultSeverity={selectedAlert?.severity || 'MEDIUM'}
+        alertTitle={selectedAlert?.title || ''}
+        alertMessage={selectedAlert?.message || ''}
+      />
     </div>
   )
 }
