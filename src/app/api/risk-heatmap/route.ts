@@ -59,9 +59,6 @@ export async function GET(req: NextRequest) {
     // 3. Sensor alerts by location
     const sensorAlerts = await db.sensor.findMany({
       where: { companyId, isActive: true, locationId: { not: null } },
-      include: {
-        location: { select: { name: true } },
-      },
       select: {
         name: true,
         type: true,
@@ -190,7 +187,8 @@ export async function GET(req: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Risk heatmap error:', error)
+    console.error('[Risk Heatmap API] Error:', error instanceof Error ? error.message : error)
+    console.error('[Risk Heatmap API] Stack:', error instanceof Error ? error.stack : 'N/A')
     return NextResponse.json({ error: 'Error al generar mapa de riesgo' }, { status: 500 })
   }
 }
