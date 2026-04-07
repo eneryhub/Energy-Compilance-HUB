@@ -14,6 +14,7 @@ import DocumentManager from '@/components/documents/document-manager'
 import SubscriptionManager from '@/components/subscription/subscription-manager'
 import RiskTypeManager from '@/components/risk-types/risk-type-manager'
 import TelemetryBoard from '@/components/scada/telemetry-board'
+import LocationsManager from '@/components/scada/locations-manager'
 import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
@@ -400,7 +401,24 @@ export default function Home() {
         </motion.div>
       )}
 
-      <AnimatePresence mode="wait">
+      {/* Hard block: when subscription is expired, only show subscription page */}
+      {subscriptionBlocked && currentView !== 'subscription' ? (
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mb-4">
+            <ShieldAlert className="w-8 h-8 text-red-500" />
+          </div>
+          <p className="text-lg font-semibold text-slate-700">Tu período de prueba ha expirado</p>
+          <p className="text-sm text-slate-500 mt-1 mb-4">Actualiza tu plan para continuar utilizando la plataforma.</p>
+          <Button
+            onClick={() => setCurrentView('subscription')}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+          >
+            <Crown className="w-4 h-4" />
+            Ver Planes Disponibles
+          </Button>
+        </div>
+      ) : (
+        <AnimatePresence mode="wait">
         <motion.div
           key={currentView}
           initial={{ opacity: 0, x: 10 }}
@@ -466,6 +484,10 @@ export default function Home() {
             <RiskTypeManager />
           )}
 
+          {currentView === 'locations' && (
+            <LocationsManager />
+          )}
+
           {currentView === 'scada' && (
             <TelemetryBoard />
           )}
@@ -528,6 +550,7 @@ export default function Home() {
           )}
         </motion.div>
       </AnimatePresence>
+      )}
     </AppShell>
   )
 }
