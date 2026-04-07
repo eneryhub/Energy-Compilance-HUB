@@ -1,7 +1,15 @@
-// Energy-Compliance Hub — Service Worker v3
-// Strategy: Network First for Scripts / Network Only for Sensors / Cache First for Images
+// Energy-Compliance Hub — Service Worker v3.1
+// Based on v3 with surgical fix: /api/sensors/simulation is NEVER cached
+// 
+// Strategy:
+//   - /api/sensors/simulation → PASS-THROUGH (no cache, control endpoint)
+//   - /api/sensors/*          → Network Only + Last Cache (offline fallback for sensor data)
+//   - /api/*                  → Stale-While-Revalidate (offline data for permits, docs, etc.)
+//   - Scripts / _next/*       → Network First (always latest code)
+//   - Images / Fonts          → Cache First (safe to cache long-term)
+//   - HTML pages              → Network First (App Shell)
 
-const CACHE_VERSION = 'ech-v3';
+const CACHE_VERSION = 'ech-v3.1';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL_CACHE = `${CACHE_VERSION}-appshell`;
 const SENSOR_CACHE = `${CACHE_VERSION}-sensors`;
@@ -17,18 +25,33 @@ const APP_SHELL_URLS = [
 // HTTP methods that can be cached (Cache API only supports GET)
 const CACHEABLE_METHODS = ['GET', 'HEAD'];
 
+// ═══════════════════════════════════════════════════════════════
+// CONTROL ENDPOINTS — These return volatile state that must
+// NEVER be cached. They control toggles, status flags, etc.
+// If cached, the UI shows stale state (e.g., demo mode ON).
+// ═══════════════════════════════════════════════════════════════
+const NO_CACHE_PATHS = [
+  '/api/sensors/simulation',   // Demo mode toggle state
+  '/api/subscription/status',  // Trial/subscription state
+  '/api/auth/',                // Authentication endpoints
+];
+
+function shouldNeverCache(url) {
+  return NO_CACHE_PATHS.some(path => url.pathname.startsWith(path));
+}
+
 // Install — pre-cache App Shell and activate immediately
 self.addEventListener('install', (event) => {
-  console.log('[SW] Installing Service Worker...');
+  console.log('[SW v3.1] Installing Service Worker...');
 
   // Skip waiting to force new version immediately
   self.skipWaiting();
 
   event.waitUntil(
     caches.open(APP_SHELL_CACHE).then((cache) => {
-      console.log('[SW] Pre-caching App Shell');
+      console.log('[SW v3.1] Pre-caching App Shell');
       return cache.addAll(APP_SHELL_URLS).catch((err) => {
-        console.warn('[SW] Some App Shell resources failed to cache:', err);
+        console.warn('[SW v3.1] Some App Shell resources failed to cache:', err);
         return Promise.resolve();
       });
     })
@@ -37,7 +60,7 @@ self.addEventListener('install', (event) => {
 
 // Activate — clean old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating Service Worker...');
+  console.log('[SW v3.1] Activating Service Worker...');
 
   // Take control of all clients immediately
   event.waitUntil(
@@ -48,7 +71,7 @@ self.addEventListener('activate', (event) => {
           cacheNames
             .filter((name) => name.startsWith('ech-') && !name.includes(CACHE_VERSION))
             .map((name) => {
-              console.log('[SW] Deleting old cache:', name);
+              console.log('[SW v3.1] Deleting old cache:', name);
               return caches.delete(name);
             })
         );
@@ -72,13 +95,24 @@ self.addEventListener('fetch', (event) => {
     return; // Let the browser handle it normally
   }
 
+  // ════════════════════════════════════════════════════════════
+  // CONTROL ENDPOINTS: Never cache, always pass-through
+  // These return volatile state (demo mode, subscription, auth)
+  // that would cause stale UI if served from cache.
+  // ════════════════════════════════════════════════════════════
+  if (shouldNeverCache(url)) {
+    return; // Let the browser handle it normally — no SW interception
+  }
+
   // Strategy: Network Only for sensor routes (safety-critical)
+  // Caches last known sensor data for offline viewing
   if (url.pathname.startsWith('/api/sensors')) {
     event.respondWith(networkOnlyWithLastCache(request, SENSOR_CACHE));
     return;
   }
 
   // Strategy: Stale-While-Revalidate for GET API routes only
+  // Serves cached data immediately, updates in background
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(staleWhileRevalidate(request, STATIC_CACHE));
     return;
@@ -281,14 +315,14 @@ self.addEventListener('message', (event) => {
 
   if (event.data && event.data.type === 'CLEAR_SENSOR_CACHE') {
     caches.delete(SENSOR_CACHE).then(() => {
-      console.log('[SW] Sensor cache cleared');
+      console.log('[SW v3.1] Sensor cache cleared');
     });
   }
 });
 
 // Background Sync
 self.addEventListener('sync', (event) => {
-  console.log('[SW] Background sync triggered:', event.tag);
+  console.log('[SW v3.1] Background sync triggered:', event.tag);
 
   if (event.tag === 'sync-offline-data') {
     event.waitUntil(syncOfflineData());
@@ -300,5 +334,5 @@ async function syncOfflineData() {
   clients.forEach((client) => {
     client.postMessage({ type: 'SYNC_STARTED' });
   });
-  console.log('[SW] Offline data sync initiated');
+  console.log('[SW v3.1] Offline data sync initiated');
 }
