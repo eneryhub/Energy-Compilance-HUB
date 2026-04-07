@@ -234,7 +234,7 @@ export default function TechnicalManual() {
               </p>
               <div className="flex items-center gap-3 mt-3">
                 <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-[10px]">
-                  v3.0
+                  v3.1
                 </Badge>
                 <Badge className="bg-slate-700 text-slate-300 text-[10px]">
                   Arquitectura Next.js 15
@@ -448,8 +448,12 @@ useEffect(() => {
           icon={<Wifi className="w-4 h-4" />}
           badge="4 Protocolos"
         >
+          <InfoBox type="warning">
+            <strong>Nota importante:</strong> La plataforma expone un único endpoint receptor HTTP (<code className="font-mono text-xs">POST /api/sensors/ingest</code>). Los 4 métodos descritos a continuación son <strong>arquitecturas de referencia</strong> — patrones recomendados que utilizan un gateway o puente externo para traducir el protocolo industrial (Modbus, MQTT, OPC-UA) hacia peticiones HTTP estándar. Los códigos de ejemplo son para implementar en el lado del cliente (edge device), no están integrados nativamente en la plataforma.
+          </InfoBox>
+
           <Paragraph>
-            La plataforma soporta 4 métodos de integración para conectar sensores físicos reales. Cada método tiene ventajas según el tipo de instalación industrial y la infraestructura disponible.
+            A continuación se documentan 4 patrones de integración para conectar sensores físicos reales al endpoint de ingest de la plataforma. Cada patrón tiene ventajas según el tipo de instalación industrial y la infraestructura disponible.
           </Paragraph>
 
           <SubTitle>2.1 HTTP Webhook (Recomendado para IoT moderno)</SubTitle>
@@ -920,8 +924,8 @@ if __name__ == "__main__":
             rows={[
               ['sensorId', 'string', 'Sí', 'ID único del sensor registrado'],
               ['value', 'number', 'Sí', 'Valor numérico de la lectura'],
-              ['timestamp', 'string (ISO 8601)', 'No', 'Timestamp de la medición (default: ahora)'],
-              ['source', 'string', 'No', 'Origen: "webhook", "mqtt", "modbus", "opcua"'],
+              ['timestamp', 'string (ISO 8601)', 'No', 'Informativo (el servidor genera su propio timestamp de almacenamiento)'],
+              ['source', 'string', 'No', 'Origen: "webhook", "mqtt", "manual"'],
               ['metadata', 'object', 'No', 'Datos adicionales (quality, nodeId, topic, etc.)'],
             ]}
           />
@@ -1145,9 +1149,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 }`} />
 
           {/* POST /api/sensors/simulation */}
-          <SubTitle>POST /api/sensors/simulation — Toggle Modo Demo</SubTitle>
+          <SubTitle>POST /api/sensors/simulation — Configurar Modo Demo</SubTitle>
           <Paragraph>
-            Activa o desactiva el modo de simulación para la compañía del usuario. El estado se persiste en la base de datos.
+            Configura explícitamente el modo de simulación para la compañía del usuario enviando <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">{'{'} "enabled": true/false {'}'}  </code>. No es un toggle automático — debe especificarse el valor deseado. El estado se persiste en la base de datos. Requiere rol ADMIN, SUPERVISOR o MANAGER.
           </Paragraph>
 
           <CodeBlock language="Request" code={`POST /api/sensors/simulation HTTP/1.1
@@ -1236,12 +1240,12 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
   ]
 }`} />
 
-          <SubTitle>DELETE /api/api-keys?id={'{'}keyId{'}'} — Revocar Credencial</SubTitle>
+          <SubTitle>DELETE /api/api-keys/['id'] — Revocar Credencial</SubTitle>
           <Paragraph>
-            Revoca permanentemente una API Key. Las peticiones futuras con esa clave devolverán 401.
+            Revoca permanentemente una API Key. Las peticiones futuras con esa clave devolverán 401. Soporta el query parameter <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">?permanent=true</code> para eliminación definitiva.
           </Paragraph>
 
-          <CodeBlock language="Request — DELETE /api/api-keys" code={`DELETE /api/api-keys?id=clkey_abc123... HTTP/1.1
+          <CodeBlock language="Request — DELETE /api/api-keys/[id]" code={`DELETE /api/api-keys/clkey_abc123... HTTP/1.1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`} />
 
           <CodeBlock language="Response — 200 OK" code={`{
@@ -1256,9 +1260,9 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIs...`} />
 }`} />
 
           {/* ── Geofence Verification (NEW in v3.0) ── */}
-          <SubTitle>3.x Geofence — Verificación de Ubicación GPS</SubTitle>
+          <SubTitle>3.x Aprobación/Rechazo de Permisos — Geofence GPS</SubTitle>
           <Paragraph>
-            Los endpoints de aprobación y rechazo de permisos (<code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">POST /api/permits/[id]/approve</code>) verifican automáticamente la ubicación GPS del supervisor contra el radio definido en la WorkLocation del permiso usando la fórmula de <strong>distancia Haversine</strong>.
+            El endpoint <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">POST /api/permits/[id]/approve</code> maneja tanto la <strong>aprobación</strong> como el <strong>rechazo</strong> de permisos mediante el campo <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">action: "approve" | "reject"</code>. Verifica automáticamente la ubicación GPS del supervisor contra el radio definido en la WorkLocation usando la fórmula de <strong>distancia Haversine</strong>. La geofence es de <strong>aplicación suave</strong>: si el supervisor está fuera del radio, puede aprobar/rechazar si proporciona una justificación (mínimo 10 caracteres).
           </Paragraph>
 
           <CodeBlock language="typescript — Algoritmo Haversine (src/lib/gps.ts)" code={`/**
@@ -1738,9 +1742,23 @@ async function isCompanySafe(companyId: string): Promise<SiteSafetyCheck> {
             <strong>¿Dónde obtengo las credenciales?</strong> Ve al módulo <strong>SCADA → Credenciales API</strong> en el panel principal. Ahí podrás ver y copiar tu token JWT, así como generar y gestionar API Keys.
           </InfoBox>
 
-          <SubTitle>7.1 JWT (JSON Web Token) — Cómo obtenerlo</SubTitle>
+          <SubTitle>7.1 JWT (JSON Web Token) — Autenticación Custom</SubTitle>
           <Paragraph>
-            El token JWT se genera automáticamente al <strong>iniciar sesión</strong> en la plataforma. Para obtenerlo y copiarlo:
+            La plataforma utiliza un sistema de autenticación JWT propio implementado con la librería <strong>jose</strong> (HS256). No utiliza NextAuth.js. El token se genera al <strong>iniciar sesión</strong> vía <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">POST /api/auth/login</code> y tiene una validez de 30 días. La verificación se realiza <strong>por ruta</strong> (no hay middleware global) — cada API handler llama a <code className="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono text-emerald-700">getSession(request)</code> para validar el token.
+          </Paragraph>
+
+          <SubTitle>Endpoints de Autenticación</SubTitle>
+          <SpecTable
+            headers={['Endpoint', 'Método', 'Descripción']}
+            rows={[
+              ['/api/auth/login', 'POST', 'Inicio de sesión (email + password) → devuelve JWT'],
+              ['/api/auth/register', 'POST', 'Registro de nuevo usuario'],
+              ['/api/auth/token', 'POST', 'Validación y refresh de token'],
+            ]}
+          />
+
+          <Paragraph>
+            Para obtener y copiar tu token JWT desde la interfaz:
           </Paragraph>
           <StepList
             steps={[
@@ -1755,7 +1773,11 @@ async function isCompanySafe(companyId: string): Promise<SiteSafetyCheck> {
               ↑ Prefijo "Bearer" + espacio + token completo`} />
 
           <InfoBox type="warning">
-            El token JWT tiene una validez de <strong>30 días</strong>. Cuando expire, deberás iniciar sesión de nuevo y copiar el nuevo token. Para integraciones permanentes (dispositivos IoT, gateways), se recomienda usar <strong>API Keys</strong> en su lugar, ya que no expiran con la sesión.
+            El token JWT tiene una validez de <strong>30 días</strong>. Cuando expire, deberás iniciar sesión de nuevo y copiar el nuevo token. Para integraciones permanentes (dispositivos IoT, gateways), se recomienda usar <strong>API Keys</strong> en su lugar, ya que permiten expiración configurable.
+          </InfoBox>
+
+          <InfoBox type="tip">
+            <strong>Implementación técnica:</strong> El JWT se firma con <code className="font-mono text-xs">SignJWT</code> de <code className="font-mono text-xs">jose</code> usando el algoritmo HS256 y el secreto configurado en <code className="font-mono text-xs">JWT_SECRET</code> (variable de entorno obligatoria). El payload incluye <code className="font-mono text-xs">userId</code>, <code className="font-mono text-xs">companyId</code>, <code className="font-mono text-xs">role</code> y <code className="font-mono text-xs">email</code>.
           </InfoBox>
 
           <SubTitle>7.2 API Key — Cómo generarla</SubTitle>
@@ -1841,7 +1863,7 @@ Clave completa:  ech_live_a1b2c3d4e5f6789012345678901234ab
           <SubTitle>Flujo de Revocación</SubTitle>
           <StepList
             steps={[
-              'El administrador envía DELETE /api/api-keys?id={keyId}.',
+              'El administrador envía DELETE /api/api-keys/[id] (ruta dinámica).',
               'El servidor marca la clave como revocada en la base de datos.',
               'Peticiones futuras con esa clave devuelven 401 Unauthorized.',
               'Las operaciones en curso NO se interrumpen (sin sesión stateful).',
@@ -1867,13 +1889,14 @@ Clave completa:  ech_live_a1b2c3d4e5f6789012345678901234ab
             ]}
           />
 
-          <CodeBlock language="bash — Ejemplo: Variables de entorno seguras (.env)" code={`# Configuración del servidor
-NEXTAUTH_SECRET=super_secret_random_string_256bit
-JWT_SECRET=your_jwt_signing_secret
+          <CodeBlock language="bash — Variables de entorno obligatorias (.env)" code={`# Configuración del servidor - OBLIGATORIA
+JWT_SECRET=super_secret_random_string_256bit
 
-# API Keys para integraciones externas
+# Base de datos
+DATABASE_URL=file:./dev.db
+
+# API Keys para integraciones externas (opcionales)
 SCADA_API_KEY_PRIMARY=ech_live_a1b2c3d4e5f6...
-SCADA_API_KEY_SECONDARY=ech_live_x9y8z7w6v5u4...
 
 # ⚠ NUNCA commitee este archivo al control de versiones
 # Añada .env a .gitignore`} />
