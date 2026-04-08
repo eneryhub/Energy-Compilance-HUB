@@ -1,4 +1,6 @@
-import ZAI from 'z-ai-web-dev-sdk'
+// Energy-Compliance Hub — AI Utilities
+// Uses z-ai-web-dev-sdk when available (Z.ai sandbox),
+// falls back to OpenAI-compatible API on Vercel.
 
 export interface DocumentExtraction {
   documentType: string
@@ -11,13 +13,71 @@ export interface DocumentExtraction {
   keywords: string[]
 }
 
-let _zaiInstance: InstanceType<typeof ZAI> | null = null
+// ── Lazy ZAI singleton (same pattern as upload route) ──
+let _zaiInstance: any = null
+let _zaiInitAttempted = false
+let _zaiAvailable = false
 
-async function getZAI(): Promise<InstanceType<typeof ZAI>> {
-  if (!_zaiInstance) {
+export async function getAI(): Promise<any | null> {
+  if (_zaiInitAttempted) return _zaiAvailable ? _zaiInstance : null
+  _zaiInitAttempted = true
+
+  try {
+    const ZAI = (await import('z-ai-web-dev-sdk')).default
     _zaiInstance = await ZAI.create()
+    _zaiAvailable = true
+    return _zaiInstance
+  } catch {
+    // Fallback: OpenAI-compatible API
+    const apiKey = process.env.ZAI_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    const baseUrl = process.env.ZAI_OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    const model = process.env.ZAI_MODEL || 'gpt-4o-mini'
+
+    if (apiKey) {
+      _zaiInstance = { type: 'openai', apiKey, baseUrl, model }
+      _zaiAvailable = true
+      return _zaiInstance
+    }
+
+    _zaiAvailable = false
+    return null
   }
-  return _zaiInstance
+}
+
+// ── Unified chat completion (works with both backends) ──
+
+async function chatCompletion(messages: Array<{ role: string; content: string }>, options?: { temperature?: number }): Promise<string> {
+  const ai = await getAI()
+  if (!ai) return ''
+
+  if (ai.type === 'openai') {
+    const response = await fetch(`${ai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ai.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: ai.model,
+        messages,
+        max_tokens: 2048,
+        temperature: options?.temperature ?? 0.1,
+      }),
+    })
+    if (!response.ok) throw new Error(`OpenAI error: ${response.status}`)
+    const data = await response.json()
+    return data.choices?.[0]?.message?.content || ''
+  }
+
+  // Native z-ai-web-dev-sdk
+  const response = await ai.chat.completions.create({
+    messages: messages.map(m => ({
+      role: m.role as 'user' | 'assistant' | 'system',
+      content: m.content,
+    })),
+    thinking: { type: 'disabled' },
+  })
+  return response.choices?.[0]?.message?.content || ''
 }
 
 /**
@@ -25,14 +85,10 @@ async function getZAI(): Promise<InstanceType<typeof ZAI>> {
  */
 export async function extractDocumentData(text: string): Promise<DocumentExtraction | null> {
   try {
-    const zai = await getZAI()
-
-    const response = await zai.chat.completions.create({
-      model: 'default',
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un experto en análisis de documentos de seguridad industrial HSE para Latinoamérica.
+    const content = await chatCompletion([
+      {
+        role: 'system',
+        content: `Eres un experto en análisis de documentos de seguridad industrial HSE para Latinoamérica.
 Extrae información estructurada. Responde ÚNICAMENTE con JSON válido:
 {
   "documentType": "string",
@@ -44,16 +100,13 @@ Extrae información estructurada. Responde ÚNICAMENTE con JSON válido:
   "summary": "string",
   "keywords": ["string"]
 }`,
-        },
-        {
-          role: 'user',
-          content: `Analiza este documento:\n\n${text}`,
-        },
-      ],
-      temperature: 0.1,
-    })
+      },
+      {
+        role: 'user',
+        content: `Analiza este documento:\n\n${text}`,
+      },
+    ], { temperature: 0.1 })
 
-    const content = response.choices?.[0]?.message?.content
     if (!content) return null
 
     const jsonMatch = content.match(/\{[\s\S]*\}/)
@@ -83,24 +136,18 @@ export async function generateAlertMessage(params: {
   }
 
   try {
-    const zai = await getZAI()
+    const content = await chatCompletion([
+      {
+        role: 'system',
+        content: 'Genera mensajes de alerta claros y concisos en español para seguridad industrial. Maximo 160 caracteres.',
+      },
+      {
+        role: 'user',
+        content: `Genera alerta URGENTE para documento VENCIDO: ${documentType} "${documentTitle}" de ${holderName || 'N/A'}, venció el ${expiryDate}.`,
+      },
+    ], { temperature: 0.5 })
 
-    const response = await zai.chat.completions.create({
-      model: 'default',
-      messages: [
-        {
-          role: 'system',
-          content: 'Genera mensajes de alerta claros y concisos en español para seguridad industrial. Maximo 160 caracteres.',
-        },
-        {
-          role: 'user',
-          content: `Genera alerta URGENTE para documento VENCIDO: ${documentType} "${documentTitle}" de ${holderName || 'N/A'}, venció el ${expiryDate}.`,
-        },
-      ],
-      temperature: 0.5,
-    })
-
-    return response.choices?.[0]?.message?.content || `${documentType} "${documentTitle}" ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
+    return content || `${documentType} "${documentTitle}" ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
   } catch {
     return `ALERTA URGENTE: ${documentType} "${documentTitle}" ${holderName ? `de ${holderName}` : ''} ha VENCIDO (${expiryDate}). Renueve inmediatamente.`
   }
@@ -121,8 +168,8 @@ export interface PermitReviewResult {
 }
 
 /**
- * Review a work permit for safety compliance using AI (z-ai-web-dev-sdk).
- * Returns a structured assessment with recommendations.
+ * Review a work permit for safety compliance using AI.
+ * Falls back to rule-based review when AI is unavailable.
  */
 export async function reviewPermitSafety(params: {
   riskType: string
@@ -142,18 +189,14 @@ export async function reviewPermitSafety(params: {
   const totalChecks = Object.keys(safetyChecks).length
 
   try {
-    const zai = await getZAI()
-
     const checksDescription = Object.entries(safetyChecks).map(([key, val]) =>
       `- ${key.replace(/_/g, ' ')}: ${val ? 'SI Cumplido' : 'NO Cumplido'}`
     ).join('\n')
 
-    const response = await zai.chat.completions.create({
-      model: 'default',
-      messages: [
-        {
-          role: 'system',
-          content: `Eres un auditor de seguridad industrial HSE experto en normativa latinoamericana (OSHA, NFPA, ISO 45001).
+    const content = await chatCompletion([
+      {
+        role: 'system',
+        content: `Eres un auditor de seguridad industrial HSE experto en normativa latinoamericana (OSHA, NFPA, ISO 45001).
 Analiza permisos de trabajo y genera EXCLUSIVAMENTE un JSON con tu evaluación. No incluyas texto fuera del JSON.
 
 {
@@ -179,10 +222,10 @@ Criterios de scoring:
 
 Si TODOS los checks estan cumplidos y hay fotos, el score debe ser >= 90 y recommendation "APROBAR".
 Si hay checks sin cumplir, penaliza proporcionalmente.`,
-        },
-        {
-          role: 'user',
-          content: `Analiza este permiso de trabajo:
+      },
+      {
+        role: 'user',
+        content: `Analiza este permiso de trabajo:
 
 TIPO DE RIESGO: ${riskLabel} (${riskType})
 DESCRIPCION DEL TRABAJO: ${workDescription}
@@ -194,12 +237,9 @@ LISTA DE VERIFICACION (${passedChecks.length}/${totalChecks} cumplidos):
 ${checksDescription}
 
 EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` : 'No se adjuntaron fotos'}`,
-        },
-      ],
-      temperature: 0.2,
-    })
+      },
+    ], { temperature: 0.2 })
 
-    const content = response.choices?.[0]?.message?.content
     if (!content) throw new Error('Empty AI response')
 
     const jsonMatch = content.match(/\{[\s\S]*\}/)
@@ -220,21 +260,10 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
     console.error('[AI] reviewPermitSafety fallback triggered:', error instanceof Error ? error.message : error)
 
     let score = 100
-
-    // Penalize failed checks
     score -= failedChecks.length * 12
-
-    // Penalize missing photos
     if (!hasPhotos) score -= 10
-
-    // Penalize empty work description
     if (workDescription.length < 20) score -= 15
-
-    // Risk type adjustment
-    if (riskType === 'CALIENTE' || riskType === 'ELECTRICO' || riskType === 'EXCAVACION') {
-      score -= 5
-    }
-
+    if (riskType === 'CALIENTE' || riskType === 'ELECTRICO' || riskType === 'EXCAVACION') score -= 5
     score = Math.max(0, Math.min(100, score))
 
     const riskLevel = score >= 90 ? 'BAJO' : score >= 70 ? 'MEDIO' : score >= 50 ? 'MEDIO-ALTO' : score >= 30 ? 'ALTO' : 'CRITICO'
@@ -242,7 +271,6 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
 
     const findings: Array<{ severity: string; category: string; description: string; suggestion: string }> = []
 
-    // Check-specific findings
     for (const [key] of failedChecks) {
       findings.push({
         severity: 'warning',
@@ -252,7 +280,6 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
       })
     }
 
-    // Evidence findings
     if (!hasPhotos) {
       findings.push({
         severity: 'info',
@@ -262,48 +289,21 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
       })
     }
 
-    // Risk-specific findings
     if (riskType === 'ALTURA' && !safetyChecks.has_harness) {
-      findings.push({
-        severity: 'critical',
-        category: 'ppe',
-        description: 'Trabajo en altura sin arnés de seguridad verificado',
-        suggestion: 'El arnés de cuerpo completo es obligatorio para trabajos en altura. No apruebe sin verificar.',
-      })
+      findings.push({ severity: 'critical', category: 'ppe', description: 'Trabajo en altura sin arnés de seguridad verificado', suggestion: 'El arnés de cuerpo completo es obligatorio para trabajos en altura. No apruebe sin verificar.' })
     }
     if (riskType === 'CALIENTE' && !safetyChecks.has_fire_extinguisher) {
-      findings.push({
-        severity: 'critical',
-        category: 'safety',
-        description: 'Trabajo en caliente sin extintor verificado',
-        suggestion: 'Verifique la disponibilidad de extintores en el area antes de iniciar.',
-      })
+      findings.push({ severity: 'critical', category: 'safety', description: 'Trabajo en caliente sin extintor verificado', suggestion: 'Verifique la disponibilidad de extintores en el area antes de iniciar.' })
     }
     if (riskType === 'ELECTRICO' && !safetyChecks.has_lockout_tagout) {
-      findings.push({
-        severity: 'critical',
-        category: 'procedures',
-        description: 'Trabajo eléctrico sin Lockout/Tagout verificado',
-        suggestion: 'LOTO es obligatorio. No inicie trabajo sin desenergizar y bloquear la fuente.',
-      })
+      findings.push({ severity: 'critical', category: 'procedures', description: 'Trabajo eléctrico sin Lockout/Tagout verificado', suggestion: 'LOTO es obligatorio. No inicie trabajo sin desenergizar y bloquear la fuente.' })
     }
     if (riskType === 'EXCAVACION' && !safetyChecks.has_gas_detection) {
-      findings.push({
-        severity: 'critical',
-        category: 'safety',
-        description: 'Excavación sin detección de gases verificado',
-        suggestion: 'Monitoreo de gases continuo es obligatorio en excavaciones.',
-      })
+      findings.push({ severity: 'critical', category: 'safety', description: 'Excavación sin detección de gases verificado', suggestion: 'Monitoreo de gases continuo es obligatorio en excavaciones.' })
     }
 
-    // Add positive finding if all checks pass
     if (failedChecks.length === 0) {
-      findings.push({
-        severity: 'info',
-        category: 'checklist',
-        description: `Todos los ${totalChecks} items de verificación están completados`,
-        suggestion: 'El checklist está completo. Verifique las condiciones en campo.',
-      })
+      findings.push({ severity: 'info', category: 'checklist', description: `Todos los ${totalChecks} items de verificación están completados`, suggestion: 'El checklist está completo. Verifique las condiciones en campo.' })
     }
 
     return {
