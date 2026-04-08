@@ -111,6 +111,8 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
 
   // Checklist UI state
   const [checklistExpanded, setChecklistExpanded] = useState(true)
+  const [checklistModalOpen, setChecklistModalOpen] = useState(false)
+  const [checklistNotes, setChecklistNotes] = useState<Record<string, string>>({})
 
   // Dynamic risk types from API
   const [dynamicRiskTypes, setDynamicRiskTypes] = useState<DynamicRiskType[]>(FALLBACK_RISK_TYPES)
@@ -348,6 +350,7 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
       const payload: CreatePermitRequest & { photos: PhotoItem[]; workLocationId?: string; qrScannedCode?: string; beaconDetected?: boolean } = {
         riskType,
         safetyChecks,
+        checklistNotes,
         technicianName,
         supervisorName,
         workLocation,
@@ -939,171 +942,255 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
               </CardContent>
             </Card>
 
-            {/* Safety Checklist - Collapsible */}
-            <Card className="shadow-sm border-slate-200 overflow-hidden">
-              {/* Checklist Header - always visible, clickable to toggle */}
-              <button
-                type="button"
-                onClick={() => riskType && setChecklistExpanded(!checklistExpanded)}
-                className={cn(
-                  'w-full text-left px-6 py-4 flex items-center gap-3 transition-colors',
-                  riskType ? 'hover:bg-slate-50 cursor-pointer' : 'cursor-default'
-                )}
-              >
-                <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Safety Checklist - Clickable Card → Opens Modal */}
+            <Card
+              className={cn(
+                'shadow-sm border-2 transition-all duration-200',
+                riskType && checklist.length > 0
+                  ? 'border-emerald-200 bg-gradient-to-br from-white to-emerald-50/30 cursor-pointer hover:border-emerald-400 hover:shadow-md'
+                  : 'border-slate-200'
+              )}
+              onClick={() => { if (riskType && checklist.length > 0) setChecklistModalOpen(true) }}
+            >
+              <CardContent className="p-5">
+                <div className="flex items-center gap-3">
                   <div className="relative">
-                    <ClipboardCheck className="w-5 h-5 text-amber-500" />
+                    <div className={cn(
+                      'flex h-11 w-11 items-center justify-center rounded-xl',
+                      riskType && checklist.length > 0 ? 'bg-emerald-100' : 'bg-slate-100'
+                    )}>
+                      <ClipboardCheck className={cn('w-5 h-5', riskType ? 'text-emerald-600' : 'text-slate-400')} />
+                    </div>
                     {riskType && checklist.length > 0 && (
                       <span className={cn(
-                        'absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center text-white',
+                        'absolute -top-1.5 -right-1.5 min-w-[20px] h-5 rounded-full text-[10px] font-bold flex items-center justify-center px-1 text-white',
                         allRequiredChecked ? 'bg-emerald-500' : 'bg-amber-500'
                       )}>
-                        {checklist.filter(i => safetyChecks[i.key]).length}
+                        {checklist.filter(i => safetyChecks[i.key]).length}/{checklist.length}
                       </span>
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-700 truncate">Lista de Verificación de Seguridad</p>
-                    {riskType ? (
-                      <p className="text-[11px] text-slate-500">
-                        {checklist.length} items para {riskLabel}
-                        {checklist.length > 0 && (
-                          <span className="ml-1.5">
-                            · {checklist.filter(i => safetyChecks[i.key]).length}/{checklist.length} completados
+                    <p className="text-sm font-semibold text-slate-700">Lista de Verificación de Seguridad</p>
+                    {riskType && checklist.length > 0 ? (
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {checklist.length} items para <span className="font-medium text-slate-700">{riskLabel}</span>
+                        {checklist.filter(i => checklistNotes[i.key]).length > 0 && (
+                          <span className="ml-1 text-emerald-600">
+                            · {checklist.filter(i => checklistNotes[i.key]).length} con notas
                           </span>
                         )}
                       </p>
                     ) : (
-                      <p className="text-[11px] text-slate-400">Seleccione un tipo de riesgo</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Seleccione un tipo de riesgo</p>
                     )}
                   </div>
+                  {riskType && checklist.length > 0 && (
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      {allRequiredChecked ? (
+                        <Badge className="bg-emerald-100 text-emerald-700 text-[10px] border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 mr-0.5" /> Completo
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-amber-100 text-amber-700 text-[10px] border border-amber-200">
+                          Pendiente
+                        </Badge>
+                      )}
+                      <span className="text-[10px] text-slate-400 flex items-center gap-0.5">
+                        Clic para abrir <ChevronDown className="w-3 h-3" />
+                      </span>
+                    </div>
+                  )}
                 </div>
+                {/* Progress Bar */}
                 {riskType && checklist.length > 0 && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    {!allRequiredChecked && (
-                      <Badge className="bg-amber-100 text-amber-700 text-[10px] border border-amber-200">
-                        Pendiente
-                      </Badge>
-                    )}
-                    {allRequiredChecked && (
-                      <Badge className="bg-emerald-100 text-emerald-700 text-[10px] border border-emerald-200">
-                        <CheckCircle2 className="w-3 h-3 mr-0.5" /> Completo
-                      </Badge>
-                    )}
-                    {checklistExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-slate-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-slate-400" />
-                    )}
-                  </div>
-                )}
-              </button>
-
-              {/* Checklist Progress Bar (always visible when riskType selected) */}
-              {riskType && checklist.length > 0 && (
-                <div className="px-6 pb-0">
-                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="mt-4 w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                     <div
                       className={cn(
-                        'h-full rounded-full transition-all duration-300',
+                        'h-full rounded-full transition-all duration-500',
                         allRequiredChecked ? 'bg-emerald-500' : 'bg-amber-400'
                       )}
-                      style={{ width: `${checklist.length > 0 ? (checklist.filter(i => safetyChecks[i.key]).length / checklist.length) * 100 : 0}%` }}
+                      style={{ width: `${(checklist.filter(i => safetyChecks[i.key]).length / checklist.length) * 100}%` }}
                     />
                   </div>
-                </div>
-              )}
+                )}
+              </CardContent>
+            </Card>
 
-              {/* Checklist Body - collapsible */}
-              <AnimatePresence>
-                {checklistExpanded && riskType && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="overflow-hidden"
-                  >
-                    <CardContent className="pt-3">
-                      {checklist.length === 0 ? (
-                        <p className="text-sm text-slate-400 text-center py-3">No hay items de verificación para este tipo de riesgo</p>
-                      ) : (
-                        <div className="max-h-[280px] overflow-y-auto rounded-lg border border-slate-100 pr-1">
-                          <div className="space-y-1">
-                            {checklist.map((item, index) => {
-                              const isChecked = safetyChecks[item.key] || false
-                              return (
-                                <label
-                                  key={item.key}
-                                  className={cn(
-                                    'flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all text-left',
-                                    isChecked
-                                      ? 'bg-emerald-50/70 border border-emerald-100'
-                                      : 'hover:bg-slate-50 border border-transparent'
-                                  )}
-                                >
-                                  <span className="text-[10px] text-slate-400 font-mono w-5 shrink-0 text-right">
-                                    {index + 1}
-                                  </span>
+            {/* Checklist Modal */}
+            <Dialog open={checklistModalOpen} onOpenChange={setChecklistModalOpen}>
+              <DialogContent className="max-w-2xl w-[95vw] max-h-[90vh] p-0 flex flex-col overflow-hidden">
+                {/* Modal Header */}
+                <div className="px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100">
+                        <ClipboardCheck className="w-5 h-5 text-emerald-600" />
+                      </div>
+                      <div>
+                        <DialogTitle className="text-base font-semibold text-slate-800">
+                          Lista de Verificación
+                        </DialogTitle>
+                        <DialogDescription className="text-xs text-slate-500">
+                          {riskLabel} · {checklist.filter(i => safetyChecks[i.key]).length}/{checklist.length} verificados
+                        </DialogDescription>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={cn(
+                        'text-[10px] px-2 py-0.5 border',
+                        allRequiredChecked
+                          ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                          : 'bg-amber-100 text-amber-700 border-amber-200'
+                      )}>
+                        {allRequiredChecked ? (
+                          <><CheckCircle2 className="w-3 h-3 mr-0.5" /> Completo</>
+                        ) : (
+                          <><AlertCircle className="w-3 h-3 mr-0.5" /> En progreso</>
+                        )}
+                      </Badge>
+                    </div>
+                  </div>
+                  {/* Progress Bar */}
+                  <div className="mt-3 w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all duration-500',
+                        allRequiredChecked ? 'bg-emerald-500' : 'bg-amber-400'
+                      )}
+                      style={{ width: `${(checklist.filter(i => safetyChecks[i.key]).length / checklist.length) * 100}%` }}
+                    />
+                  </div>
+                  {/* Quick Actions */}
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const updates: Record<string, boolean> = {}
+                        checklist.forEach((item) => { updates[item.key] = true })
+                        setSafetyChecks((prev) => ({ ...prev, ...updates }))
+                      }}
+                      className="text-[11px] h-7 gap-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                    >
+                      <CheckCircle2 className="w-3 h-3" /> Marcar todos
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const updates: Record<string, boolean> = {}
+                        checklist.forEach((item) => { updates[item.key] = false })
+                        setSafetyChecks((prev) => ({ ...prev, ...updates }))
+                      }}
+                      className="text-[11px] h-7 gap-1 text-slate-500"
+                    >
+                      <XCircle className="w-3 h-3" /> Desmarcar todos
+                    </Button>
+                    <span className="ml-auto text-[10px] text-slate-400">
+                      Agregue notas en los campos de texto cuando sea necesario
+                    </span>
+                  </div>
+                </div>
+                {/* Modal Body - Scrollable checklist items */}
+                <div className="flex-1 overflow-y-auto px-6 py-4">
+                  {checklist.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-8">No hay items de verificación para este tipo de riesgo</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {checklist.map((item, index) => {
+                        const isChecked = safetyChecks[item.key] || false
+                        const hasNote = !!checklistNotes[item.key]
+                        return (
+                          <div
+                            key={item.key}
+                            className={cn(
+                              'rounded-xl border transition-all duration-200',
+                              isChecked
+                                ? 'bg-emerald-50/50 border-emerald-200'
+                                : 'bg-white border-slate-200 hover:border-slate-300'
+                            )}
+                          >
+                            <div className="flex items-start gap-3 p-3">
+                              {/* Item number */}
+                              <span className="text-[11px] text-slate-400 font-mono w-6 shrink-0 text-right pt-0.5">
+                                {String(index + 1).padStart(2, '0')}
+                              </span>
+                              {/* Checkbox + Label */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-start gap-2.5">
                                   <Checkbox
                                     checked={isChecked}
                                     onCheckedChange={(checked) => handleCheckChange(item.key, !!checked)}
-                                    className="shrink-0"
+                                    className="mt-0.5 shrink-0"
                                   />
-                                  <span className={cn(
-                                    'text-[13px] flex-1 leading-tight',
-                                    isChecked ? 'text-slate-500 line-through' : 'text-slate-700'
-                                  )}>
-                                    {item.label}
-                                  </span>
-                                  {item.required && (
-                                    <Badge className="bg-red-100 text-red-600 text-[9px] px-1.5 py-0 shrink-0 border border-red-200">
-                                      Req.
-                                    </Badge>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={cn(
+                                      'text-[13px] leading-snug',
+                                      isChecked ? 'text-slate-500 line-through' : 'text-slate-800 font-medium'
+                                    )}>
+                                      {item.label}
+                                    </p>
+                                    {item.required && (
+                                      <Badge className="bg-red-100 text-red-600 text-[9px] px-1.5 py-0 mt-1 border border-red-200">
+                                        Requerido
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                {/* Notes text field */}
+                                <div className="mt-2 ml-7">
+                                  <div className="relative">
+                                    <PenLine className="absolute left-2.5 top-2.5 w-3 h-3 text-slate-300" />
+                                    <textarea
+                                      value={checklistNotes[item.key] || ''}
+                                      onChange={(e) => setChecklistNotes(prev => ({ ...prev, [item.key]: e.target.value }))}
+                                      placeholder={
+                                        isChecked
+                                          ? 'Observaciones adicionales (opcional)...'
+                                          : 'Detalle el estado o motivo si no aplica...'
+                                      }
+                                      rows={1}
+                                      className="w-full text-xs pl-8 pr-3 py-2 rounded-lg border border-slate-200 bg-slate-50/50 text-slate-700 placeholder:text-slate-300 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-300 transition-all"
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                  </div>
+                                  {hasNote && (
+                                    <p className="text-[10px] text-emerald-500 mt-0.5 ml-1 flex items-center gap-0.5">
+                                      <PenLine className="w-2.5 h-2.5" /> Nota guardada
+                                    </p>
                                   )}
-                                </label>
-                              )
-                            })}
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      )}
-
-                      {/* Quick Actions Row */}
-                      {checklist.length > 0 && (
-                        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const updates: Record<string, boolean> = {}
-                              checklist.forEach((item) => { updates[item.key] = true })
-                              setSafetyChecks((prev) => ({ ...prev, ...updates }))
-                            }}
-                            className="text-[11px] h-7 gap-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                          >
-                            <CheckCircle2 className="w-3 h-3" /> Marcar todos
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const updates: Record<string, boolean> = {}
-                              checklist.forEach((item) => { updates[item.key] = false })
-                              setSafetyChecks((prev) => ({ ...prev, ...updates }))
-                            }}
-                            className="text-[11px] h-7 gap-1 text-slate-500"
-                          >
-                            <XCircle className="w-3 h-3" /> Desmarcar todos
-                          </Button>
-                        </div>
-                      )}
-                    </CardContent>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </Card>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+                {/* Modal Footer */}
+                <div className="px-6 py-4 border-t border-slate-100 shrink-0 flex items-center justify-between bg-slate-50/50">
+                  <div className="text-[11px] text-slate-500">
+                    <span className="font-medium text-slate-700">{checklist.filter(i => safetyChecks[i.key]).length}</span>/{checklist.length} verificados
+                    {checklist.filter(i => checklistNotes[i.key]).length > 0 && (
+                      <span className="ml-2">
+                        · <span className="font-medium text-emerald-600">{checklist.filter(i => checklistNotes[i.key]).length}</span> con notas
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => setChecklistModalOpen(false)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm gap-1.5 h-9 px-5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Confirmar y Cerrar
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             {/* Signature Section - Visually Distinct */}
             <Card className="shadow-sm border-2 border-dashed border-emerald-200 bg-gradient-to-br from-white to-emerald-50/30">
@@ -1142,7 +1229,7 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
           <div className="hidden sm:flex items-center gap-3 text-xs text-slate-500">
             <span className={cn(riskType && 'text-emerald-600 font-medium')}>Riesgo: {riskType ? '✓' : '—'}</span>
             <span className={cn(technicianName && supervisorName && 'text-emerald-600 font-medium')}>Personal: {technicianName && supervisorName ? '✓' : '—'}</span>
-            <span className={cn(allRequiredChecked && 'text-emerald-600 font-medium')}>Checks: {checklist.length > 0 ? `${checklist.filter(i => safetyChecks[i.key]).length}/${checklist.length}` : '—'}</span>
+            <span className={cn(allRequiredChecked && 'text-emerald-600 font-medium')}>Checks: {checklist.length > 0 ? `${checklist.filter(i => safetyChecks[i.key]).length}/${checklist.length}` : '—'}{checklistNotes && Object.values(checklistNotes).filter(Boolean).length > 0 && <span className="text-emerald-500 ml-0.5">({Object.values(checklistNotes).filter(Boolean).length} notas)</span>}</span>
             <span className={cn(signatureData && 'text-emerald-600 font-medium')}>Firma: {signatureData ? '✓' : '—'}</span>
             <span className={cn(photos.length > 0 && 'text-emerald-600 font-medium')}>Fotos: {photos.length}/{5}</span>
           </div>
