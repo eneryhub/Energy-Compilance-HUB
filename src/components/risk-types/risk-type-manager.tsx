@@ -24,6 +24,7 @@ import {
   Palette,
   ShieldAlert,
   Upload,
+  Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -42,6 +43,7 @@ import {
 } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
 import PermitImport from '@/components/import/permit-import'
+import RiskIngestionPanel from '@/components/risk-types/risk-ingestion-panel'
 
 interface RiskType {
   id: string
@@ -105,6 +107,7 @@ export default function RiskTypeManager() {
   const [togglingItem, setTogglingItem] = useState<string | null>(null)
   const [deletingItem, setDeletingItem] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [showAiIngestion, setShowAiIngestion] = useState(false)
 
   const fetchRiskTypes = useCallback(async () => {
     try {
@@ -262,14 +265,22 @@ export default function RiskTypeManager() {
           </h2>
           <p className="text-sm text-slate-500 mt-1">Configura los tipos de riesgo y listas de verificación de seguridad</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            className="gap-2 border-violet-200 text-violet-700 hover:bg-violet-50"
+            onClick={() => { setShowAiIngestion(!showAiIngestion); setShowImport(false) }}
+          >
+            <Sparkles className="w-4 h-4" />
+            IA Inteligente
+          </Button>
           <Button
             variant="outline"
             className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-            onClick={() => setShowImport(!showImport)}
+            onClick={() => { setShowImport(!showImport); setShowAiIngestion(false) }}
           >
             <Upload className="w-4 h-4" />
-            Importar
+            Importar Manual
           </Button>
           <Button
             className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
@@ -281,7 +292,12 @@ export default function RiskTypeManager() {
         </div>
       </div>
 
-      {/* Import Section */}
+      {/* AI Ingestion Section */}
+      {showAiIngestion && (
+        <RiskIngestionPanel onSuccess={fetchRiskTypes} />
+      )}
+
+      {/* Manual Import Section */}
       {showImport && (
         <PermitImport onImportComplete={() => { fetchRiskTypes(); setShowImport(false) }} />
       )}
