@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
-import ZAI from 'z-ai-web-dev-sdk'
 import * as XLSX from 'xlsx'
 
 // ──────────────────────────────────────────────────────────────
@@ -13,10 +12,52 @@ import * as XLSX from 'xlsx'
 // Security: companyId from session ONLY (never from client body).
 // Multi-tenant: all records scoped to session.companyId.
 // Transactional: prisma.$transaction ensures no orphans.
+//
+// AI Backend: Uses z-ai-web-dev-sdk when available (Z.ai sandbox).
+// On Vercel production, falls back to OpenAI-compatible API via
+// ZAI_OPENAI_API_KEY / ZAI_OPENAI_BASE_URL env vars, or returns
+// a clear 503 error if no AI backend is configured.
 // ──────────────────────────────────────────────────────────────
 
 const ALLOWED_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+
+// ── Lazy ZAI singleton (avoids import-time crash on Vercel) ──
+let _zaiInstance: any = null
+let _zaiInitAttempted = false
+let _zaiAvailable = false
+
+async function getZAI(): Promise<any | null> {
+  if (_zaiInitAttempted) return _zaiAvailable ? _zaiInstance : null
+  _zaiInitAttempted = true
+
+  try {
+    // Try z-ai-web-dev-sdk (Z.ai sandbox)
+    const ZAI = (await import('z-ai-web-dev-sdk')).default
+    _zaiInstance = await ZAI.create()
+    _zaiAvailable = true
+    console.log('[RiskIngestion] z-ai-web-dev-sdk initialized successfully')
+    return _zaiInstance
+  } catch (sdkErr: any) {
+    console.warn('[RiskIngestion] z-ai-web-dev-sdk not available:', sdkErr?.message)
+
+    // Fallback: try OpenAI-compatible API via env vars
+    const apiKey = process.env.ZAI_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    const baseUrl = process.env.ZAI_OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    const model = process.env.ZAI_MODEL || 'gpt-4o-mini'
+
+    if (apiKey) {
+      console.log('[RiskIngestion] Using OpenAI-compatible fallback')
+      _zaiInstance = { type: 'openai', apiKey, baseUrl, model }
+      _zaiAvailable = true
+      return _zaiInstance
+    }
+
+    console.error('[RiskIngestion] No AI backend available. Set ZAI_OPENAI_API_KEY or use Z.ai sandbox.')
+    _zaiAvailable = false
+    return null
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,6 +68,19 @@ export async function POST(request: NextRequest) {
     }
     if (!['ADMIN', 'SUPERVISOR', 'MANAGER'].includes(session.role)) {
       return NextResponse.json({ error: 'Solo administradores pueden ingestar planillas' }, { status: 403 })
+    }
+
+    // ── AI Backend Check ──────────────────────────────────
+    const zai = await getZAI()
+    if (!zai) {
+      return NextResponse.json(
+        {
+          error: 'Servicio de IA no disponible en este entorno.',
+          hint: 'Configure la variable de entorno ZAI_OPENAI_API_KEY en Vercel para habilitar la ingesta inteligente de planillas.',
+          docs: 'https://platform.openai.com/api-keys',
+        },
+        { status: 503 }
+      )
     }
 
     // ── Parse FormData ────────────────────────────────────
@@ -54,7 +108,7 @@ export async function POST(request: NextRequest) {
 
     if (ext === 'pdf') {
       // PDF → VLM (Vision Language Model) for OCR
-      rawText = await extractTextFromPdf(file)
+      rawText = await extractTextFromPdf(file, zai)
     } else {
       // Excel/CSV → xlsx library
       rawText = await extractTextFromExcel(file)
@@ -65,7 +119,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Step 2: LLM maps raw text → structured risk data ─
-    const aiResult = await mapTextToRiskTypes(rawText)
+    const aiResult = await mapTextToRiskTypes(rawText, zai)
 
     if (!aiResult.riskTypes || aiResult.riskTypes.length === 0) {
       return NextResponse.json({ error: 'La IA no pudo identificar tipos de riesgo en el documento. Verifique el formato.' }, { status: 400 })
@@ -181,34 +235,59 @@ export async function POST(request: NextRequest) {
 
 // ═══════════════════════════════════════════════════════════
 // HELPER: Extract text from PDF using VLM (Vision Language Model)
+// Supports both z-ai-web-dev-sdk and OpenAI-compatible API
 // ═══════════════════════════════════════════════════════════
-async function extractTextFromPdf(file: File): Promise<string> {
-  const zai = await ZAI.create()
-
-  // Convert File to base64 for VLM
+async function extractTextFromPdf(file: File, zai: any): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer())
   const base64 = buffer.toString('base64')
   const dataUrl = `data:application/pdf;base64,${base64}`
 
-  const response = await zai.chat.completions.createVision({
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `Eres un asistente especializado en HSE (Health, Safety & Environment) y permisos de trabajo petroleros.
+  const ocrPrompt = `Eres un asistente especializado en HSE (Health, Safety & Environment) y permisos de trabajo petroleros.
 
 Analiza este documento (planilla de riesgo, ATS, ART o formato similar) y EXTRAE TODO el texto legible.
 Preserva la estructura: títulos, tablas, listas de verificación, nombres de secciones.
 
 Devuelve ÚNICAMENTE el texto extraído, sin comentarios ni explicaciones adicionales.
 Si hay tablas, preserva los encabezados y filas.`
-              },
+
+  if (zai.type === 'openai') {
+    // OpenAI-compatible fallback (GPT-4o Vision)
+    const response = await fetch(`${zai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${zai.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: zai.model,
+        messages: [
           {
-            type: 'file_url',
-            file_url: { url: dataUrl },
+            role: 'user',
+            content: [
+              { type: 'text', text: ocrPrompt },
+              { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+            ],
           },
+        ],
+        max_tokens: 4096,
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`OpenAI Vision error: ${response.status} — ${err}`)
+    }
+    const data = await response.json()
+    return data.choices?.[0]?.message?.content || ''
+  }
+
+  // Native z-ai-web-dev-sdk
+  const response = await zai.chat.completions.createVision({
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: ocrPrompt },
+          { type: 'file_url', file_url: { url: dataUrl } },
         ],
       },
     ],
@@ -264,9 +343,7 @@ interface AiExtractionResult {
   riskTypes: AiRiskType[]
 }
 
-async function mapTextToRiskTypes(rawText: string): Promise<AiExtractionResult> {
-  const zai = await ZAI.create()
-
+async function mapTextToRiskTypes(rawText: string, zai: any): Promise<AiExtractionResult> {
   const systemPrompt = `Eres un experto en HSE (Health, Safety & Environment) del sector petrolero venezolano.
 Tu trabajo es analizar planillas de permisos de trabajo y extraer TIPOS DE RIESGO con sus LISTAS DE VERIFICACIÓN.
 
@@ -317,18 +394,49 @@ Reglas:
 - Si el documento no tiene checklist, genera los ítems de verificación estándar HSE para ese tipo de riesgo
 - Si no puedes identificar ningún tipo de riesgo, devuelve { "riskTypes": [] }`
 
-  const response = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: systemPrompt },
-      {
-        role: 'user',
-        content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo y extrae los tipos de riesgo con sus listas de verificación:\n\n${rawText}`,
-      },
-    ],
-    thinking: { type: 'disabled' },
-  })
+  let content: string
 
-  const content = response.choices[0]?.message?.content || ''
+  if (zai.type === 'openai') {
+    // OpenAI-compatible fallback
+    const response = await fetch(`${zai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${zai.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: zai.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo y extrae los tipos de riesgo con sus listas de verificación:\n\n${rawText}`,
+          },
+        ],
+        max_tokens: 4096,
+        temperature: 0.1,
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`OpenAI LLM error: ${response.status} — ${err}`)
+    }
+    const data = await response.json()
+    content = data.choices?.[0]?.message?.content || ''
+  } else {
+    // Native z-ai-web-dev-sdk
+    const response = await zai.chat.completions.create({
+      messages: [
+        { role: 'assistant', content: systemPrompt },
+        {
+          role: 'user',
+          content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo y extrae los tipos de riesgo con sus listas de verificación:\n\n${rawText}`,
+        },
+      ],
+      thinking: { type: 'disabled' },
+    })
+    content = response.choices[0]?.message?.content || ''
+  }
 
   // Parse JSON from response (handle markdown code blocks)
   let jsonStr = content.trim()
