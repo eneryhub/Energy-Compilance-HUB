@@ -222,9 +222,18 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Se procesaron ${created.length} tipo(s) de riesgo con IA`,
+      message: `Se procesaron ${created.length} tipo(s) de riesgo con IA — ${aiResult.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0)} ítems de checklist extraídos`,
       riskTypes: created,
-      rawExtraction: aiResult,
+      extraction: {
+        documentTitle: aiResult.documentTitle,
+        documentType: aiResult.documentType,
+        summary: aiResult.summary,
+        generalInfo: aiResult.generalInfo,
+        accessTypes: aiResult.accessTypes,
+        eppRequired: aiResult.eppRequired,
+        totalChecklistItems: aiResult.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0),
+        riskTypesDetail: aiResult.riskTypes,
+      },
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error interno del servidor'
@@ -299,6 +308,8 @@ Si hay tablas, preserva los encabezados y filas.`
 
 // ═══════════════════════════════════════════════════════════
 // HELPER: Extract text from Excel/CSV using xlsx library
+// Uses raw cell-by-cell extraction to capture EVERY cell (including
+// headers, merged cells, and sparse rows that sheet_to_json skips)
 // ═══════════════════════════════════════════════════════════
 async function extractTextFromExcel(file: File): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer())
@@ -308,17 +319,55 @@ async function extractTextFromExcel(file: File): Promise<string> {
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
-    const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
 
-    allText.push(`--- Hoja: ${sheetName} ---`)
-    for (const row of data) {
-      const cells = Object.values(row)
-        .map(v => String(v).trim())
-        .filter(v => v.length > 0)
-        .join(' | ')
-      if (cells.length > 0) {
-        allText.push(cells)
+    allText.push(`=== HOJA: ${sheetName} ===`)
+    allText.push(`Rango: ${range.e.r - range.s.r + 1} filas x ${range.e.c - range.s.c + 1} columnas`)
+    allText.push('---')
+
+    // Section tracking
+    let currentSection = 'GENERAL'
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const rowCells: string[] = []
+
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c })
+        const cell = sheet[addr]
+        if (cell && cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') {
+          const val = String(cell.v).trim()
+          // Skip pure numbers that are Excel date serials
+          if (/^\d{4,5}$/.test(val) && c > 3) continue
+          rowCells.push(val)
+        }
       }
+
+      if (rowCells.length === 0) continue
+
+      const line = rowCells.join(' | ')
+
+      // Detect section headers (ALL CAPS or short bold-like lines)
+      const firstCell = rowCells[0].toUpperCase().trim()
+      if (
+        firstCell === firstCell && // already uppercase
+        firstCell.length > 4 &&
+        firstCell.length < 80 &&
+        !firstCell.includes('MARQUE') &&
+        !firstCell.includes('NOMBRE') &&
+        !firstCell.includes('COMO') &&
+        !firstCell.includes('FIRMA') &&
+        !firstCell.includes('PERSONAL') &&
+        !firstCell.includes('LOS ') &&
+        !firstCell.includes('EL ') &&
+        !firstCell.includes('LA ') &&
+        !firstCell.includes('SE ') &&
+        !firstCell.includes('EN CASO')
+      ) {
+        currentSection = firstCell
+        allText.push(`\n[SECCIÓN: ${firstCell}]`)
+      }
+
+      allText.push(line)
     }
   }
 
@@ -328,26 +377,55 @@ async function extractTextFromExcel(file: File): Promise<string> {
 // ═══════════════════════════════════════════════════════════
 // HELPER: LLM maps extracted text → structured risk types
 // ═══════════════════════════════════════════════════════════
+interface AiChecklistItem {
+  label: string
+  required?: boolean
+  category?: string // e.g., "EPP", "PROCEDIMIENTO", "DOCUMENTACIÓN", "EQUIPO", "SEÑALIZACIÓN"
+}
+
 interface AiRiskType {
   label: string
   description?: string
   color?: string
   icon?: string
-  checklist?: Array<{
-    label: string
-    required?: boolean
-  }>
+  checklist?: AiChecklistItem[]
 }
 
 interface AiExtractionResult {
+  documentTitle: string
+  documentType: string // e.g., "PERMISO DE TRABAJO EN ALTURAS", "ATS", "ANÁLISIS DE TRABAJO SEGURO"
+  summary: string // Brief paragraph summarizing the document
+  generalInfo: {
+    proceso?: string
+    version?: string
+    empresaEjecutadora?: string
+    actividad?: string
+  }
+  accessTypes?: string[] // e.g., ["ESCALERA PORTÁTIL", "ANDAMIOS", "MANLIFT"]
+  eppRequired?: string[] // All EPP items extracted
   riskTypes: AiRiskType[]
 }
 
 async function mapTextToRiskTypes(rawText: string, zai: any): Promise<AiExtractionResult> {
-  const systemPrompt = `Eres un experto en HSE (Health, Safety & Environment) del sector petrolero venezolano.
-Tu trabajo es analizar planillas de permisos de trabajo y extraer TIPOS DE RIESGO con sus LISTAS DE VERIFICACIÓN.
+  const systemPrompt = `Eres un experto en HSE (Health, Safety & Environment) del sector petrolero e industrial venezolano y latinoamericano.
 
-TIPOS DE RIESGO COMUNES en el sector petrolero:
+Tu trabajo es analizar planillas de permisos de trabajo, ATS, certificados de apoyo y formatos de seguridad industrial, y extraer de forma EXHAUSTIVA y COMPLETA:
+
+1. **Título y tipo de documento** (permiso de trabajo, ATS, certificado, etc.)
+2. **Información general** del documento (proceso, versión, empresa, actividad)
+3. **Todos los tipos de acceso** mencionados (escalera, andamios, manlift, cuerdas, grúa, etc.)
+4. **TODOS los EPP y equipos de protección** listados (sin omitir ninguno)
+5. **TIPOS DE RIESGO** identificados en el documento, cada uno con su **LISTA DE VERIFICACIÓN COMPLETA**
+
+REGLAS CRÍTICAS DE EXTRACCIÓN:
+- EXTRAER TODOS los ítems de cada sección — NO resumir ni agrupar
+- Si el documento tiene 20 ítems de EPP, extraer los 20
+- Si hay 15 requisitos de planeación, extraer los 15
+- Si hay 8 tipos de acceso, listar los 8
+- Mantener el texto original de cada ítem (no parafrasear)
+- Clasificar cada ítem de checklist en una categoría: "EPP", "DOCUMENTACIÓN", "PROCEDIMIENTO", "EQUIPO", "SEÑALIZACIÓN", "CAPACITACIÓN", "EMERGENCIA", "VERIFICACIÓN"
+
+TIPOS DE RIESGO COMUNES en el sector:
 - Trabajo en Altura
 - Riesgo Eléctrico
 - Espacio Confinado
@@ -359,17 +437,34 @@ TIPOS DE RIESGO COMUNES en el sector petrolero:
 - Bloqueo y Etiquetado (Lockout/Tagout)
 - Manejo de Sustancias Peligrosas
 
+Para cada TIPO DE RIESGO, generar una lista de verificación que incluya:
+- Todos los ítems de EPP específicos para ese riesgo
+- Todos los requisitos de documentación (certificados, ARL, cursos)
+- Todos los requisitos de procedimiento (análisis de trabajo, señalización, rescate)
+- Todos los requisitos de verificación previa al trabajo
+
 Responde SIEMPRE en JSON válido con esta estructura EXACTA (sin markdown, sin backticks):
 {
+  "documentTitle": "Título del documento",
+  "documentType": "PERMISO DE TRABAJO | ATS | CERTIFICADO | OTRO",
+  "summary": "Resumen de 2-3 oraciones describiendo el propósito y alcance del documento",
+  "generalInfo": {
+    "proceso": "Nombre del proceso",
+    "version": "Versión si aparece",
+    "empresaEjecutadora": "Empresa mencionada si aparece",
+    "actividad": "Actividad principal descrita"
+  },
+  "accessTypes": ["Tipo 1", "Tipo 2"],
+  "eppRequired": ["EPP 1 completo", "EPP 2 completo"],
   "riskTypes": [
     {
       "label": "Nombre del Tipo de Riesgo",
-      "description": "Breve descripción de 1-2 oraciones sobre este tipo de riesgo",
+      "description": "Descripción detallada de 2-3 oraciones sobre este tipo de riesgo según el documento",
       "color": "#hexcolor",
       "icon": "NombreIconoLucide",
       "checklist": [
-        { "label": "Ítem de verificación 1", "required": true },
-        { "label": "Ítem de verificación 2", "required": false }
+        { "label": "Ítem de verificación 1 (texto completo del documento)", "required": true, "category": "DOCUMENTACIÓN" },
+        { "label": "Ítem de verificación 2 (texto completo del documento)", "required": false, "category": "PROCEDIMIENTO" }
       ]
     }
   ]
@@ -383,21 +478,31 @@ COLORES sugeridos (usa hex):
 - #0ea5e9 (azul) para izamiento
 - #22c55e (verde) para General
 - #6366f1 (indigo) por defecto
+- #f97316 (naranja) para trabajo en altura
 
 ICONOS sugeridos (nombre de Lucide icon):
-- ArrowUp, Zap, Box, Flame, Pickaxe, Crane, ScanLine, Droplets, Lock, FlaskConical, AlertTriangle
+- ArrowUp, Zap, Box, Flame, Pickaxe, Crane, ScanLine, Droplets, Lock, FlaskConical, AlertTriangle, HardHat, Shield, Eye
 
-Reglas:
-- "required": true para ítems de seguridad CRÍTICOS (EPP, lifesaving)
-- "required": false para ítems de buena práctica
-- Mínimo 2 ítems de checklist por tipo de riesgo
-- Si el documento no tiene checklist, genera los ítems de verificación estándar HSE para ese tipo de riesgo
+CATEGORÍAS de checklist:
+- "EPP" = Elementos de protección personal
+- "DOCUMENTACIÓN" = Certificados, cursos, ARL, permisos
+- "PROCEDIMIENTO" = Pasos, protocolos, análisis de trabajo
+- "EQUIPO" = Herramientas, sistemas, dispositivos
+- "SEÑALIZACIÓN" = Delimitación, avisos, cintas
+- "CAPACITACIÓN" = Cursos, charlas, inducciones
+- "EMERGENCIA" = Plan de rescate, comunicación, primeros auxilios
+- "VERIFICACIÓN" = Inspecciones previas, checklist de condición
+
+Reglas para "required":
+- "required": true para ítems de seguridad CRÍTICOS (EPP lifesaving, certificados obligatorios, análisis de trabajo, plan de rescate)
+- "required": false para ítems de buena práctica o referencia
+- Mínimo 5 ítems de checklist por tipo de riesgo (EXTRAER TODOS los que aparezcan en el documento)
 - Si no puedes identificar ningún tipo de riesgo, devuelve { "riskTypes": [] }`
 
   let content: string
 
   if (zai.type === 'openai') {
-    // OpenAI-compatible fallback
+    // OpenAI-compatible fallback — use larger context for complex documents
     const response = await fetch(`${zai.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -410,11 +515,16 @@ Reglas:
           { role: 'system', content: systemPrompt },
           {
             role: 'user',
-            content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo y extrae los tipos de riesgo con sus listas de verificación:\n\n${rawText}`,
+            content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo / formato de seguridad industrial.
+
+EXTRAE DE FORMA EXHAUSTIVA toda la información del documento. No omitas ningún ítem, EPP, requisito ni sección.
+
+Contenido del documento:
+${rawText}`,
           },
         ],
-        max_tokens: 4096,
-        temperature: 0.1,
+        max_tokens: 8192,
+        temperature: 0.05,
       }),
     })
     if (!response.ok) {
@@ -430,7 +540,12 @@ Reglas:
         { role: 'assistant', content: systemPrompt },
         {
           role: 'user',
-          content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo y extrae los tipos de riesgo con sus listas de verificación:\n\n${rawText}`,
+          content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo / formato de seguridad industrial.
+
+EXTRAE DE FORMA EXHAUSTIVA toda la información del documento. No omitas ningún ítem, EPP, requisito ni sección.
+
+Contenido del documento:
+${rawText}`,
         },
       ],
       thinking: { type: 'disabled' },
@@ -447,11 +562,28 @@ Reglas:
   try {
     const parsed = JSON.parse(jsonStr) as AiExtractionResult
     if (!parsed.riskTypes || !Array.isArray(parsed.riskTypes)) {
-      return { riskTypes: [] }
+      parsed.riskTypes = []
     }
+    // Ensure required fields have defaults
+    parsed.documentTitle = parsed.documentTitle || 'Documento sin título'
+    parsed.documentType = parsed.documentType || 'NO IDENTIFICADO'
+    parsed.summary = parsed.summary || ''
+    parsed.eppRequired = parsed.eppRequired || []
+    parsed.accessTypes = parsed.accessTypes || []
+    parsed.generalInfo = parsed.generalInfo || {}
     return parsed
-  } catch {
-    return { riskTypes: [] }
+  } catch (parseErr) {
+    console.error('[RiskIngestion] Failed to parse AI JSON:', parseErr)
+    console.error('[RiskIngestion] Raw content:', content.substring(0, 500))
+    return {
+      documentTitle: 'Error en extracción',
+      documentType: 'ERROR',
+      summary: 'No se pudo interpretar la respuesta de la IA.',
+      generalInfo: {},
+      eppRequired: [],
+      accessTypes: [],
+      riskTypes: [],
+    }
   }
 }
 

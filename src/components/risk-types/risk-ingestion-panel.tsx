@@ -1,394 +1,602 @@
-'use client'
+import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+import { getSession } from '@/lib/auth'
+import { createAuditLog } from '@/lib/audit'
+import * as XLSX from 'xlsx'
 
-import { useState, useCallback, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Upload,
-  FileText,
-  FileSpreadsheet,
-  Loader2,
-  CheckCircle2,
-  AlertTriangle,
-  Brain,
-  Trash2,
-  Sparkles,
-  ChevronDown,
-  ChevronRight,
-  ShieldCheck,
-} from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { apiFetch } from '@/lib/api'
+// ──────────────────────────────────────────────────────────────
+// POST /api/admin/risks/upload
+// Smart Sheet Ingestion: Upload PDF/Excel → AI extracts risk
+// types + checklist items → atomic DB insert.
+//
+// Security: companyId from session ONLY (never from client body).
+// Multi-tenant: all records scoped to session.companyId.
+// Transactional: prisma.$transaction ensures no orphans.
+//
+// AI Backend: Uses z-ai-web-dev-sdk when available (Z.ai sandbox).
+// On Vercel production, falls back to OpenAI-compatible API via
+// ZAI_OPENAI_API_KEY / ZAI_OPENAI_BASE_URL env vars, or returns
+// a clear 503 error if no AI backend is configured.
+// ──────────────────────────────────────────────────────────────
 
-interface ChecklistPreview {
-  label: string
-  required: boolean
+const ALLOWED_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv']
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+
+// ── Lazy ZAI singleton (avoids import-time crash on Vercel) ──
+let _zaiInstance: any = null
+let _zaiInitAttempted = false
+let _zaiAvailable = false
+
+async function getZAI(): Promise<any | null> {
+  if (_zaiInitAttempted) return _zaiAvailable ? _zaiInstance : null
+  _zaiInitAttempted = true
+
+  try {
+    // Try z-ai-web-dev-sdk (Z.ai sandbox)
+    const ZAI = (await import('z-ai-web-dev-sdk')).default
+    _zaiInstance = await ZAI.create()
+    _zaiAvailable = true
+    console.log('[RiskIngestion] z-ai-web-dev-sdk initialized successfully')
+    return _zaiInstance
+  } catch (sdkErr: any) {
+    console.warn('[RiskIngestion] z-ai-web-dev-sdk not available:', sdkErr?.message)
+
+    // Fallback: try OpenAI-compatible API via env vars
+    const apiKey = process.env.ZAI_OPENAI_API_KEY || process.env.OPENAI_API_KEY
+    const baseUrl = process.env.ZAI_OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    const model = process.env.ZAI_MODEL || 'gpt-4o-mini'
+
+    if (apiKey) {
+      console.log('[RiskIngestion] Using OpenAI-compatible fallback')
+      _zaiInstance = { type: 'openai', apiKey, baseUrl, model }
+      _zaiAvailable = true
+      return _zaiInstance
+    }
+
+    console.error('[RiskIngestion] No AI backend available. Set ZAI_OPENAI_API_KEY or use Z.ai sandbox.')
+    _zaiAvailable = false
+    return null
+  }
 }
 
-interface RiskTypePreview {
+export async function POST(request: NextRequest) {
+  try {
+    // ── Auth & Role Gate ──────────────────────────────────
+    const session = await getSession(request)
+    if (!session) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+    }
+    if (!['ADMIN', 'SUPERVISOR', 'MANAGER'].includes(session.role)) {
+      return NextResponse.json({ error: 'Solo administradores pueden ingestar planillas' }, { status: 403 })
+    }
+
+    // ── AI Backend Check ──────────────────────────────────
+    const zai = await getZAI()
+    if (!zai) {
+      return NextResponse.json(
+        {
+          error: 'Servicio de IA no disponible en este entorno.',
+          hint: 'Configure la variable de entorno ZAI_OPENAI_API_KEY en Vercel para habilitar la ingesta inteligente de planillas.',
+          docs: 'https://platform.openai.com/api-keys',
+        },
+        { status: 503 }
+      )
+    }
+
+    // ── Parse FormData ────────────────────────────────────
+    const formData = await request.formData()
+    const file = formData.get('file') as File | null
+    if (!file) {
+      return NextResponse.json({ error: 'Archivo requerido' }, { status: 400 })
+    }
+
+    // Validate extension
+    const ext = file.name.split('.').pop()?.toLowerCase() || ''
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      return NextResponse.json({ error: `Formato no soportado. Use: ${ALLOWED_EXTENSIONS.join(', ')}` }, { status: 400 })
+    }
+
+    // Validate size
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: 'Archivo demasiado grande (máximo 10 MB)' }, { status: 400 })
+    }
+
+    const companyId = session.companyId // NEVER from client
+
+    // ── Step 1: Extract raw text from document ──────────
+    let rawText: string
+
+    if (ext === 'pdf') {
+      // PDF → VLM (Vision Language Model) for OCR
+      rawText = await extractTextFromPdf(file, zai)
+    } else {
+      // Excel/CSV → xlsx library
+      rawText = await extractTextFromExcel(file)
+    }
+
+    if (!rawText || rawText.trim().length < 50) {
+      return NextResponse.json({ error: 'No se pudo extraer suficiente texto del documento. Verifique que el archivo contenga datos legibles.' }, { status: 400 })
+    }
+
+    // ── Step 2: LLM maps raw text → structured risk data ─
+    const aiResult = await mapTextToRiskTypes(rawText, zai)
+
+    if (!aiResult.riskTypes || aiResult.riskTypes.length === 0) {
+      return NextResponse.json({ error: 'La IA no pudo identificar tipos de riesgo en el documento. Verifique el formato.' }, { status: 400 })
+    }
+
+    // ── Step 3: Atomic DB insert via prisma.$transaction ─
+    const created = await db.$transaction(async (tx) => {
+      const results: Array<{
+        id: string
+        key: string
+        label: string
+        description: string | null
+        checklistCount: number
+      }> = []
+
+      for (const risk of aiResult.riskTypes) {
+        // Generate a safe key from label
+        const key = generateSafeKey(risk.label)
+
+        // Upsert: update if exists, create if new
+        const riskType = await tx.riskTypeConfig.upsert({
+          where: { companyId_key: { companyId, key } },
+          update: {
+            label: risk.label,
+            description: risk.description || null,
+            color: risk.color || '#6366f1',
+            icon: risk.icon || 'AlertTriangle',
+            isActive: true,
+          },
+          create: {
+            companyId,
+            key,
+            label: risk.label,
+            description: risk.description || null,
+            color: risk.color || '#6366f1',
+            icon: risk.icon || 'AlertTriangle',
+            isActive: true,
+            sortOrder: 0,
+          },
+        })
+
+        let checklistCount = 0
+
+        if (risk.checklist && risk.checklist.length > 0) {
+          for (const item of risk.checklist) {
+            const itemKey = generateSafeKey(item.label)
+            await tx.checklistItemConfig.upsert({
+              where: {
+                companyId_riskTypeKey_itemKey: {
+                  companyId,
+                  riskTypeKey: key,
+                  itemKey,
+                },
+              },
+              update: {
+                label: item.label,
+                required: item.required ?? false,
+                isActive: true,
+              },
+              create: {
+                companyId,
+                riskTypeKey: key,
+                itemKey,
+                label: item.label,
+                required: item.required ?? false,
+                isActive: true,
+                sortOrder: 0,
+              },
+            })
+            checklistCount++
+          }
+        }
+
+        results.push({
+          id: riskType.id,
+          key,
+          label: riskType.label,
+          description: riskType.description,
+          checklistCount,
+        })
+      }
+
+      return results
+    })
+
+    // ── Audit Log ────────────────────────────────────────
+    await createAuditLog({
+      companyId,
+      userId: session.userId,
+      action: 'RISK_INGESTION_AI',
+      entityType: 'RISK_TYPE_CONFIG',
+      details: {
+        fileName: file.name,
+        fileSize: file.size,
+        riskTypesCreated: created.length,
+        totalChecklistItems: created.reduce((sum, r) => sum + r.checklistCount, 0),
+        riskTypeKeys: created.map(r => r.key),
+      },
+    }, request)
+
+    return NextResponse.json({
+      success: true,
+      message: `Se procesaron ${created.length} tipo(s) de riesgo con IA — ${aiResult.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0)} ítems de checklist extraídos`,
+      riskTypes: created,
+      extraction: {
+        documentTitle: aiResult.documentTitle,
+        documentType: aiResult.documentType,
+        summary: aiResult.summary,
+        generalInfo: aiResult.generalInfo,
+        accessTypes: aiResult.accessTypes,
+        eppRequired: aiResult.eppRequired,
+        totalChecklistItems: aiResult.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0),
+        riskTypesDetail: aiResult.riskTypes,
+      },
+    })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Error interno del servidor'
+    console.error('[RiskIngestion]', message)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// HELPER: Extract text from PDF using VLM (Vision Language Model)
+// Supports both z-ai-web-dev-sdk and OpenAI-compatible API
+// ═══════════════════════════════════════════════════════════
+async function extractTextFromPdf(file: File, zai: any): Promise<string> {
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const base64 = buffer.toString('base64')
+  const dataUrl = `data:application/pdf;base64,${base64}`
+
+  const ocrPrompt = `Eres un asistente especializado en HSE (Health, Safety & Environment) y permisos de trabajo petroleros.
+
+Analiza este documento (planilla de riesgo, ATS, ART o formato similar) y EXTRAE TODO el texto legible.
+Preserva la estructura: títulos, tablas, listas de verificación, nombres de secciones.
+
+Devuelve ÚNICAMENTE el texto extraído, sin comentarios ni explicaciones adicionales.
+Si hay tablas, preserva los encabezados y filas.`
+
+  if (zai.type === 'openai') {
+    // OpenAI-compatible fallback (GPT-4o Vision)
+    const response = await fetch(`${zai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${zai.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: zai.model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: ocrPrompt },
+              { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+            ],
+          },
+        ],
+        max_tokens: 4096,
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`OpenAI Vision error: ${response.status} — ${err}`)
+    }
+    const data = await response.json()
+    return data.choices?.[0]?.message?.content || ''
+  }
+
+  // Native z-ai-web-dev-sdk
+  const response = await zai.chat.completions.createVision({
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: ocrPrompt },
+          { type: 'file_url', file_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    thinking: { type: 'disabled' },
+  })
+
+  return response.choices[0]?.message?.content || ''
+}
+
+// ═══════════════════════════════════════════════════════════
+// HELPER: Extract text from Excel/CSV using xlsx library
+// Uses raw cell-by-cell extraction to capture EVERY cell (including
+// headers, merged cells, and sparse rows that sheet_to_json skips)
+// ═══════════════════════════════════════════════════════════
+async function extractTextFromExcel(file: File): Promise<string> {
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const workbook = XLSX.read(buffer, { type: 'buffer' })
+
+  const allText: string[] = []
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
+
+    allText.push(`=== HOJA: ${sheetName} ===`)
+    allText.push(`Rango: ${range.e.r - range.s.r + 1} filas x ${range.e.c - range.s.c + 1} columnas`)
+    allText.push('---')
+
+    // Section tracking
+    let currentSection = 'GENERAL'
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const rowCells: string[] = []
+
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c })
+        const cell = sheet[addr]
+        if (cell && cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') {
+          const val = String(cell.v).trim()
+          // Skip pure numbers that are Excel date serials
+          if (/^\d{4,5}$/.test(val) && c > 3) continue
+          rowCells.push(val)
+        }
+      }
+
+      if (rowCells.length === 0) continue
+
+      const line = rowCells.join(' | ')
+
+      // Detect section headers (ALL CAPS or short bold-like lines)
+      const firstCell = rowCells[0].toUpperCase().trim()
+      if (
+        firstCell === firstCell && // already uppercase
+        firstCell.length > 4 &&
+        firstCell.length < 80 &&
+        !firstCell.includes('MARQUE') &&
+        !firstCell.includes('NOMBRE') &&
+        !firstCell.includes('COMO') &&
+        !firstCell.includes('FIRMA') &&
+        !firstCell.includes('PERSONAL') &&
+        !firstCell.includes('LOS ') &&
+        !firstCell.includes('EL ') &&
+        !firstCell.includes('LA ') &&
+        !firstCell.includes('SE ') &&
+        !firstCell.includes('EN CASO')
+      ) {
+        currentSection = firstCell
+        allText.push(`\n[SECCIÓN: ${firstCell}]`)
+      }
+
+      allText.push(line)
+    }
+  }
+
+  return allText.join('\n')
+}
+
+// ═══════════════════════════════════════════════════════════
+// HELPER: LLM maps extracted text → structured risk types
+// ═══════════════════════════════════════════════════════════
+interface AiChecklistItem {
+  label: string
+  required?: boolean
+  category?: string // e.g., "EPP", "PROCEDIMIENTO", "DOCUMENTACIÓN", "EQUIPO", "SEÑALIZACIÓN"
+}
+
+interface AiRiskType {
   label: string
   description?: string
   color?: string
   icon?: string
-  checklist: ChecklistPreview[]
+  checklist?: AiChecklistItem[]
 }
 
-interface IngestionResult {
-  riskTypes: Array<{
-    id: string
-    key: string
-    label: string
-    description: string | null
-    checklistCount: number
-  }>
+interface AiExtractionResult {
+  documentTitle: string
+  documentType: string // e.g., "PERMISO DE TRABAJO EN ALTURAS", "ATS", "ANÁLISIS DE TRABAJO SEGURO"
+  summary: string // Brief paragraph summarizing the document
+  generalInfo: {
+    proceso?: string
+    version?: string
+    empresaEjecutadora?: string
+    actividad?: string
+  }
+  accessTypes?: string[] // e.g., ["ESCALERA PORTÁTIL", "ANDAMIOS", "MANLIFT"]
+  eppRequired?: string[] // All EPP items extracted
+  riskTypes: AiRiskType[]
 }
 
-type IngestionState = 'idle' | 'processing' | 'success' | 'error'
+async function mapTextToRiskTypes(rawText: string, zai: any): Promise<AiExtractionResult> {
+  const systemPrompt = `Eres un experto en HSE (Health, Safety & Environment) del sector petrolero e industrial venezolano y latinoamericano.
 
-const ALLOWED_EXTENSIONS = ['.pdf', '.xlsx', '.xls', '.csv']
-const MAX_SIZE = 10 * 1024 * 1024
+Tu trabajo es analizar planillas de permisos de trabajo, ATS, certificados de apoyo y formatos de seguridad industrial, y extraer de forma EXHAUSTIVA y COMPLETA:
 
-export default function RiskIngestionPanel({ onSuccess }: { onSuccess?: () => void }) {
-  const [state, setState] = useState<IngestionState>('idle')
-  const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<RiskTypePreview[]>([])
-  const [result, setResult] = useState<IngestionResult | null>(null)
-  const [errorMessage, setErrorMessage] = useState('')
-  const [dragActive, setDragActive] = useState(false)
-  const [expandedRisk, setExpandedRisk] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+1. **Título y tipo de documento** (permiso de trabajo, ATS, certificado, etc.)
+2. **Información general** del documento (proceso, versión, empresa, actividad)
+3. **Todos los tipos de acceso** mencionados (escalera, andamios, manlift, cuerdas, grúa, etc.)
+4. **TODOS los EPP y equipos de protección** listados (sin omitir ninguno)
+5. **TIPOS DE RIESGO** identificados en el documento, cada uno con su **LISTA DE VERIFICACIÓN COMPLETA**
 
-  const validateFile = useCallback((f: File): string | null => {
-    const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-    if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      return `Formato no soportado. Use: ${ALLOWED_EXTENSIONS.join(', ')}`
+REGLAS CRÍTICAS DE EXTRACCIÓN:
+- EXTRAER TODOS los ítems de cada sección — NO resumir ni agrupar
+- Si el documento tiene 20 ítems de EPP, extraer los 20
+- Si hay 15 requisitos de planeación, extraer los 15
+- Si hay 8 tipos de acceso, listar los 8
+- Mantener el texto original de cada ítem (no parafrasear)
+- Clasificar cada ítem de checklist en una categoría: "EPP", "DOCUMENTACIÓN", "PROCEDIMIENTO", "EQUIPO", "SEÑALIZACIÓN", "CAPACITACIÓN", "EMERGENCIA", "VERIFICACIÓN"
+
+TIPOS DE RIESGO COMUNES en el sector:
+- Trabajo en Altura
+- Riesgo Eléctrico
+- Espacio Confinado
+- Trabajo en Caliente
+- Excavación
+- Izamiento / Montaje
+- Radiografía Industrial
+- Trabajo en Superficies Mojadas
+- Bloqueo y Etiquetado (Lockout/Tagout)
+- Manejo de Sustancias Peligrosas
+
+Para cada TIPO DE RIESGO, generar una lista de verificación que incluya:
+- Todos los ítems de EPP específicos para ese riesgo
+- Todos los requisitos de documentación (certificados, ARL, cursos)
+- Todos los requisitos de procedimiento (análisis de trabajo, señalización, rescate)
+- Todos los requisitos de verificación previa al trabajo
+
+Responde SIEMPRE en JSON válido con esta estructura EXACTA (sin markdown, sin backticks):
+{
+  "documentTitle": "Título del documento",
+  "documentType": "PERMISO DE TRABAJO | ATS | CERTIFICADO | OTRO",
+  "summary": "Resumen de 2-3 oraciones describiendo el propósito y alcance del documento",
+  "generalInfo": {
+    "proceso": "Nombre del proceso",
+    "version": "Versión si aparece",
+    "empresaEjecutadora": "Empresa mencionada si aparece",
+    "actividad": "Actividad principal descrita"
+  },
+  "accessTypes": ["Tipo 1", "Tipo 2"],
+  "eppRequired": ["EPP 1 completo", "EPP 2 completo"],
+  "riskTypes": [
+    {
+      "label": "Nombre del Tipo de Riesgo",
+      "description": "Descripción detallada de 2-3 oraciones sobre este tipo de riesgo según el documento",
+      "color": "#hexcolor",
+      "icon": "NombreIconoLucide",
+      "checklist": [
+        { "label": "Ítem de verificación 1 (texto completo del documento)", "required": true, "category": "DOCUMENTACIÓN" },
+        { "label": "Ítem de verificación 2 (texto completo del documento)", "required": false, "category": "PROCEDIMIENTO" }
+      ]
     }
-    if (f.size > MAX_SIZE) {
-      return 'Archivo demasiado grande (máximo 10 MB)'
+  ]
+}
+
+COLORES sugeridos (usa hex):
+- #ef4444 (rojo) para riesgos altos
+- #f59e0b (ámbar) para riesgos eléctricos
+- #8b5cf6 (violeta) para espacios confinados
+- #dc2626 (rojo oscuro) para trabajo en caliente
+- #0ea5e9 (azul) para izamiento
+- #22c55e (verde) para General
+- #6366f1 (indigo) por defecto
+- #f97316 (naranja) para trabajo en altura
+
+ICONOS sugeridos (nombre de Lucide icon):
+- ArrowUp, Zap, Box, Flame, Pickaxe, Crane, ScanLine, Droplets, Lock, FlaskConical, AlertTriangle, HardHat, Shield, Eye
+
+CATEGORÍAS de checklist:
+- "EPP" = Elementos de protección personal
+- "DOCUMENTACIÓN" = Certificados, cursos, ARL, permisos
+- "PROCEDIMIENTO" = Pasos, protocolos, análisis de trabajo
+- "EQUIPO" = Herramientas, sistemas, dispositivos
+- "SEÑALIZACIÓN" = Delimitación, avisos, cintas
+- "CAPACITACIÓN" = Cursos, charlas, inducciones
+- "EMERGENCIA" = Plan de rescate, comunicación, primeros auxilios
+- "VERIFICACIÓN" = Inspecciones previas, checklist de condición
+
+Reglas para "required":
+- "required": true para ítems de seguridad CRÍTICOS (EPP lifesaving, certificados obligatorios, análisis de trabajo, plan de rescate)
+- "required": false para ítems de buena práctica o referencia
+- Mínimo 5 ítems de checklist por tipo de riesgo (EXTRAER TODOS los que aparezcan en el documento)
+- Si no puedes identificar ningún tipo de riesgo, devuelve { "riskTypes": [] }`
+
+  let content: string
+
+  if (zai.type === 'openai') {
+    // OpenAI-compatible fallback — use larger context for complex documents
+    const response = await fetch(`${zai.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${zai.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: zai.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo / formato de seguridad industrial.
+
+EXTRAE DE FORMA EXHAUSTIVA toda la información del documento. No omitas ningún ítem, EPP, requisito ni sección.
+
+Contenido del documento:
+${rawText}`,
+          },
+        ],
+        max_tokens: 8192,
+        temperature: 0.05,
+      }),
+    })
+    if (!response.ok) {
+      const err = await response.text()
+      throw new Error(`OpenAI LLM error: ${response.status} — ${err}`)
     }
-    return null
-  }, [])
+    const data = await response.json()
+    content = data.choices?.[0]?.message?.content || ''
+  } else {
+    // Native z-ai-web-dev-sdk
+    const response = await zai.chat.completions.create({
+      messages: [
+        { role: 'assistant', content: systemPrompt },
+        {
+          role: 'user',
+          content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo / formato de seguridad industrial.
 
-  const handleFileSelect = useCallback((f: File) => {
-    const err = validateFile(f)
-    if (err) {
-      setErrorMessage(err)
-      setState('error')
-      return
-    }
-    setFile(f)
-    setErrorMessage('')
-    setState('idle')
-  }, [validateFile])
+EXTRAE DE FORMA EXHAUSTIVA toda la información del documento. No omitas ningún ítem, EPP, requisito ni sección.
 
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true)
-    } else if (e.type === 'dragleave') {
-      setDragActive(false)
-    }
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-    if (e.dataTransfer.files?.[0]) {
-      handleFileSelect(e.dataTransfer.files[0])
-    }
-  }, [handleFileSelect])
-
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.[0]) {
-      handleFileSelect(e.target.files[0])
-    }
-  }, [handleFileSelect])
-
-  const processFile = async () => {
-    if (!file) return
-    setState('processing')
-    setErrorMessage('')
-
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const data = await apiFetch<{
-        success: boolean
-        message: string
-        riskTypes: IngestionResult['riskTypes']
-        rawExtraction?: { riskTypes: RiskTypePreview[] }
-      }>('/admin/risks/upload', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (data.rawExtraction?.riskTypes) {
-        setPreview(data.rawExtraction.riskTypes)
-      }
-      setResult(data)
-      setState('success')
-      onSuccess?.()
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Error al procesar el archivo'
-      setErrorMessage(message)
-      setState('error')
-    }
+Contenido del documento:
+${rawText}`,
+        },
+      ],
+      thinking: { type: 'disabled' },
+    })
+    content = response.choices[0]?.message?.content || ''
   }
 
-  const reset = () => {
-    setState('idle')
-    setFile(null)
-    setPreview([])
-    setResult(null)
-    setErrorMessage('')
-    setExpandedRisk(null)
+  // Parse JSON from response (handle markdown code blocks)
+  let jsonStr = content.trim()
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
   }
 
-  const getFileIcon = () => {
-    if (!file) return <FileText className="w-8 h-8 text-slate-400" />
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    if (ext === 'pdf') return <FileText className="w-8 h-8 text-red-500" />
-    return <FileSpreadsheet className="w-8 h-8 text-emerald-500" />
+  try {
+    const parsed = JSON.parse(jsonStr) as AiExtractionResult
+    if (!parsed.riskTypes || !Array.isArray(parsed.riskTypes)) {
+      parsed.riskTypes = []
+    }
+    // Ensure required fields have defaults
+    parsed.documentTitle = parsed.documentTitle || 'Documento sin título'
+    parsed.documentType = parsed.documentType || 'NO IDENTIFICADO'
+    parsed.summary = parsed.summary || ''
+    parsed.eppRequired = parsed.eppRequired || []
+    parsed.accessTypes = parsed.accessTypes || []
+    parsed.generalInfo = parsed.generalInfo || {}
+    return parsed
+  } catch (parseErr) {
+    console.error('[RiskIngestion] Failed to parse AI JSON:', parseErr)
+    console.error('[RiskIngestion] Raw content:', content.substring(0, 500))
+    return {
+      documentTitle: 'Error en extracción',
+      documentType: 'ERROR',
+      summary: 'No se pudo interpretar la respuesta de la IA.',
+      generalInfo: {},
+      eppRequired: [],
+      accessTypes: [],
+      riskTypes: [],
+    }
   }
+}
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
-  return (
-    <div className="space-y-4">
-      <Card className="shadow-sm border-slate-200">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                <Brain className="w-4 h-4 text-violet-500" />
-                Ingesta Inteligente de Planillas
-              </CardTitle>
-              <CardDescription className="text-xs mt-1">
-                Suba un PDF o Excel con sus tipos de riesgo. La IA extrae y mapea los datos automáticamente.
-              </CardDescription>
-            </div>
-            {(state === 'success' || state === 'error') && (
-              <Button variant="outline" size="sm" onClick={reset} className="text-xs gap-1">
-                <Trash2 className="w-3 h-3" />
-                Limpiar
-              </Button>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {/* Drag & Drop Zone (shown when no file selected) */}
-          {!file && state === 'idle' && (
-            <div
-              onDragEnter={handleDrag}
-              onDragOver={handleDrag}
-              onDragLeave={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={cn(
-                'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
-                dragActive
-                  ? 'border-violet-400 bg-violet-50'
-                  : 'border-slate-300 hover:border-violet-300 hover:bg-slate-50'
-              )}
-            >
-              <div className="flex flex-col items-center gap-3">
-                <div className={cn(
-                  'p-4 rounded-full transition-colors',
-                  dragActive ? 'bg-violet-100' : 'bg-slate-100'
-                )}>
-                  <Upload className={cn(
-                    'w-6 h-6',
-                    dragActive ? 'text-violet-500' : 'text-slate-400'
-                  )} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-slate-700">
-                    Arrastre su planilla aquí o{' '}
-                    <span className="text-violet-600 underline">haga clic para seleccionar</span>
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    PDF, Excel (.xlsx, .xls) o CSV — Máximo 10 MB
-                  </p>
-                </div>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={ALLOWED_EXTENSIONS.join(',')}
-                className="hidden"
-                onChange={handleInputChange}
-              />
-            </div>
-          )}
-
-          {/* File Selected — Ready to process */}
-          {file && (state === 'idle' || state === 'error') && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
-                {getFileIcon()}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-700 truncate">{file.name}</p>
-                  <p className="text-xs text-slate-400">{formatSize(file.size)}</p>
-                </div>
-                <Button
-                  onClick={processFile}
-                  disabled={state === 'processing'}
-                  className="gap-2 bg-violet-600 hover:bg-violet-700 text-white text-xs"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Procesar con IA
-                </Button>
-              </div>
-
-              {state === 'error' && errorMessage && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200">
-                  <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
-                  <p className="text-xs text-red-700">{errorMessage}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Processing Animation */}
-          <AnimatePresence>
-            {state === 'processing' && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="flex flex-col items-center gap-3 py-8"
-              >
-                <div className="relative">
-                  <div className="w-12 h-12 rounded-full border-2 border-violet-200 border-t-violet-600 animate-spin" />
-                  <Brain className="w-5 h-5 text-violet-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-medium text-slate-700">Procesando con IA...</p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Extrayendo texto del documento y mapeando tipos de riesgo
-                  </p>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </CardContent>
-      </Card>
-
-      {/* Success Results */}
-      <AnimatePresence>
-        {state === 'success' && result && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="space-y-3"
-          >
-            {/* Success Banner */}
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-emerald-700">
-                  {result.riskTypes?.length || 0} tipo(s) de riesgo procesado(s)
-                </p>
-                <p className="text-xs text-emerald-600">
-                  {result.riskTypes?.reduce((s, r) => s + r.checklistCount, 0) || 0} ítems de checklist creados/actualizados
-                </p>
-              </div>
-            </div>
-
-            {/* Preview Card */}
-            {preview.length > 0 && (
-              <Card className="shadow-sm border-slate-200">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-xs font-semibold text-slate-600 flex items-center gap-2">
-                    <Sparkles className="w-3.5 h-3.5 text-violet-500" />
-                    Datos Extraídos por IA
-                    <Badge className="bg-violet-100 text-violet-700 text-[10px] ml-auto">
-                      {preview.length} riesgo{preview.length !== 1 ? 's' : ''}
-                    </Badge>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <ScrollArea className="max-h-[400px]">
-                    <div className="divide-y divide-slate-100">
-                      {preview.map((risk, i) => {
-                        const riskKey = `risk-${i}`
-                        const isExpanded = expandedRisk === riskKey
-                        return (
-                          <div key={i}>
-                            <button
-                              onClick={() => setExpandedRisk(isExpanded ? null : riskKey)}
-                              className="w-full text-left p-3 hover:bg-slate-50 transition-colors flex items-center gap-3"
-                            >
-                              <div
-                                className="w-3 h-3 rounded-full shrink-0"
-                                style={{ backgroundColor: risk.color || '#6366f1' }}
-                              />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-slate-700">{risk.label}</p>
-                                {risk.description && (
-                                  <p className="text-[10px] text-slate-400 truncate">{risk.description}</p>
-                                )}
-                              </div>
-                              <Badge className="bg-slate-100 text-slate-600 text-[10px] shrink-0">
-                                {risk.checklist?.length || 0} ítems
-                              </Badge>
-                              {isExpanded
-                                ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                                : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                              }
-                            </button>
-                            <AnimatePresence>
-                              {isExpanded && risk.checklist?.length > 0 && (
-                                <motion.div
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  className="overflow-hidden"
-                                >
-                                  <div className="px-3 pb-3 space-y-1">
-                                    {risk.checklist.map((item, j) => (
-                                      <div key={j} className="flex items-center gap-2 text-xs pl-6">
-                                        {item.required ? (
-                                          <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
-                                        ) : (
-                                          <div className="w-3 h-3 rounded-full border border-slate-300 shrink-0" />
-                                        )}
-                                        <span className={item.required ? 'text-slate-700 font-medium' : 'text-slate-500'}>
-                                          {item.label}
-                                        </span>
-                                        {item.required && (
-                                          <Badge className="bg-red-100 text-red-700 text-[8px] py-0 px-1">
-                                            Requerido
-                                          </Badge>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  )
+// ═══════════════════════════════════════════════════════════
+// HELPER: Generate a URL-safe key from a label
+// ═══════════════════════════════════════════════════════════
+function generateSafeKey(label: string): string {
+  return label
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^A-Z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .substring(0, 50) || 'CUSTOM_RISK'
 }
