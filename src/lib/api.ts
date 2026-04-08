@@ -251,3 +251,64 @@ export async function apiFetch<T = unknown>(
 
   return res.json()
 }
+
+// ============ API Fetch with Meta (Service Worker offline detection) ============
+
+export interface FetchMeta {
+  offline: boolean
+  cached: boolean
+  timestamp: string
+}
+
+export interface FetchWithMetaResult<T> {
+  data: T
+  meta: FetchMeta
+}
+
+export async function apiFetchWithMeta<T = unknown>(
+  path: string,
+  options?: RequestInit
+): Promise<FetchWithMetaResult<T>> {
+  const token = getToken()
+  const isFormData = options?.body instanceof FormData
+
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  if (options?.headers) {
+    const customHeaders = options.headers as Record<string, string>
+    for (const [key, value] of Object.entries(customHeaders)) {
+      if (key.toLowerCase() === 'content-type' && isFormData) continue
+      headers[key] = value
+    }
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  })
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
+    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
+  }
+
+  const data = await res.json() as T
+
+  // Detect if data came from Service Worker cache (offline)
+  const offline = res.headers.get('x-sw-cache') === 'HIT' || !navigator.onLine
+
+  return {
+    data,
+    meta: {
+      offline,
+      cached: res.headers.get('x-vercel-cache') === 'HIT',
+      timestamp: new Date().toISOString(),
+    },
+  }
+}

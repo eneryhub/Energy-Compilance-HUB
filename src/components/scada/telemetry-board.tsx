@@ -1940,3 +1940,4 @@ export default function TelemetryBoard() {
     </div>
   )
 }
+
