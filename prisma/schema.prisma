@@ -7,7 +7,6 @@ datasource db {
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
-
 // ============================================================
 // ENERGY-COMPLIANCE HUB - UNIFIED SCHEMA
 // Fusion: Energy-Compliance (Operations) + HSE Guard (Compliance)
@@ -80,6 +79,7 @@ model User {
   auditLogs    AuditLog[]
   documents    HseDocument[]
   reviewedDocuments HseDocument[] @relation("DocumentReviewer")
+  specialProtocolApprovals Permit[] @relation("SpecialApprovedBy") // <-- AGREGADO (nuevo esquema)
 
   @@unique([email, companyId])
 }
@@ -117,6 +117,11 @@ model Permit {
   workLocationId    String?
   locationSource    String    @default("manual") // gps, manual, saved
 
+  // Special Protocol (Bypass Controlado) - AGREGADO desde nuevo esquema
+  isSpecialProtocol         Boolean  @default(false)
+  overrideJustification     String?
+  specialApprovedById       String?
+
   approvedAt        DateTime?
   rejectedAt        DateTime?
   createdAt         DateTime  @default(now())
@@ -128,12 +133,14 @@ model Permit {
   rejectedBy        User?         @relation("RejectedBy", fields: [rejectedById], references: [id])
   workLocationRef   WorkLocation? @relation(fields: [workLocationId], references: [id])
   signatures        Signature[]
+  specialApprovedBy User?         @relation("SpecialApprovedBy", fields: [specialApprovedById], references: [id]) // <-- AGREGADO
 
   @@index([companyId])
   @@index([status])
   @@index([createdById])
   @@index([workLocation])
   @@index([riskType])
+  @@index([isSpecialProtocol]) // <-- AGREGADO (nuevo esquema)
 }
 
 // ============ WORK LOCATIONS (GPS / Geofence) ============
@@ -151,14 +158,14 @@ model WorkLocation {
   updatedAt         DateTime @updatedAt
 
   // QR Code verification
-  qrCodeSecret      String?  @unique // Auto-generated secret used in QR token
-  qrCodeData        String?  // Full QR payload JSON stored for download
+  qrCodeSecret      String?  @unique
+  qrCodeData        String?
 
   // Beacon BLE verification
-  beaconUuid        String?  @unique // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
-  beaconMajor       Int?     // Major value (0-65535)
-  beaconMinor       Int?     // Minor value (0-65535)
-  beaconRssi        Int      @default(-70) // Signal strength threshold (dBm)
+  beaconUuid        String?  @unique
+  beaconMajor       Int?
+  beaconMinor       Int?
+  beaconRssi        Int      @default(-70)
 
   company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   permits  Permit[]
@@ -175,20 +182,15 @@ model Signature {
   signerName      String
   signerId        String?
   signatureData   String   // Base64 PNG image
-  signatureHash   String   @unique // SHA256 for integrity
+  signatureHash   String   @unique
   signedAt        DateTime @default(now())
 
-  // GPS at signing time
   latitude        Float?
   longitude       Float?
   accuracyMeters  Float?
-
-  // Geofence validation
   isWithinGeofence      Boolean?
   distanceToWorkMeters  Float?
-
-  // Device info
-  deviceInfo      String?  // JSON string
+  deviceInfo      String?
   ipAddress       String?
 
   createdAt       DateTime @default(now())
@@ -203,12 +205,12 @@ model Signature {
 model HseDocument {
   id            String   @id @default(cuid())
   companyId     String
-  userId        String?  // assigned user
+  userId        String?
   title         String
-  documentType  String   // certificado_medico, licencia_operativa, permiso_ambiental, etc.
-  category      String   // PERSONAL, EQUIPOS, LEGAL, AMBIENTAL
-  criticality   String   @default("NORMAL") // CRITICAL, NORMAL, LOW
-  status        String   @default("ACTIVE") // ACTIVE, EXPIRED, REVOKED, PENDING_RENEWAL
+  documentType  String
+  category      String
+  criticality   String   @default("NORMAL")
+  status        String   @default("ACTIVE")
   issueDate     DateTime?
   expiryDate    DateTime?
   holderName    String?
@@ -217,9 +219,9 @@ model HseDocument {
   fileName      String?
   fileSize      Int?
   mimeType      String?
-  aiExtractedData String? // JSON string with AI-extracted data
+  aiExtractedData String?
   aiConfidence  Float?
-  tags          String?  // JSON array string
+  tags          String?
 
   reviewedById  String?
   reviewedAt    DateTime?
@@ -244,7 +246,7 @@ model HseDocument {
 model RiskTypeConfig {
   id            String   @id @default(cuid())
   companyId     String
-  key           String   // unique key like ALTURA, ELECTRICO, or custom: EXCAVACION
+  key           String
   label         String
   color         String   @default("#6366f1")
   description   String?
@@ -266,7 +268,7 @@ model ChecklistItemConfig {
   id            String   @id @default(cuid())
   companyId     String
   riskTypeKey   String
-  itemKey       String   // unique key like has_harness
+  itemKey       String
   label         String
   required      Boolean  @default(false)
   sortOrder     Int      @default(0)
@@ -288,11 +290,11 @@ model AlertConfig {
   companyId     String
   documentId    String?
   name          String
-  alertType     String   // EMAIL, IN_APP, WHATSAPP
-  triggerDaysBefore Int @default(30) // days before expiry
+  alertType     String
+  triggerDaysBefore Int @default(30)
   isActive      Boolean  @default(true)
   lastTriggeredAt DateTime?
-  message       String?  // AI-generated alert message
+  message       String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -305,10 +307,10 @@ model AuditLog {
   id          String   @id @default(cuid())
   companyId   String
   userId      String?
-  action      String   // LOGIN, LOGOUT, CREATE, APPROVE, REJECT, VIEW, UPDATE, DELETE
-  entityType  String   // USER, PERMIT, DOCUMENT, COMPANY, SIGNATURE
+  action      String
+  entityType  String
   entityId    String?
-  details     String?  // JSON string with additional context
+  details     String?
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime @default(now())
@@ -328,9 +330,9 @@ model Sensor {
   companyId         String
   locationId        String?
   name              String
-  type              String   // PRESION, TEMPERATURA, GAS, VOLTAJE
+  type              String
   currentValue      Float?
-  unit              String   // psi, °C, %LEL, V
+  unit              String
   thresholdCritical Float
   thresholdWarning  Float    @default(0)
   isSimulated       Boolean  @default(true)
@@ -354,7 +356,7 @@ model SensorReading {
   id        String   @id @default(cuid())
   sensorId  String
   value     Float
-  status    String   // NORMAL, WARNING, CRITICO
+  status    String
   timestamp DateTime @default(now())
 
   sensor    Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
@@ -367,11 +369,11 @@ model SensorReading {
 model ApiKey {
   id          String   @id @default(cuid())
   companyId   String
-  userId      String   // Who created the key
-  name        String   // Label like "Gateway Planta Norte"
-  keyPrefix   String   // First 8 chars shown in UI: "ech_live_abc12345"
-  keyHash     String   @unique // SHA-256 hash of the full key (never stored plain)
-  permissions String   @default("sensor:ingest") // Comma-separated permissions
+  userId      String
+  name        String
+  keyPrefix   String
+  keyHash     String   @unique
+  permissions String   @default("sensor:ingest")
   lastUsedAt  DateTime?
   expiresAt   DateTime?
   isActive    Boolean  @default(true)
@@ -391,7 +393,7 @@ model SubscriptionInvoice {
   stripeInvoiceId String?  @unique
   amount          Float?
   currency        String   @default("usd")
-  status          String   @default("paid") // paid, pending, failed, refunded
+  status          String   @default("paid")
   planName        String
   description     String?
   invoicePdfUrl   String?
@@ -408,16 +410,16 @@ model SubscriptionInvoice {
 model SystemAlert {
   id                String   @id @default(cuid())
   companyId         String
-  type              String   // SENSOR_CRITICAL, GEOFENCE_BREACH, SYSTEM_ERROR, SECURITY_BREACH, SUBSCRIPTION_ALERT
-  severity          String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  type              String
+  severity          String   @default("MEDIUM")
   title             String
   message           String
-  metadata          String?  // JSON string with extra context (sensor data, GPS coords, error stack, etc.)
+  metadata          String?
   isAcknowledged    Boolean  @default(false)
   acknowledgedById  String?
   acknowledgedAt    DateTime?
-  relatedEntityId   String?  // e.g. sensorId, permitId, auditLogId
-  relatedEntityType String?  // e.g. SENSOR, PERMIT, AUDIT_LOG
+  relatedEntityId   String?
+  relatedEntityType String?
   createdAt         DateTime @default(now())
 
   company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -432,14 +434,14 @@ model SystemAlert {
 // ============ KNOWLEDGE BASE (GOC — Solutions Repository) ============
 model KnowledgeBase {
   id              String   @id @default(cuid())
-  errorCode       String   @unique // e.g. ERR_GPS_01, ERR_SENSOR_CRITICO, ERR_GEOFENCE_01
-  category        String   // GPS, SCADA, GEOFENCE, AUTH, SUBSCRIPTION, SYSTEM
-  title           String   // Human-readable title
-  rootCause       String   // What causes this error
-  appliedSolution String   // Step-by-step solution for the guard/operator
-  severity        String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
-  referenceUrl    String?  // External documentation link
-  timesUsed       Int      @default(0) // How many times this solution was referenced
+  errorCode       String   @unique
+  category        String
+  title           String
+  rootCause       String
+  appliedSolution String
+  severity        String   @default("MEDIUM")
+  referenceUrl    String?
+  timesUsed       Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

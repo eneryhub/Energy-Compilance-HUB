@@ -1,13 +1,16 @@
 // Energy-Compliance Hub — Service Worker v3.1
 // Based on v3 with surgical fix: /api/sensors/simulation is NEVER cached
-// 
+//
 // Strategy:
-//   - /api/sensors/simulation → PASS-THROUGH (no cache, control endpoint)
-//   - /api/sensors/*          → Network Only + Last Cache (offline fallback for sensor data)
-//   - /api/*                  → Stale-While-Revalidate (offline data for permits, docs, etc.)
-//   - Scripts / _next/*       → Network First (always latest code)
-//   - Images / Fonts          → Cache First (safe to cache long-term)
-//   - HTML pages              → Network First (App Shell)
+//   - /api/sensors/simulation   → PASS-THROUGH (no cache, control endpoint)
+//   - /api/subscription/status  → PASS-THROUGH (no cache, volatile state)
+//   - /api/auth/                → PASS-THROUGH (no cache, auth endpoints)
+//   - /api/sensors/*            → Network Only + Last Cache (offline fallback for sensor data)
+//   - /api/permits/*            → Network Only + Last Cache (real-time permit data)
+//   - /api/*                    → Stale-While-Revalidate (offline data for docs, etc.)
+//   - Scripts / _next/*         → Network First (always latest code)
+//   - Images / Fonts            → Cache First (safe to cache long-term)
+//   - HTML pages                → Network First (App Shell)
 
 const CACHE_VERSION = 'ech-v3.1';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
@@ -107,6 +110,13 @@ self.addEventListener('fetch', (event) => {
   // Strategy: Network Only for sensor routes (safety-critical)
   // Caches last known sensor data for offline viewing
   if (url.pathname.startsWith('/api/sensors')) {
+    event.respondWith(networkOnlyWithLastCache(request, SENSOR_CACHE));
+    return;
+  }
+
+  // Strategy: Network Only for permit routes (real-time permit data)
+  // Caches last known permit data for offline viewing
+  if (url.pathname.startsWith('/api/permits')) {
     event.respondWith(networkOnlyWithLastCache(request, SENSOR_CACHE));
     return;
   }

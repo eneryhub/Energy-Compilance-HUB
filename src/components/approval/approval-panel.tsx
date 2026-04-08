@@ -17,6 +17,7 @@ import {
   MapPin,
   Shield,
   ShieldCheck,
+  ShieldAlert,
   Loader2,
   Calendar,
   User,
@@ -54,9 +55,16 @@ export default function ApprovalPanel() {
   const [approveJustification, setApproveJustification] = useState('')
   const [showApproveJustifyDialog, setShowApproveJustifyDialog] = useState(false)
   const [geofenceStatus, setGeofenceStatus] = useState<{ isOutside: boolean; distance: number; radius: number } | null>(null)
+  const [specialProtocol, setSpecialProtocol] = useState(false)
+  const [overrideJustification, setOverrideJustification] = useState('')
+  const [showSpecialProtocolDialog, setShowSpecialProtocolDialog] = useState(false)
+  const [userRole, setUserRole] = useState<string | null>(null)
 
   useEffect(() => {
     loadData()
+    // Get current user role for special protocol authorization
+    const user = JSON.parse(localStorage.getItem('ech_user') || '{}')
+    if (user?.role) setUserRole(user.role)
     // Check SCADA safety every 5 seconds
     const scadaInterval = setInterval(checkScadaSafety, 5000)
     return () => clearInterval(scadaInterval)
@@ -182,6 +190,11 @@ export default function ApprovalPanel() {
       if (geofenceStatus?.isOutside) {
         body.geofenceJustification = justification
       }
+      // Attach special protocol fields if active
+      if (specialProtocol && overrideJustification.trim().length >= 20) {
+        body.specialProtocol = true
+        body.overrideJustification = overrideJustification.trim()
+      }
       const result = await apiFetch<{ pdf?: string }>(`/permits/${selectedPermit!.id}/approve`, {
         method: 'POST',
         body: JSON.stringify(body),
@@ -190,7 +203,9 @@ export default function ApprovalPanel() {
       if (result.pdf) {
         downloadPdfFromBase64(result.pdf, `Permiso_${selectedPermit!.permitNumber}_Aprobado.pdf`)
       }
-      setSuccessMessage(`Permiso ${selectedPermit!.permitNumber} aprobado exitosamente`)
+      setSuccessMessage(specialProtocol
+        ? `Permiso ${selectedPermit!.permitNumber} aprobado bajo PROTOCOLO DE SEGURIDAD ESPECIAL`
+        : `Permiso ${selectedPermit!.permitNumber} aprobado exitosamente`)
       setShowSuccessDialog(true)
       setSelectedPermit(null)
       setSignatureData(null)
@@ -198,6 +213,8 @@ export default function ApprovalPanel() {
       setGeofenceStatus(null)
       setApproveJustification('')
       setShowApproveJustifyDialog(false)
+      setSpecialProtocol(false)
+      setOverrideJustification('')
       loadData()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al aprobar permiso'
@@ -245,7 +262,12 @@ export default function ApprovalPanel() {
     }
   }
 
-  const isBlocked = (compliance && !compliance.isCompliant) || (scadaSafety && !scadaSafety.isSafe)
+  // Standard blocking logic — bypassed when special protocol is active
+  const isBlocked = specialProtocol
+    ? false
+    : ((compliance && !compliance.isCompliant) || (scadaSafety && !scadaSafety.isSafe))
+
+  const canUseSpecialProtocol = userRole === 'ADMIN' && (scadaSafety && !scadaSafety.isSafe) && !specialProtocol
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('es', {
@@ -341,13 +363,69 @@ export default function ApprovalPanel() {
                 <p className="text-[10px] text-slate-400 mt-3">
                   Verifique el panel SCADA → Telemetría para monitorear los sensores en tiempo real.
                 </p>
+
+                {/* Special Protocol Button — Only for ADMIN when SCADA is blocked */}
+                {canUseSpecialProtocol && selectedPermit && (
+                  <div className="mt-4 pt-3 border-t border-red-500/30">
+                    <Button
+                      onClick={() => setShowSpecialProtocolDialog(true)}
+                      className="w-full bg-amber-500 hover:bg-amber-600 text-black font-semibold gap-2 border-2 border-amber-400"
+                    >
+                      <ShieldAlert className="w-4 h-4" />
+                      Protocolo de Seguridad Especial
+                    </Button>
+                    <p className="text-[10px] text-amber-300/80 mt-2 text-center">
+                      Habilita el bypass controlado para mantenimiento y reparación de sensores. Solo disponible para ADMIN.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {compliance && compliance.isCompliant && (!scadaSafety || scadaSafety.isSafe) && (
+      {/* Special Protocol Active Banner */}
+      <AnimatePresence>
+        {specialProtocol && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="rounded-xl border-2 border-amber-400 bg-gradient-to-r from-amber-50 to-orange-50 p-4"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-amber-100">
+                  <ShieldAlert className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-amber-800 flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                    PROTOCOLO DE SEGURIDAD ESPECIAL ACTIVO
+                  </h3>
+                  <p className="text-xs text-amber-700 mt-1">
+                    El bloqueo SCADA ha sido deshabilitado para este permiso. El bypass quedará registrado en el audit trail con la justificación técnica proporcionada.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSpecialProtocol(false)
+                  setOverrideJustification('')
+                }}
+                className="shrink-0 text-xs border-amber-300 text-amber-700 hover:bg-amber-100"
+              >
+                Desactivar
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {compliance && compliance.isCompliant && (!scadaSafety || scadaSafety.isSafe) && !specialProtocol && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -802,6 +880,84 @@ export default function ApprovalPanel() {
               >
                 {approving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 Aprobar con Justificación
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Special Protocol Justification Dialog */}
+      <Dialog open={showSpecialProtocolDialog} onOpenChange={(open) => {
+        setShowSpecialProtocolDialog(open)
+        if (!open) setOverrideJustification('')
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-amber-500" />
+              Protocolo de Seguridad Especial
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Justificación técnica requerida para habilitar el bypass de seguridad
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <div className="flex items-center gap-2 mb-1">
+                <ShieldAlert className="w-4 h-4 text-amber-600" />
+                <p className="text-sm font-semibold text-amber-800">Bypass Controlado de Seguridad</p>
+              </div>
+              <p className="text-xs text-amber-700">
+                Los sensores SCADA están en estado crítico. Al habilitar este protocolo, se permitirá la firma del permiso
+                <strong>{selectedPermit?.permitNumber}</strong> para fines exclusivos de <strong>mantenimiento y/o reparación</strong> del sensor.
+                Esta acción queda registrada en el audit trail.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">
+                Justificación Técnica <span className="text-red-500">*</span>
+              </label>
+              <Textarea
+                placeholder="Describa detalladamente la razón técnica para habilitar el bypass (ej: Mantenimiento preventivo programado del sensor de gas zona A - calibración de equipo, reemplazo de transmisor 4-20mA)..."
+                value={overrideJustification}
+                onChange={(e) => setOverrideJustification(e.target.value)}
+                className="min-h-[120px] text-sm"
+              />
+              <p className={cn(
+                "text-xs",
+                overrideJustification.trim().length >= 20 ? "text-emerald-600" : "text-slate-400"
+              )}>
+                {overrideJustification.trim().length}/20 caracteres mínimos requeridos
+              </p>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <p className="text-[11px] text-slate-500">
+                <strong>Requisitos:</strong> Solo usuarios con rol ADMIN pueden autorizar este bypass.
+                La justificación queda almacenada permanentemente junto con el permiso y visible en el audit trail.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => {
+                setShowSpecialProtocolDialog(false)
+                setOverrideJustification('')
+              }}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={() => {
+                  if (overrideJustification.trim().length >= 20) {
+                    setSpecialProtocol(true)
+                    setShowSpecialProtocolDialog(false)
+                  }
+                }}
+                disabled={overrideJustification.trim().length < 20}
+                className="bg-amber-500 hover:bg-amber-600 text-black font-semibold gap-2"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                Habilitar Protocolo Especial
               </Button>
             </div>
           </div>

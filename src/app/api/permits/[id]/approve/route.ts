@@ -27,7 +27,7 @@ export async function POST(
 
     const { id } = await params
     const body = await request.json()
-    const { action, signature, gpsLatitude, gpsLongitude, gpsAccuracy, rejectionReason, approveJustification, rejectGeofenceJustification, deviceInfo } = body
+    const { action, signature, gpsLatitude, gpsLongitude, gpsAccuracy, rejectionReason, approveJustification, rejectGeofenceJustification, deviceInfo, specialProtocol, overrideJustification } = body
 
     if (!action || !['approve', 'reject'].includes(action)) {
       return NextResponse.json({ error: 'Acción inválida. Use "approve" o "reject"' }, { status: 400 })
@@ -51,7 +51,19 @@ export async function POST(
     }
 
     // CRITICAL: Enforce compliance for supervisor too
-    await enforceCompliance(session.userId, session.companyId)
+    // EXCEPTION: Special Protocol bypass (requires ADMIN role + mandatory justification)
+    if (specialProtocol) {
+      // Only ADMIN can authorize special protocol bypass
+      if (session.role !== 'ADMIN') {
+        return NextResponse.json({ error: 'Solo ADMIN puede autorizar el Protocolo de Seguridad Especial' }, { status: 403 })
+      }
+      if (!overrideJustification || overrideJustification.trim().length < 20) {
+        return NextResponse.json({ error: 'SPECIAL_PROTOCOL_JUSTIFICATION_REQUIRED', message: 'Debe proporcionar una justificación técnica detallada (mínimo 20 caracteres) para habilitar el Protocolo de Seguridad Especial.' }, { status: 400 })
+      }
+      // Skip enforceCompliance — proceed with approval under special protocol
+    } else {
+      await enforceCompliance(session.userId, session.companyId)
+    }
 
     if (action === 'approve') {
       // Validate supervisor GPS is within geofence (only if GPS is available)
@@ -126,7 +138,7 @@ export async function POST(
       // ── GOC Side Effect: Geofence breach alert ──
       if (isOutsideGeofence && geoResult && hasGps) {
         try {
-          emitGOCAlert({
+          await emitGOCAlert({
             companyId: session.companyId,
             type: 'GEOFENCE_BREACH',
             severity: 'HIGH',
@@ -165,10 +177,17 @@ export async function POST(
           supervisorSignature: signatureData,
           // Store justification if approved outside geofence
           ...(isOutsideGeofence ? { approveJustification } : {}),
+          // Store Special Protocol fields if applicable
+          ...(specialProtocol ? {
+            isSpecialProtocol: true,
+            overrideJustification: overrideJustification.trim(),
+            specialApprovedById: session.userId,
+          } : {}),
         },
         include: {
           createdBy: { select: { id: true, name: true, email: true } },
-          approvedBy: { select: { id: true, name: true } }
+          approvedBy: { select: { id: true, name: true } },
+          specialApprovedBy: { select: { id: true, name: true, role: true } },
         }
       })
 
@@ -215,13 +234,18 @@ export async function POST(
       // Audit log
       await createAuditLog({
         companyId: session.companyId, userId: session.userId,
-        action: 'APPROVE', entityType: 'PERMIT', entityId: permit.id,
+        action: specialProtocol ? 'APPROVE_SPECIAL_PROTOCOL' : 'APPROVE',
+        entityType: 'PERMIT', entityId: permit.id,
         details: {
           permitNumber: permit.permitNumber,
           gpsAvailable: hasGps,
           gpsWithinGeofence: geoResult?.isWithinRadius ?? null,
           distanceMeters: geoResult?.distanceMeters ?? null,
           outOfRangeJustification: isOutsideGeofence ? approveJustification : undefined,
+          ...(specialProtocol ? {
+            specialProtocol: true,
+            overrideJustification: overrideJustification.trim(),
+          } : {}),
         },
       }, request)
 
