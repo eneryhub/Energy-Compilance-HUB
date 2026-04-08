@@ -218,13 +218,30 @@ export async function apiFetch<T = unknown>(
   options?: RequestInit
 ): Promise<T> {
   const token = getToken()
+  const isFormData = options?.body instanceof FormData
+
+  const headers: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+
+  // Only set Content-Type for JSON requests.
+  // FormData MUST use the browser's auto-generated multipart/form-data boundary.
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  // Merge any custom headers (but don't override FormData boundary)
+  if (options?.headers) {
+    const customHeaders = options.headers as Record<string, string>
+    for (const [key, value] of Object.entries(customHeaders)) {
+      if (key.toLowerCase() === 'content-type' && isFormData) continue
+      headers[key] = value
+    }
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
+    headers,
   })
 
   if (!res.ok) {
@@ -233,41 +250,4 @@ export async function apiFetch<T = unknown>(
   }
 
   return res.json()
-}
-
-// ============ API Fetch with Metadata (Service Worker offline detection) ============
-
-export interface ApiResponseMeta {
-  offline: boolean
-  cached: boolean
-  status: number
-}
-
-export async function apiFetchWithMeta<T = unknown>(
-  path: string,
-  options?: RequestInit
-): Promise<{ data: T; meta: ApiResponseMeta }> {
-  const token = getToken()
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  })
-
-  const meta: ApiResponseMeta = {
-    offline: res.headers.get('X-Offline-Data') === 'true',
-    cached: res.headers.get('X-Cache') === 'HIT',
-    status: res.status,
-  }
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
-    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
-  }
-
-  const data = await res.json()
-  return { data, meta }
 }
