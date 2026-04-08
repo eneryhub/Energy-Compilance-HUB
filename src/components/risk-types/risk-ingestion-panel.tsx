@@ -58,6 +58,7 @@ interface ExtractionData {
   }
   accessTypes?: string[]
   eppRequired?: string[]
+  rawSections?: Array<{ sectionName: string; items: string[] }>
   totalChecklistItems: number
   riskTypesDetail: RiskTypePreview[]
 }
@@ -459,6 +460,47 @@ export default function RiskIngestionPanel({ onSuccess }: { onSuccess?: () => vo
                       </div>
                     </SectionBlock>
                   )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* ── Raw Sections Breakdown ── */}
+            {extraction?.rawSections && extraction.rawSections.length > 0 && (
+              <Card className="shadow-sm border-amber-200 bg-amber-50/30">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                    <FileSearch className="w-3.5 h-3.5 text-amber-500" />
+                    Extracción por Secciones del Documento
+                    <Badge className="bg-amber-100 text-amber-700 text-[10px] ml-auto">
+                      {extraction.rawSections.reduce((s, sec) => s + sec.items.length, 0)} ítems en {extraction.rawSections.length} secciones
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <ScrollArea className="max-h-[200px]">
+                    <div className="divide-y divide-amber-100">
+                      {extraction.rawSections.map((section, i) => (
+                        <div key={i} className="px-4 py-2.5">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-[10px] font-mono text-amber-500 bg-amber-100 px-1.5 py-0.5 rounded">
+                              {section.sectionName}
+                            </span>
+                            <Badge variant="outline" className="text-[9px] text-slate-500 border-slate-200">
+                              {section.items.length} ítems
+                            </Badge>
+                          </div>
+                          <div className="text-[11px] text-slate-600 leading-relaxed">
+                            {section.items.map((item, j) => (
+                              <span key={j} className="inline">
+                                {item}
+                                {j < section.items.length - 1 ? ' · ' : ''}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
             )}

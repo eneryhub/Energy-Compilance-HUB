@@ -231,6 +231,7 @@ export async function POST(request: NextRequest) {
         generalInfo: aiResult.generalInfo,
         accessTypes: aiResult.accessTypes,
         eppRequired: aiResult.eppRequired,
+        rawSections: aiResult.rawSections,
         totalChecklistItems: aiResult.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0),
         riskTypesDetail: aiResult.riskTypes,
       },
@@ -308,69 +309,72 @@ Si hay tablas, preserva los encabezados y filas.`
 
 // ═══════════════════════════════════════════════════════════
 // HELPER: Extract text from Excel/CSV using xlsx library
-// Uses raw cell-by-cell extraction to capture EVERY cell (including
-// headers, merged cells, and sparse rows that sheet_to_json skips)
+// V2: Raw cell-by-cell extraction — captures EVERY non-empty cell.
+// No filtering, no skipping — the AI decides what's relevant.
+// Preserves row numbers so the AI can see exact document structure.
 // ═══════════════════════════════════════════════════════════
 async function extractTextFromExcel(file: File): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer())
   const workbook = XLSX.read(buffer, { type: 'buffer' })
 
   const allText: string[] = []
+  let totalCells = 0
+  let totalRowsWithData = 0
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
     const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
 
     allText.push(`=== HOJA: ${sheetName} ===`)
-    allText.push(`Rango: ${range.e.r - range.s.r + 1} filas x ${range.e.c - range.s.c + 1} columnas`)
+    allText.push(`Dimensiones: ${range.e.r - range.s.r + 1} filas x ${range.e.c - range.s.c + 1} columnas`)
     allText.push('---')
 
-    // Section tracking
-    let currentSection = 'GENERAL'
+    let sheetCells = 0
+    let sheetRowsWithData = 0
 
     for (let r = range.s.r; r <= range.e.r; r++) {
-      const rowCells: string[] = []
+      const rowCells: Array<{ col: number; val: string }> = []
 
       for (let c = range.s.c; c <= range.e.c; c++) {
         const addr = XLSX.utils.encode_cell({ r, c })
         const cell = sheet[addr]
-        if (cell && cell.v !== undefined && cell.v !== null && String(cell.v).trim() !== '') {
-          const val = String(cell.v).trim()
-          // Skip pure numbers that are Excel date serials
-          if (/^\d{4,5}$/.test(val) && c > 3) continue
-          rowCells.push(val)
+        if (cell && cell.v !== undefined && cell.v !== null) {
+          // Convert any cell value to string
+          let val: string
+          if (cell.t === 'n') {
+            // Number cell — format it, but check if it's a date serial
+            if (cell.z && cell.z.toLowerCase().includes('d') && cell.v > 40000 && cell.v < 60000) {
+              // Likely an Excel date serial — skip it
+              continue
+            }
+            // Keep the number as-is (could be a checklist item number, quantity, etc.)
+            val = String(cell.v)
+          } else {
+            val = String(cell.v).trim()
+          }
+
+          if (val === '') continue
+
+          rowCells.push({ col: c, val })
+          sheetCells++
+          totalCells++
         }
       }
 
       if (rowCells.length === 0) continue
+      sheetRowsWithData++
+      totalRowsWithData++
 
-      const line = rowCells.join(' | ')
-
-      // Detect section headers (ALL CAPS or short bold-like lines)
-      const firstCell = rowCells[0].toUpperCase().trim()
-      if (
-        firstCell === firstCell && // already uppercase
-        firstCell.length > 4 &&
-        firstCell.length < 80 &&
-        !firstCell.includes('MARQUE') &&
-        !firstCell.includes('NOMBRE') &&
-        !firstCell.includes('COMO') &&
-        !firstCell.includes('FIRMA') &&
-        !firstCell.includes('PERSONAL') &&
-        !firstCell.includes('LOS ') &&
-        !firstCell.includes('EL ') &&
-        !firstCell.includes('LA ') &&
-        !firstCell.includes('SE ') &&
-        !firstCell.includes('EN CASO')
-      ) {
-        currentSection = firstCell
-        allText.push(`\n[SECCIÓN: ${firstCell}]`)
-      }
-
-      allText.push(line)
+      // Format row with line number for AI reference
+      const rowNum = r - range.s.r + 1
+      const cellTexts = rowCells.map(c => `[Col${c.col + 1}] ${c.val}`)
+      allText.push(`Fila ${rowNum}: ${cellTexts.join(' | ')}`)
     }
+
+    allText.push(`--- Fin hoja ${sheetName}: ${sheetCells} celdas en ${sheetRowsWithData} filas ---`)
   }
 
+  console.log(`[RiskIngestion] Excel extraction: ${totalCells} celdas en ${totalRowsWithData} filas`)
   return allText.join('\n')
 }
 
@@ -393,97 +397,48 @@ interface AiRiskType {
 
 interface AiExtractionResult {
   documentTitle: string
-  documentType: string // e.g., "PERMISO DE TRABAJO EN ALTURAS", "ATS", "ANÁLISIS DE TRABAJO SEGURO"
-  summary: string // Brief paragraph summarizing the document
+  documentType: string
+  summary: string
   generalInfo: {
     proceso?: string
     version?: string
     empresaEjecutadora?: string
     actividad?: string
   }
-  accessTypes?: string[] // e.g., ["ESCALERA PORTÁTIL", "ANDAMIOS", "MANLIFT"]
-  eppRequired?: string[] // All EPP items extracted
+  accessTypes?: string[]
+  eppRequired?: string[]
+  rawSections?: Array<{ sectionName: string; items: string[] }> // FLAT extraction of ALL sections
   riskTypes: AiRiskType[]
 }
 
 async function mapTextToRiskTypes(rawText: string, zai: any): Promise<AiExtractionResult> {
-  const systemPrompt = `Eres un experto en HSE (Health, Safety & Environment) del sector petrolero e industrial venezolano y latinoamericano.
+  const systemPrompt = `Eres un extractor de datos EXHAUSTIVO para documentos HSE (Health, Safety & Environment) del sector petrolero e industrial.
 
-Tu trabajo es analizar planillas de permisos de trabajo, ATS, certificados de apoyo y formatos de seguridad industrial, y extraer de forma EXHAUSTIVA y COMPLETA:
+TU ÚNICA MISIÓN: Extraer CADA UNA de las filas con contenido del documento. NO puedes omitir, agrupar, resumir ni combinar NINGÚN item.
 
-1. **Título y tipo de documento** (permiso de trabajo, ATS, certificado, etc.)
-2. **Información general** del documento (proceso, versión, empresa, actividad)
-3. **Todos los tipos de acceso** mencionados (escalera, andamios, manlift, cuerdas, grúa, etc.)
-4. **TODOS los EPP y equipos de protección** listados (sin omitir ninguno)
-5. **TIPOS DE RIESGO** identificados en el documento, cada uno con su **LISTA DE VERIFICACIÓN COMPLETA**
+═══ REGLAS ABSOLUTAS (CERO EXCEPCIONES) ═══
+1. CUENTA las filas del documento. Si el documento tiene 44 ítems, DEBES devolver 44 ítems exactamente.
+2. NUNCA digas "ítems similares" o "entre otros" — lista CADA UNO por separado.
+3. NUNCA combines dos filas del documento en un solo ítem JSON.
+4. Mantén el texto EXACTO del documento (no parafrasees, no acortes).
+5. Si un ítem parece repetido o similar a otro, inclúyelo de todas formas.
+6. Si una sección tiene sub-ítems (a, b, c), inclúyelos TODOS como ítems separados.
 
-REGLAS CRÍTICAS DE EXTRACCIÓN:
-- EXTRAER TODOS los ítems de cada sección — NO resumir ni agrupar
-- Si el documento tiene 20 ítems de EPP, extraer los 20
-- Si hay 15 requisitos de planeación, extraer los 15
-- Si hay 8 tipos de acceso, listar los 8
-- Mantener el texto original de cada ítem (no parafrasear)
-- Clasificar cada ítem de checklist en una categoría: "EPP", "DOCUMENTACIÓN", "PROCEDIMIENTO", "EQUIPO", "SEÑALIZACIÓN", "CAPACITACIÓN", "EMERGENCIA", "VERIFICACIÓN"
+═══ PASO 1: EXTRAER SECCIONES CRUDAS ═══
+Primero, identifica TODAS las secciones del documento (cada título en mayúsculas o encabezado).
+Luego, por cada sección, extrae CADA fila con contenido como un ítem individual.
 
-TIPOS DE RIESGO COMUNES en el sector:
-- Trabajo en Altura
-- Riesgo Eléctrico
-- Espacio Confinado
-- Trabajo en Caliente
-- Excavación
-- Izamiento / Montaje
-- Radiografía Industrial
-- Trabajo en Superficies Mojadas
-- Bloqueo y Etiquetado (Lockout/Tagout)
-- Manejo de Sustancias Peligrosas
+Ejemplo de documento con 2 secciones:
+Sección A: "REQUISITOS DE PLANEACIÓN" → 22 ítems → extraer los 22
+Sección B: "EPP Y EQUIPO DE PROTECCIÓN" → 22 ítems → extraer los 22
+Total: 44 ítems. NO 26. NO 30. EXACTAMENTE 44.
 
-Para cada TIPO DE RIESGO, generar una lista de verificación que incluya:
-- Todos los ítems de EPP específicos para ese riesgo
-- Todos los requisitos de documentación (certificados, ARL, cursos)
-- Todos los requisitos de procedimiento (análisis de trabajo, señalización, rescate)
-- Todos los requisitos de verificación previa al trabajo
+═══ PASO 2: GENERAR LISTA DE VERIFICACIÓN ═══
+Cada ítem extraído del documento DEBE aparecer en la lista de verificación (checklist).
+Asigna cada ítem a la sección/riesgo más relevante.
+Si un ítem no encaja en ningún riesgo específico, créalo bajo "GENERAL" o "REQUISITOS GENERALES".
 
-Responde SIEMPRE en JSON válido con esta estructura EXACTA (sin markdown, sin backticks):
-{
-  "documentTitle": "Título del documento",
-  "documentType": "PERMISO DE TRABAJO | ATS | CERTIFICADO | OTRO",
-  "summary": "Resumen de 2-3 oraciones describiendo el propósito y alcance del documento",
-  "generalInfo": {
-    "proceso": "Nombre del proceso",
-    "version": "Versión si aparece",
-    "empresaEjecutadora": "Empresa mencionada si aparece",
-    "actividad": "Actividad principal descrita"
-  },
-  "accessTypes": ["Tipo 1", "Tipo 2"],
-  "eppRequired": ["EPP 1 completo", "EPP 2 completo"],
-  "riskTypes": [
-    {
-      "label": "Nombre del Tipo de Riesgo",
-      "description": "Descripción detallada de 2-3 oraciones sobre este tipo de riesgo según el documento",
-      "color": "#hexcolor",
-      "icon": "NombreIconoLucide",
-      "checklist": [
-        { "label": "Ítem de verificación 1 (texto completo del documento)", "required": true, "category": "DOCUMENTACIÓN" },
-        { "label": "Ítem de verificación 2 (texto completo del documento)", "required": false, "category": "PROCEDIMIENTO" }
-      ]
-    }
-  ]
-}
-
-COLORES sugeridos (usa hex):
-- #ef4444 (rojo) para riesgos altos
-- #f59e0b (ámbar) para riesgos eléctricos
-- #8b5cf6 (violeta) para espacios confinados
-- #dc2626 (rojo oscuro) para trabajo en caliente
-- #0ea5e9 (azul) para izamiento
-- #22c55e (verde) para General
-- #6366f1 (indigo) por defecto
-- #f97316 (naranja) para trabajo en altura
-
-ICONOS sugeridos (nombre de Lucide icon):
-- ArrowUp, Zap, Box, Flame, Pickaxe, Crane, ScanLine, Droplets, Lock, FlaskConical, AlertTriangle, HardHat, Shield, Eye
-
-CATEGORÍAS de checklist:
+═══ CATEGORÍAS para cada ítem ═══
 - "EPP" = Elementos de protección personal
 - "DOCUMENTACIÓN" = Certificados, cursos, ARL, permisos
 - "PROCEDIMIENTO" = Pasos, protocolos, análisis de trabajo
@@ -491,13 +446,56 @@ CATEGORÍAS de checklist:
 - "SEÑALIZACIÓN" = Delimitación, avisos, cintas
 - "CAPACITACIÓN" = Cursos, charlas, inducciones
 - "EMERGENCIA" = Plan de rescate, comunicación, primeros auxilios
-- "VERIFICACIÓN" = Inspecciones previas, checklist de condición
+- "VERIFICACIÓN" = Inspecciones previas, checks de condición
 
-Reglas para "required":
-- "required": true para ítems de seguridad CRÍTICOS (EPP lifesaving, certificados obligatorios, análisis de trabajo, plan de rescate)
-- "required": false para ítems de buena práctica o referencia
-- Mínimo 5 ítems de checklist por tipo de riesgo (EXTRAER TODOS los que aparezcan en el documento)
-- Si no puedes identificar ningún tipo de riesgo, devuelve { "riskTypes": [] }`
+═══ JSON DE RESPUESTA (sin markdown, sin backticks) ═══
+{
+  "documentTitle": "Título exacto del documento",
+  "documentType": "PERMISO DE TRABAJO | ATS | CERTIFICADO | OTRO",
+  "summary": "Resumen de 2-3 oraciones",
+  "generalInfo": {
+    "proceso": "Nombre del proceso",
+    "version": "Versión si aparece",
+    "empresaEjecutadora": "Empresa si aparece",
+    "actividad": "Actividad principal"
+  },
+  "accessTypes": ["Tipo 1", "Tipo 2", ...],
+  "eppRequired": ["EPP 1 texto completo", "EPP 2 texto completo", ...],
+  "rawSections": [
+    {
+      "sectionName": "NOMBRE EXACTO DE LA SECCIÓN EN MAYÚSCULAS",
+      "items": ["Ítem 1 texto completo", "Ítem 2 texto completo", ...]
+    }
+  ],
+  "riskTypes": [
+    {
+      "label": "Nombre del Tipo de Riesgo o Sección",
+      "description": "Descripción de lo que cubre esta sección",
+      "color": "#hexcolor",
+      "icon": "NombreIconoLucide",
+      "checklist": [
+        { "label": "Texto COMPLETO del ítem tal cual aparece en el documento", "required": true, "category": "DOCUMENTACIÓN" },
+        { "label": "Texto COMPLETO del ítem tal cual aparece en el documento", "required": false, "category": "EPP" }
+      ]
+    }
+  ]
+}
+
+═══ COLORES ═══
+#ef4444 alto | #f59e0b eléctrico | #8b5cf6 confinado | #dc2626 caliente
+#0ea5e9 izamiento | #22c55e general | #6366f1 defecto | #f97316 altura
+
+═══ ICONOS LUCIDE ═══
+ArrowUp, Zap, Box, Flame, Pickaxe, Crane, ScanLine, Droplets, Lock, FlaskConical, AlertTriangle, HardHat, Shield, Eye, ClipboardCheck
+
+═══ VERIFICACIÓN FINAL ═══
+Antes de responder, cuenta:
+- Total de ítems en rawSections: debe ser IGUAL al total de filas con contenido del documento
+- Total de ítems en riskTypes[].checklist: debe ser IGUAL al total de filas con contenido del documento
+Si no coinciden, revisa y agrega los ítems faltantes.
+
+REGLA DE ORO: Es mejor devolver 50 ítems que 44. Es PREFERIBLE incluir un ítem de más que omitir uno.
+NUNCA devuelvas menos ítems de los que tiene el documento.`
 
   let content: string
 
@@ -523,7 +521,7 @@ Contenido del documento:
 ${rawText}`,
           },
         ],
-        max_tokens: 8192,
+        max_tokens: 16384,
         temperature: 0.05,
       }),
     })
@@ -533,6 +531,15 @@ ${rawText}`,
     }
     const data = await response.json()
     content = data.choices?.[0]?.message?.content || ''
+    // Log token usage for monitoring
+    const usage = data.usage
+    if (usage) {
+      console.log(`[RiskIngestion] OpenAI tokens: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}, total=${usage.total_tokens}`)
+    }
+    // Check if response was truncated
+    if (data.choices?.[0]?.finish_reason === 'length') {
+      console.warn('[RiskIngestion] ⚠️ AI response was TRUNCATED (hit max_tokens). Some items may be missing. Consider increasing max_tokens.')
+    }
   } else {
     // Native z-ai-web-dev-sdk
     const response = await zai.chat.completions.create({
@@ -543,6 +550,7 @@ ${rawText}`,
           content: `Analiza el siguiente contenido extraído de una planilla de permisos de trabajo / formato de seguridad industrial.
 
 EXTRAE DE FORMA EXHAUSTIVA toda la información del documento. No omitas ningún ítem, EPP, requisito ni sección.
+Cada fila del documento DEBE convertirse en un ítem de checklist.
 
 Contenido del documento:
 ${rawText}`,
@@ -552,6 +560,9 @@ ${rawText}`,
     })
     content = response.choices[0]?.message?.content || ''
   }
+
+  // ═══ LOG: Extraction statistics ═══
+  console.log(`[RiskIngestion] Raw text length: ${rawText.length} chars`)
 
   // Parse JSON from response (handle markdown code blocks)
   let jsonStr = content.trim()
@@ -571,10 +582,27 @@ ${rawText}`,
     parsed.eppRequired = parsed.eppRequired || []
     parsed.accessTypes = parsed.accessTypes || []
     parsed.generalInfo = parsed.generalInfo || {}
+    parsed.rawSections = parsed.rawSections || []
+
+    // ═══ LOG: Detailed extraction statistics ═══
+    const rawSectionItems = parsed.rawSections.reduce((sum, s) => sum + s.items.length, 0)
+    const checklistItems = parsed.riskTypes.reduce((sum, r) => sum + (r.checklist?.length || 0), 0)
+    console.log(`[RiskIngestion] Extraction stats:`)
+    console.log(`  - rawSections: ${parsed.rawSections.length} secciones, ${rawSectionItems} ítems totales`)
+    console.log(`  - riskTypes: ${parsed.riskTypes.length} tipos`)
+    console.log(`  - checklist items: ${checklistItems} ítems`)
+    console.log(`  - eppRequired: ${parsed.eppRequired.length} ítems`)
+    console.log(`  - accessTypes: ${parsed.accessTypes.length} tipos`)
+    if (rawSectionItems !== checklistItems && checklistItems > 0) {
+      console.warn(`[RiskIngestion] ⚠️ MISMATCH: rawSections has ${rawSectionItems} items but checklist has ${checklistItems} items. ${Math.abs(rawSectionItems - checklistItems)} items were lost in categorization!`)
+    }
+
     return parsed
   } catch (parseErr) {
     console.error('[RiskIngestion] Failed to parse AI JSON:', parseErr)
-    console.error('[RiskIngestion] Raw content:', content.substring(0, 500))
+    console.error('[RiskIngestion] Raw AI content (first 1000 chars):', content.substring(0, 1000))
+    console.error('[RiskIngestion] Raw AI content (last 500 chars):', content.substring(content.length - 500))
+    console.error('[RiskIngestion] Raw text sent to AI (chars):', rawText.length)
     return {
       documentTitle: 'Error en extracción',
       documentType: 'ERROR',
