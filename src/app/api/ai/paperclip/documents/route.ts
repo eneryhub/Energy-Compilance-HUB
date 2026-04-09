@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTokenPayload } from '@/lib/auth'
-import { getSupabaseClient } from '@/lib/supabase'
+
+// Lazy import — prevents serverless crash if @supabase/supabase-js isn't installed on Vercel
+let _getSupabaseClient: typeof import('@/lib/supabase').getSupabaseClient | null = null
+
+async function getSupabaseClient() {
+  if (!_getSupabaseClient) {
+    try {
+      const mod = await import('@/lib/supabase')
+      _getSupabaseClient = mod.getSupabaseClient
+    } catch (err) {
+      console.error('[Paperclip Documents] Failed to import @/lib/supabase — is @supabase/supabase-js installed?', err)
+      return null
+    }
+  }
+  return _getSupabaseClient()
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,7 +31,7 @@ export async function GET(req: NextRequest) {
     }
 
     // ── Get Supabase client ──
-    const supabase = getSupabaseClient()
+    const supabase = await getSupabaseClient()
     if (!supabase) {
       console.warn('[Paperclip Documents] Supabase not configured — returning empty document list')
       return NextResponse.json({ documents: [], supabaseNotConfigured: true })

@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTokenPayload } from '@/lib/auth'
-import { getSupabaseClient } from '@/lib/supabase'
+
+// Lazy import — prevents serverless crash if @supabase/supabase-js isn't installed on Vercel
+let _getSupabaseClient: typeof import('@/lib/supabase').getSupabaseClient | null = null
+
+async function getSupabaseClient() {
+  if (!_getSupabaseClient) {
+    try {
+      const mod = await import('@/lib/supabase')
+      _getSupabaseClient = mod.getSupabaseClient
+    } catch (err) {
+      console.error('[Paperclip Delete] Failed to import @/lib/supabase — is @supabase/supabase-js installed?', err)
+      return null
+    }
+  }
+  return _getSupabaseClient()
+}
 
 export async function DELETE(req: NextRequest) {
   try {
@@ -32,11 +47,11 @@ export async function DELETE(req: NextRequest) {
     }
 
     // ── Get Supabase client ──
-    const supabase = getSupabaseClient()
+    const supabase = await getSupabaseClient()
     if (!supabase) {
       return NextResponse.json(
-        { error: 'Supabase no esta configurado' },
-        { status: 500 }
+        { error: 'Supabase no esta configurado. Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en Vercel.' },
+        { status: 503 }
       )
     }
 
