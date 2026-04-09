@@ -46,7 +46,7 @@ export async function getAI(): Promise<any | null> {
 
 // ── Unified chat completion (works with both backends) ──
 
-async function chatCompletion(messages: Array<{ role: string; content: string }>, options?: { temperature?: number }): Promise<string> {
+export async function chatCompletion(messages: Array<{ role: string; content: string }>, options?: { temperature?: number }): Promise<string> {
   const ai = await getAI()
   if (!ai) return ''
 

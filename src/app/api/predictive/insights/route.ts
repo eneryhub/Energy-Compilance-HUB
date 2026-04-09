@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getTokenPayload } from '@/lib/auth'
+import { chatCompletion } from '@/lib/ai'
 
 // ============ In-memory cache ============
 const cache = new Map<string, { data: object; timestamp: number }>()
@@ -258,21 +259,12 @@ Genera el análisis predictivo para cada sensor.`
 
     let result: PredictiveResponse
 
-    // Try AI via z-ai-web-dev-sdk (platform AI)
+    // Try AI via centralized chatCompletion (OpenAI)
     try {
-      const ZAI = (await import('z-ai-web-dev-sdk')).default
-      const zai = await ZAI.create()
-
-      const response = await zai.chat.completions.create({
-        model: 'default',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.3,
-      })
-
-      const content = response.choices?.[0]?.message?.content
+      const content = await chatCompletion([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ], { temperature: 0.3 })
 
       if (!content) {
         throw new Error('Empty response from AI')
