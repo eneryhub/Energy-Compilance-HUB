@@ -27,6 +27,7 @@ import {
   Radar,
   MapPin,
   Flame,
+  MessageSquareText,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -38,7 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { removeToken } from '@/lib/api'
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip'
 
 interface AppShellProps {
   currentView: ViewType
@@ -99,6 +100,7 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'predictive', label: 'IA Predictiva', icon: Brain, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'reports', label: 'Reportes', icon: BarChart3, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'risk-map', label: 'Mapa de Riesgo', icon: Flame, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
+  { id: 'paperclip', label: 'Paperclip IA', icon: MessageSquareText, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'GERENTE'] },
   { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },

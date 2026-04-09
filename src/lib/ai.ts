@@ -6,6 +6,8 @@
 //   OPENAI_API_KEY=sk-...        (your OpenAI API key)
 //   ZAI_OPENAI_BASE_URL=...       (optional, defaults to https://api.openai.com/v1)
 //   ZAI_MODEL=...                 (optional, defaults to gpt-4o-mini)
+//   NEXT_PUBLIC_SUPABASE_URL=...  (for pgvector RAG — Paperclip)
+//   NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 //
 // DIAGNOSTICS: Check Vercel function logs for [AI] prefixed messages.
 //   Response objects include an `aiSource` field: 'openai' | 'sdk' | 'fallback'
@@ -364,6 +366,234 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
       findings,
       summary: `Revision automatica de permiso "${riskLabel}" en ${workLocation || 'ubicacion no especificada'}. ${passedChecks.length}/${totalChecks} checks completados.${hasPhotos ? ` ${photosCount} foto(s) adjuntada(s).` : ' Sin evidencia fotografica.'} ${recommendation === 'APROBAR' ? 'Permiso cumple con los requisitos minimos.' : 'Se requieren acciones correctivas antes de aprobar.'}`,
       reviewedAt: new Date().toISOString(),
+      aiSource: 'fallback',
+    }
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// PAPERCLIP — RAG (Retrieval Augmented Generation)
+// Embeddings via OpenAI + Vector search via Supabase pgvector
+// ════════════════════════════════════════════════════════════════
+
+export interface VectorSearchResult {
+  id: string
+  documentTitle: string
+  documentType: string
+  chunkContent: string
+  similarity: number
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Generate text embeddings using OpenAI text-embedding-3-small.
+ * Returns a number[] vector (1536 dimensions).
+ * Falls back to null if OpenAI is not configured.
+ */
+export async function getEmbeddings(text: string): Promise<number[] | null> {
+  const ai = await getAI()
+  if (!ai || ai.type !== 'openai') {
+    console.warn('[AI] getEmbeddings requires OpenAI backend — not available')
+    return null
+  }
+
+  try {
+    const bodyStr = JSON.stringify({
+      model: 'text-embedding-3-small',
+      input: String(text).substring(0, 8000), // OpenAI limit per input
+    })
+
+    console.log(`[AI] → Generating embedding (${text.length} chars)`)
+
+    const response = await fetch(`${ai.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ai.apiKey}`,
+        'Accept': 'application/json',
+      },
+      body: bodyStr,
+    })
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => 'unknown')
+      console.error(`[AI] ❌ Embedding error ${response.status}: ${errText}`)
+      return null
+    }
+
+    const data = await response.json()
+    const embedding: number[] = data.data?.[0]?.embedding
+
+    if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+      console.error('[AI] ❌ No embedding in response')
+      return null
+    }
+
+    console.log(`[AI] ✅ Embedding generated (${embedding.length} dimensions)`)
+    return embedding
+  } catch (error) {
+    console.error('[AI] getEmbeddings failed:', error instanceof Error ? error.message : error)
+    return null
+  }
+}
+
+/**
+ * Perform vector similarity search on Supabase pgvector.
+ * Calls the RPC function `match_documents` to find the most relevant chunks.
+ *
+ * Expected Supabase RPC: match_documents(query_embedding, match_threshold, match_count, company_id)
+ * Returns: array of { id, document_title, document_type, chunk_content, similarity, metadata }
+ */
+export async function performVectorSearch(
+  queryVector: number[],
+  companyId: string,
+  options?: { matchCount?: number; matchThreshold?: number }
+): Promise<VectorSearchResult[]> {
+  const { getSupabaseClient } = await import('@/lib/supabase')
+  const supabase = getSupabaseClient()
+
+  if (!supabase) {
+    console.warn('[AI] performVectorSearch — Supabase client not configured')
+    return []
+  }
+
+  const matchCount = options?.matchCount ?? 5
+  const matchThreshold = options?.matchThreshold ?? 0.5
+
+  try {
+    console.log(`[AI] → Vector search: companyId=${companyId}, count=${matchCount}, threshold=${matchThreshold}`)
+
+    const { data, error } = await supabase.rpc('match_documents', {
+      query_embedding: queryVector,
+      match_count: matchCount,
+      match_threshold: matchThreshold,
+      company_id: companyId,
+    })
+
+    if (error) {
+      // RPC might not exist yet — log clearly
+      console.error('[AI] ❌ Supabase RPC match_documents error:', error.message)
+      console.error('[AI] → Ensure you created the match_documents RPC function in Supabase')
+      return []
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      console.log('[AI] Vector search: no results found')
+      return []
+    }
+
+    const results: VectorSearchResult[] = data.map((row: Record<string, any>) => ({
+      id: String(row.id || ''),
+      documentTitle: String(row.document_title || row.documentTitle || 'Documento sin titulo'),
+      documentType: String(row.document_type || row.documentType || ''),
+      chunkContent: String(row.chunk_content || row.chunkContent || ''),
+      similarity: Number(row.similarity ?? 0),
+      metadata: row.metadata || undefined,
+    }))
+
+    console.log(`[AI] ✅ Vector search: ${results.length} results found`)
+    return results
+  } catch (error) {
+    console.error('[AI] performVectorSearch failed:', error instanceof Error ? error.message : error)
+    return []
+  }
+}
+
+/**
+ * Generate a complete RAG response:
+ * 1. Embed the user query
+ * 2. Search Supabase for relevant document chunks
+ * 3. Build context from search results
+ * 4. Generate final answer using OpenAI with the retrieved context
+ */
+export interface RagResponse {
+  answer: string
+  sources: VectorSearchResult[]
+  aiSource: 'openai' | 'sdk' | 'fallback'
+}
+
+export async function generateRagResponse(
+  question: string,
+  companyId: string,
+  conversationHistory?: Array<{ role: string; content: string }>
+): Promise<RagResponse> {
+  console.log(`[AI] → RAG pipeline: question="${question.substring(0, 80)}..."`)
+
+  // Step 1: Embed the query
+  const queryVector = await getEmbeddings(question)
+  if (!queryVector) {
+    console.warn('[AI] RAG → fallback: could not generate embedding')
+    return {
+      answer: 'No fue posible procesar tu consulta. Verifica que la clave API de OpenAI este configurada correctamente y que la extension pgvector este habilitada en Supabase.',
+      sources: [],
+      aiSource: 'fallback',
+    }
+  }
+
+  // Step 2: Vector search
+  const searchResults = await performVectorSearch(queryVector, companyId)
+  if (searchResults.length === 0) {
+    return {
+      answer: 'No se encontraron documentos relevantes en la base de conocimiento para responder tu consulta. Intenta con una pregunta mas especifica o verifica que los documentos esten indexados en Supabase.',
+      sources: [],
+      aiSource: 'openai',
+    }
+  }
+
+  // Step 3: Build context
+  const contextChunks = searchResults
+    .map((r, i) => `[Fuente ${i + 1}: ${r.documentTitle} (${r.documentType})]\n${r.chunkContent}`)
+    .join('\n\n---\n\n')
+
+  // Step 4: Generate answer with context
+  const systemPrompt = `Eres un asistente experto en seguridad industrial HSE (Health, Safety & Environment) para el sector Oil & Gas.
+Tu funcion es responder preguntas tecnicas basandote EXCLUSIVAMENTE en los documentos proporcionados como contexto.
+
+Reglas estrictas:
+- Responde SIEMPRE en español profesional y tecnico.
+- Usa terminologia del sector Oil & Gas e HSE.
+- Si la respuesta no se encuentra en los documentos, indicalo claramente: "La informacion solicitada no se encuentra en los documentos disponibles."
+- NUNCA inventes informacion que no este en el contexto proporcionado.
+- Cita las fuentes numeradas [Fuente N] en tu respuesta.
+- Sé conciso pero completo.
+- Si la pregunta es sobre normativa, menciona las referencias especificas si estan disponibles en los documentos.`
+
+  const userPrompt = `Contexto de documentos:
+${contextChunks}
+
+---
+
+Pregunta del usuario: ${question}
+
+Responde basandote en el contexto proporcionado. Cita las fuentes usando [Fuente N].`
+
+  try {
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: systemPrompt },
+      ...(conversationHistory || []),
+      { role: 'user', content: userPrompt },
+    ]
+
+    const answer = await chatCompletion(messages, { temperature: 0.3 })
+
+    if (!answer) {
+      return {
+        answer: 'No se pudo generar una respuesta. Intenta nuevamente.',
+        sources: searchResults,
+        aiSource: 'fallback',
+      }
+    }
+
+    return {
+      answer,
+      sources: searchResults,
+      aiSource: getAISource() as 'openai' | 'sdk' | 'fallback',
+    }
+  } catch (error) {
+    console.error('[AI] RAG generateRagResponse failed:', error instanceof Error ? error.message : error)
+    return {
+      answer: 'Error al generar la respuesta. Por favor, intenta nuevamente.',
+      sources: searchResults,
       aiSource: 'fallback',
     }
   }

@@ -14,16 +14,17 @@ import DocumentManager from '@/components/documents/document-manager'
 import SubscriptionManager from '@/components/subscription/subscription-manager'
 import RiskTypeManager from '@/components/risk-types/risk-type-manager'
 import TelemetryBoard from '@/components/scada/telemetry-board'
-import LocationsManager from '@/components/scada/locations-manager'
 import UserManager from '@/components/users/user-manager'
 import PredictiveDashboard from '@/components/predictive/predictive-dashboard'
+import PaperclipChat from '@/components/ai/paperclip-chat'
+import LocationsManager from '@/components/scada/locations-manager'
+import RiskHeatMap from '@/components/risk/risk-heatmap'
+import GlobalOperationsCenter from '@/components/admin/global-operations-center'
 import SuperAdminPanel from '@/components/admin/super-admin-panel'
 import ReportsDashboard from '@/components/reports/reports-dashboard'
 import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
-import RiskHeatMap from '@/components/risk/risk-heatmap'
-import GlobalOperationsCenter from '@/components/admin/global-operations-center'
 import LandingPage from '@/components/landing/landing-page'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert } from 'lucide-react'
@@ -244,6 +245,20 @@ export default function Home() {
       user={user!}
       complianceStatus={complianceStatus}
       onLogout={handleLogout}
+      onUpgradeRequest={(moduleId, moduleName, upsellMessage) => {
+        setSubscriptionBanner({
+          visible: true,
+          message: upsellMessage,
+          type: 'warning',
+          isTrial: false,
+          trialDaysRemaining: null,
+          trialTotalDays: null,
+          trialPercent: null,
+          subscriptionDaysRemaining: null,
+          billingCycle: null,
+          planName: null,
+        })
+      }}
     >
       {/* Subscription Info Banner (Trial countdown + Renewal reminder) */}
       {subscriptionBanner?.visible && currentView !== 'subscription' && !subscriptionBlocked && (
@@ -418,7 +433,7 @@ export default function Home() {
           </Button>
         </div>
       ) : (
-        <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
         <motion.div
           key={currentView}
           initial={{ opacity: 0, x: 10 }}
@@ -499,6 +514,14 @@ export default function Home() {
             </div>
           )}
 
+          {currentView === 'risk-map' && (
+            <RiskHeatMap />
+          )}
+
+          {currentView === 'paperclip' && (
+            <PaperclipChat />
+          )}
+
           {currentView === 'admin-portal-hq' && (
             user?.role === 'SUPER_ADMIN' ? (
               <SuperAdminPanel />
@@ -539,10 +562,6 @@ export default function Home() {
 
           {currentView === 'diagnostics' && (
             <DiagnosticDashboard />
-          )}
-
-          {currentView === 'risk-map' && (
-            <RiskHeatMap />
           )}
 
           {currentView === 'goc' && user?.role === 'SUPER_ADMIN' && (
