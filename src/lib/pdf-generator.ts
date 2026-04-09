@@ -1,5 +1,17 @@
 import PDFDocument from 'pdfkit'
 
+// ══════════════════════════════════════════════════════════════
+//  INTERFACES
+// ══════════════════════════════════════════════════════════════
+export interface SignatureBlock {
+  signerName?: string
+  timestamp?: string
+  location?: { latitude?: number; longitude?: number; accuracy?: number }
+  signatureData?: string
+  is_within_geofence?: boolean
+  distance_to_work_meters?: number
+}
+
 export interface PermitPDFData {
   permitNumber: string
   status: string
@@ -12,22 +24,8 @@ export interface PermitPDFData {
   workDescription: string
   safetyChecks: Record<string, boolean>
   checklistNotes?: Record<string, string>
-  technicianSignature?: {
-    signerName?: string
-    timestamp?: string
-    location?: { latitude?: number; longitude?: number; accuracy?: number }
-    signatureData?: string
-    is_within_geofence?: boolean
-    distance_to_work_meters?: number
-  } | null
-  supervisorSignature?: {
-    signerName?: string
-    timestamp?: string
-    location?: { latitude?: number; longitude?: number; accuracy?: number }
-    signatureData?: string
-    is_within_geofence?: boolean
-    distance_to_work_meters?: number
-  } | null
+  technicianSignature?: SignatureBlock | null
+  supervisorSignature?: SignatureBlock | null
   photos?: Array<{ data?: string; caption?: string }> | null
   workLatitude?: number | null
   workLongitude?: number | null
@@ -36,153 +34,570 @@ export interface PermitPDFData {
   approveJustification?: string
 }
 
-// ── Color Palette ──────────────────────────────────────────────
-const COLORS = {
-  // Primary brand
-  primary:       '#0c4a6e',   // sky-900
-  primaryLight:  '#e0f2fe',   // sky-100
-  primaryMid:    '#0284c7',   // sky-600
-  // Neutrals
-  dark:          '#0f172a',   // slate-900
-  text:          '#1e293b',   // slate-800
-  textSecondary: '#475569',   // slate-600
-  muted:         '#94a3b8',   // slate-400
-  light:         '#f1f5f9',   // slate-100
-  lighter:       '#f8fafc',   // slate-50
-  white:         '#ffffff',
-  border:        '#cbd5e1',   // slate-300
-  borderLight:   '#e2e8f0',   // slate-200
+// ══════════════════════════════════════════════════════════════
+//  DESIGN SYSTEM — Industrial / Oil & Gas Enterprise
+// ══════════════════════════════════════════════════════════════
+const C = {
+  // Primary: Deep Navy (authority, industrial)
+  navy:         '#0B1F3A',
+  navyMid:      '#1A3A5C',
+  navyLight:    '#2A5298',
+  navyTint:     '#EBF0F8',
+
+  // Accent: Safety Amber (industry standard)
+  amber:        '#E8A000',
+  amberLight:   '#FFF8E6',
+  amberDark:    '#B07800',
+
+  // Steel: Neutral industrial greys
+  steel900:     '#1C2530',
+  steel700:     '#374151',
+  steel500:     '#6B7280',
+  steel300:     '#D1D5DB',
+  steel100:     '#F3F4F6',
+  steel50:      '#F9FAFB',
+
   // Status
-  approved:      '#15803d',   // green-700
-  approvedBg:    '#f0fdf4',   // green-50
-  rejected:      '#b91c1c',   // red-700
-  rejectedBg:    '#fef2f2',   // red-50
-  pending:       '#a16207',   // yellow-700
-  pendingBg:     '#fefce8',   // yellow-50
-  cancelled:     '#6b7280',   // gray-500
-  // Risk
-  riskAltura:    '#991b1b',   // red-800
-  riskElectrico: '#92400e',   // amber-800
-  riskConfinado: '#5b21b6',   // violet-800
-  riskCaliente:  '#9a3412',   // orange-800
-  // Success / danger indicators
-  check:         '#16a34a',
-  cross:         '#dc2626',
+  safeGreen:    '#166534',
+  safeGreenBg:  '#F0FDF4',
+  safeGreenAccent: '#22C55E',
+  dangerRed:    '#991B1B',
+  dangerRedBg:  '#FEF2F2',
+  dangerRedAccent: '#EF4444',
+  warnYellow:   '#92400E',
+  warnYellowBg: '#FFFBEB',
+  warnYellowAccent: '#F59E0B',
+  mutedGray:    '#4B5563',
+  mutedGrayBg:  '#F9FAFB',
+
+  // Risk type overrides
+  riskAltura:   '#7F1D1D',
+  riskElectrico:'#78350F',
+  riskConfinado:'#4C1D95',
+  riskCaliente: '#7C2D12',
+  riskDefault:  '#1A3A5C',
+
+  white: '#FFFFFF',
+  black: '#000000',
+} as const
+
+// Risk configuration
+const RISK_CFG: Record<string, { label: string; color: string; tagline: string }> = {
+  ALTURA:     { label: 'TRABAJO EN ALTURA',    color: C.riskAltura,    tagline: 'Height Work · Fall Protection Required' },
+  ELECTRICO:  { label: 'RIESGO ELÉCTRICO',     color: C.riskElectrico, tagline: 'Electrical Hazard · LOTO Required' },
+  CONFINADO:  { label: 'ESPACIO CONFINADO',    color: C.riskConfinado, tagline: 'Confined Space · Atmospheric Testing Required' },
+  CALIENTE:   { label: 'TRABAJO EN CALIENTE',  color: C.riskCaliente,  tagline: 'Hot Work · Fire Watch Required' },
 }
 
-const RISK_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  ALTURA:     { label: 'TRABAJO EN ALTURA',       color: COLORS.riskAltura,    bg: '#fef2f2' },
-  ELECTRICO:  { label: 'RIESGO ELÉCTRICO',        color: COLORS.riskElectrico,  bg: '#fffbeb' },
-  CONFINADO:  { label: 'ESPACIO CONFINADO',       color: COLORS.riskConfinado,  bg: '#f5f3ff' },
-  CALIENTE:   { label: 'TRABAJO EN CALIENTE',     color: COLORS.riskCaliente,   bg: '#fff7ed' },
+// Status configuration
+const STATUS_CFG: Record<string, { label: string; color: string; bg: string; accent: string }> = {
+  APPROVED:  { label: 'AUTORIZADO',              color: C.safeGreen,    bg: C.safeGreenBg,    accent: C.safeGreenAccent  },
+  REJECTED:  { label: 'RECHAZADO',               color: C.dangerRed,    bg: C.dangerRedBg,    accent: C.dangerRedAccent  },
+  PENDING:   { label: 'PENDIENTE DE APROBACIÓN', color: C.warnYellow,   bg: C.warnYellowBg,   accent: C.warnYellowAccent },
+  CANCELLED: { label: 'CANCELADO',               color: C.mutedGray,    bg: C.mutedGrayBg,    accent: C.steel300         },
 }
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  APPROVED:  { label: 'AUTORIZADO',              color: COLORS.approved,  bg: COLORS.approvedBg },
-  REJECTED:  { label: 'RECHAZADO',               color: COLORS.rejected,  bg: COLORS.rejectedBg },
-  PENDING:   { label: 'PENDIENTE DE APROBACIÓN', color: COLORS.pending,   bg: COLORS.pendingBg },
-  CANCELLED: { label: 'CANCELADO',               color: COLORS.cancelled, bg: COLORS.lighter },
+// ── Page constants ──────────────────────────────────────────
+const PW   = 595.28  // A4 width
+const PH   = 841.89  // A4 height
+const ML   = 36      // margin left/right
+const MT   = 36      // margin top
+const CW   = PW - ML * 2  // content width
+
+// ══════════════════════════════════════════════════════════════
+//  UTILITY FUNCTIONS
+// ══════════════════════════════════════════════════════════════
+function fmtDate(iso: string): string {
+  try { return new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) }
+  catch { return iso }
 }
 
-// ── Page Layout ────────────────────────────────────────────────
-const PAGE_W = 595.28  // A4
-const PAGE_H = 841.89
-const M = 36           // margin
-const CW = PAGE_W - M * 2  // content width
-
-// ── Helpers ────────────────────────────────────────────────────
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-  } catch { return iso }
-}
-
-function formatDateTime(iso: string): string {
+function fmtDateTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString('es-AR', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit',
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
     })
   } catch { return iso }
 }
 
-function ensureSpace(doc: PDFKit.PDFDocument, needed: number, footerReserve = 48) {
-  if (doc.y + needed > PAGE_H - M - footerReserve) {
+function fmtCoord(val: number, decimals = 6): string {
+  return Number(val).toFixed(decimals)
+}
+
+function parseBase64Image(data: string): Buffer {
+  const clean = data.replace(/^data:image\/\w+;base64,/, '')
+  return Buffer.from(clean, 'base64')
+}
+
+function labelCase(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DRAWING PRIMITIVES
+// ══════════════════════════════════════════════════════════════
+interface BoxOpts {
+  fill?:   string
+  stroke?: string
+  lw?:     number
+  radius?: number
+}
+
+function box(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number, o: BoxOpts = {}) {
+  doc.save()
+  const shape = o.radius ? doc.roundedRect(x, y, w, h, o.radius) : doc.rect(x, y, w, h)
+  if (o.fill && o.stroke) {
+    shape.fillAndStroke(o.fill, o.stroke)
+    if (o.lw) doc.lineWidth(o.lw)
+  } else if (o.fill) {
+    shape.fill(o.fill)
+  } else if (o.stroke) {
+    doc.lineWidth(o.lw ?? 0.5).strokeColor(o.stroke).stroke()
+  }
+  doc.restore()
+}
+
+function hline(doc: PDFKit.PDFDocument, y: number, x1 = ML, x2 = PW - ML, color = C.steel300, lw = 0.5) {
+  doc.save()
+  doc.moveTo(x1, y).lineTo(x2, y).strokeColor(color).lineWidth(lw).stroke()
+  doc.restore()
+}
+
+function dashedLine(doc: PDFKit.PDFDocument, x1: number, y: number, x2: number, color = C.steel300) {
+  doc.save()
+  doc.dash(3, { space: 3 }).moveTo(x1, y).lineTo(x2, y).strokeColor(color).lineWidth(0.5).stroke()
+  doc.undash()
+  doc.restore()
+}
+
+function ensureSpace(doc: PDFKit.PDFDocument, needed: number, footerH = 52) {
+  if (doc.y + needed > PH - ML - footerH) {
     doc.addPage()
-    drawPageBackground(doc)
+    drawBg(doc)
+    doc.y = MT + 8
   }
 }
 
-function drawLine(doc: PDFKit.PDFDocument, y: number, color = COLORS.borderLight) {
+// ══════════════════════════════════════════════════════════════
+//  PAGE CHROME
+// ══════════════════════════════════════════════════════════════
+
+/** Full-bleed header band (navy + amber stripe) */
+function drawBg(doc: PDFKit.PDFDocument) {
+  // Top navy bar
+  box(doc, 0, 0, PW, 5, { fill: C.navy })
+  // Safety amber accent strip
+  box(doc, 0, 5, PW, 2, { fill: C.amber })
+}
+
+/** Diagonal watermark CONFIDENCIAL on each page */
+function drawWatermark(doc: PDFKit.PDFDocument) {
   doc.save()
-  doc.moveTo(M, y).lineTo(PAGE_W - M, y).strokeColor(color).lineWidth(0.5).stroke()
+  doc.opacity(0.04)
+  doc.fontSize(60).fillColor(C.navy).font('Helvetica-Bold')
+  const cx = PW / 2
+  const cy = PH / 2
+  doc.rotate(-40, { origin: [cx, cy] })
+  doc.text('CONFIDENCIAL', cx - 160, cy - 30, { width: 320, align: 'center' })
+  doc.rotate(40, { origin: [cx, cy] })
+  doc.opacity(1)
   doc.restore()
 }
 
-function drawBox(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number, opts: { fill?: string; stroke?: string; radius?: number } = {}) {
-  doc.save()
-  if (opts.radius) {
-    doc.roundedRect(x, y, w, h, opts.radius)
-  } else {
-    doc.rect(x, y, w, h)
+/** Full-bleed footer */
+function drawFooter(doc: PDFKit.PDFDocument, pageNum: number, totalPages: number, permitNumber: string) {
+  const fy = PH - 30
+  hline(doc, fy - 4, 0, PW, C.navy, 1)
+  box(doc, 0, fy - 4, PW, 34, { fill: C.navy })
+
+  doc.fontSize(5.5).fillColor(C.steel300).font('Helvetica')
+  doc.text(
+    'PERMISO DE TRABAJO SEGURO  ·  Sistema ATS — Gestión de Cumplimiento HSE  ·  DOCUMENTO CONTROLADO — NO DUPLICAR',
+    ML, fy + 2, { width: CW * 0.65, align: 'left' }
+  )
+
+  // Page number — right side
+  doc.fontSize(5.5).fillColor(C.amber).font('Helvetica-Bold')
+  doc.text(`PÁGINA ${pageNum} DE ${totalPages}`, ML, fy + 2, { width: CW, align: 'right' })
+
+  // Verification code on last page
+  if (pageNum === totalPages) {
+    const code = permitNumber.split('-').pop() || permitNumber
+    doc.fontSize(5).fillColor(C.steel500).font('Helvetica')
+    doc.text(`VER: ${code}  ·  ${fmtDateTime(new Date().toISOString())}`, ML, fy + 12, { width: CW, align: 'right' })
   }
-  if (opts.fill) doc.fill(opts.fill)
-  if (opts.stroke) {
-    doc.strokeColor(opts.stroke).lineWidth(0.5)
-    if (!opts.fill) doc.fill('white')
-    doc.stroke()
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SECTION TITLE
+// ══════════════════════════════════════════════════════════════
+interface SectionOpts {
+  number?: string
+  color?:  string
+  icon?:   string
+}
+
+function sectionTitle(doc: PDFKit.PDFDocument, title: string, opts: SectionOpts = {}) {
+  const color = opts.color || C.navy
+  ensureSpace(doc, 28)
+  doc.y += 8
+
+  const ty = doc.y
+
+  // Left accent pill
+  box(doc, ML, ty, 4, 18, { fill: color, radius: 2 })
+
+  // Section number badge
+  if (opts.number) {
+    box(doc, ML + 8, ty + 1, 16, 16, { fill: color, radius: 3 })
+    doc.fontSize(7.5).fillColor(C.white).font('Helvetica-Bold')
+    doc.text(opts.number, ML + 8, ty + 4, { width: 16, align: 'center' })
   }
-  doc.restore()
-}
 
-// ── Page background (subtle top accent line) ───────────────────
-function drawPageBackground(doc: PDFKit.PDFDocument) {
-  // Top accent bar
-  doc.save()
-  doc.rect(0, 0, PAGE_W, 3).fill(COLORS.primary)
-  doc.restore()
-}
+  const textX = ML + (opts.number ? 30 : 12)
+  doc.fontSize(8.5).fillColor(color).font('Helvetica-Bold')
+  doc.text(title, textX, ty + 4)
 
-// ── Section Title ──────────────────────────────────────────────
-function sectionTitle(doc: PDFKit.PDFDocument, title: string, opts: { color?: string; number?: string } = {}) {
-  const color = opts.color || COLORS.primary
-  const num = opts.number || ''
-
-  ensureSpace(doc, 26)
+  doc.y = ty + 22
+  hline(doc, doc.y, ML, PW - ML, color + '30', 0.75)
   doc.y += 6
-
-  // Accent bar
-  doc.save()
-  doc.rect(M, doc.y, 3, 16).fill(color)
-  doc.restore()
-
-  // Title text
-  const textX = M + 10
-  doc.fontSize(9).fillColor(color).font('Helvetica-Bold')
-  if (num) {
-    doc.text(`${num}`, textX, doc.y + 1, { continued: true })
-    doc.text(`   ${title}`)
-  } else {
-    doc.text(title, textX, doc.y + 1)
-  }
-
-  // Underline
-  doc.y += 20
-  drawLine(doc, doc.y, color + '30')
-  doc.y += 6
 }
 
-// ── Table row ──────────────────────────────────────────────────
-function tableRow(doc: PDFKit.PDFDocument, label: string, value: string, x: number, y: number, colW: number, opts: { boldLabel?: boolean; boldValue?: boolean } = {}) {
+// ══════════════════════════════════════════════════════════════
+//  INFO ROW (label + value inside a cell)
+// ══════════════════════════════════════════════════════════════
+function infoRow(
+  doc: PDFKit.PDFDocument,
+  label: string, value: string,
+  x: number, y: number, w: number,
+  opts: { labelColor?: string; valueColor?: string; boldValue?: boolean } = {}
+) {
   // Label
-  doc.fontSize(7).fillColor(COLORS.textSecondary).font(opts.boldLabel ? 'Helvetica-Bold' : 'Helvetica')
-  doc.text(label, x, y, { width: colW * 0.35 })
+  doc.fontSize(6).fillColor(opts.labelColor ?? C.steel500).font('Helvetica')
+  doc.text(label.toUpperCase(), x, y, { width: w })
 
   // Value
-  const valX = x + colW * 0.35
-  const valW = colW * 0.65
-  doc.fontSize(7.5).fillColor(COLORS.text).font(opts.boldValue ? 'Helvetica-Bold' : 'Helvetica')
-  doc.text(value, valX, y, { width: valW })
+  doc.fontSize(8).fillColor(opts.valueColor ?? C.navy).font(opts.boldValue ? 'Helvetica-Bold' : 'Helvetica')
+  doc.text(value || '—', x, y + 8, { width: w })
+}
+
+// ══════════════════════════════════════════════════════════════
+//  GPS BADGE
+// ══════════════════════════════════════════════════════════════
+function gpsBadge(doc: PDFKit.PDFDocument, x: number, y: number, w: number, lat: number, lng: number, inFence?: boolean, dist?: number, accuracy?: number) {
+  const bg = inFence === false ? C.dangerRedBg : C.safeGreenBg
+  const border = inFence === false ? C.dangerRed : C.safeGreen
+  const icon = inFence === false ? '⚠' : '✓'
+  const iconColor = inFence === false ? C.dangerRed : C.safeGreen
+
+  box(doc, x, y, w, accuracy != null ? 38 : 30, { fill: bg, stroke: border + '50', radius: 3, lw: 0.5 })
+
+  doc.fontSize(6.5).fillColor(iconColor).font('Helvetica-Bold')
+  doc.text(`${icon} GPS`, x + 6, y + 4, { continued: true })
+  doc.fillColor(C.steel500).font('Helvetica')
+  doc.text(`  ${fmtCoord(lat)}, ${fmtCoord(lng)}`, { width: w - 12 })
+
+  doc.fontSize(6).fillColor(C.steel500).font('Helvetica')
+  if (dist != null) {
+    doc.text(`Distancia al punto de trabajo: ${Math.round(dist)} m`, x + 6, y + 14, { width: w - 12 })
+  }
+  if (accuracy != null) {
+    doc.text(`Precisión GPS: ±${Math.round(accuracy)} m`, x + 6, y + (dist != null ? 23 : 14), { width: w - 12 })
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SIGNATURE BLOCK
+// ══════════════════════════════════════════════════════════════
+function signatureBlock(
+  doc: PDFKit.PDFDocument,
+  sig: SignatureBlock | null | undefined,
+  role: string, fallbackName: string,
+  x: number, y: number, w: number,
+  accentColor: string,
+  isPending = false
+) {
+  const HEADER_H = 18
+  const BLOCK_OUTER_H = 160
+
+  // Outer border
+  box(doc, x, y, w, BLOCK_OUTER_H, { stroke: accentColor + '60', radius: 4, lw: 0.75 })
+
+  // Header band
+  box(doc, x, y, w, HEADER_H, { fill: accentColor, radius: 4 })
+  // Square off bottom corners of header
+  box(doc, x, y + HEADER_H / 2, w, HEADER_H / 2, { fill: accentColor })
+
+  doc.fontSize(7).fillColor(C.white).font('Helvetica-Bold')
+  doc.text(`  ${role}`, x + 4, y + 5, { width: w - 8 })
+
+  if (sig) {
+    const cy = y + HEADER_H + 6
+
+    // Signer name
+    doc.fontSize(8).fillColor(C.navy).font('Helvetica-Bold')
+    doc.text(sig.signerName || fallbackName, x + 6, cy, { width: w - 12 })
+
+    // Timestamp
+    doc.fontSize(6.5).fillColor(C.steel500).font('Helvetica')
+    doc.text(`Fecha/Hora: ${sig.timestamp ? fmtDateTime(sig.timestamp) : 'N/A'}`, x + 6, cy + 12, { width: w - 12 })
+
+    // GPS info
+    let gpsY = cy + 24
+    if (sig.location?.latitude != null) {
+      gpsBadge(
+        doc, x + 6, gpsY, w - 12,
+        sig.location.latitude!, sig.location.longitude!,
+        sig.is_within_geofence,
+        sig.distance_to_work_meters,
+        sig.location.accuracy
+      )
+      gpsY += sig.location.accuracy != null ? 46 : 38
+    }
+
+    // Signature image
+    const imgBoxY = y + BLOCK_OUTER_H - 52
+    const imgBoxH = 46
+    box(doc, x + 6, imgBoxY, w - 12, imgBoxH, { fill: C.white, stroke: C.steel300, radius: 2, lw: 0.5 })
+    dashedLine(doc, x + 6, imgBoxY + imgBoxH / 2 + 6, x + w - 6)
+
+    if (sig.signatureData) {
+      try {
+        const imgBuf = parseBase64Image(sig.signatureData)
+        doc.image(imgBuf, x + 8, imgBoxY + 2, { width: w - 16, height: imgBoxH - 4, fit: [w - 16, imgBoxH - 4], align: 'center', valign: 'center' })
+      } catch {
+        doc.fontSize(6).fillColor(C.steel500).font('Helvetica-Oblique')
+        doc.text('Firma digital registrada en el sistema', x + 8, imgBoxY + 18, { width: w - 16, align: 'center' })
+      }
+    } else {
+      doc.fontSize(6).fillColor(C.steel300).font('Helvetica')
+      doc.text('(sin imagen de firma)', x + 8, imgBoxY + 18, { width: w - 16, align: 'center' })
+    }
+
+  } else if (isPending) {
+    const py = y + HEADER_H + 16
+    box(doc, x + 10, py, w - 20, 28, { fill: C.warnYellowBg, stroke: C.warnYellowAccent + '60', radius: 3 })
+    doc.fontSize(7).fillColor(C.warnYellow).font('Helvetica-Bold')
+    doc.text('PENDIENTE DE FIRMA', x + 10, py + 8, { width: w - 20, align: 'center' })
+    doc.fontSize(6).fillColor(C.warnYellow).font('Helvetica')
+    doc.text('Esperando aprobación del supervisor', x + 10, py + 18, { width: w - 20, align: 'center' })
+
+    const imgBoxY = y + BLOCK_OUTER_H - 52
+    box(doc, x + 6, imgBoxY, w - 12, 46, { stroke: C.steel300, radius: 2, lw: 0.4 })
+    dashedLine(doc, x + 6, imgBoxY + 23, x + w - 6, C.steel200)
+    doc.fontSize(7).fillColor(C.steel300).font('Helvetica')
+    doc.text('X', x + (w / 2) - 4, imgBoxY + 17)
+  } else {
+    const ey = y + HEADER_H + 22
+    doc.fontSize(7).fillColor(C.steel500).font('Helvetica-Oblique')
+    doc.text('No disponible', x + 8, ey, { width: w - 16, align: 'center' })
+  }
+
+  return BLOCK_OUTER_H
+}
+
+// ══════════════════════════════════════════════════════════════
+//  CHECKLIST TABLE
+// ══════════════════════════════════════════════════════════════
+function drawChecklist(doc: PDFKit.PDFDocument, checks: Record<string, boolean>, notes: Record<string, string>, riskColor: string) {
+  const entries = Object.entries(checks ?? {})
+  if (entries.length === 0) {
+    doc.fontSize(7).fillColor(C.steel500).font('Helvetica-Oblique')
+    doc.text('No hay ítems de verificación registrados.', ML + 4, doc.y)
+    doc.y += 14
+    return
+  }
+
+  const checkedN = entries.filter(([, v]) => v).length
+  const totalN   = entries.length
+  const notesN   = Object.values(notes).filter(Boolean).length
+  const pct      = totalN > 0 ? checkedN / totalN : 0
+
+  // ── Progress bar ──────────────────────────────────────────
+  const barX = ML
+  const barY = doc.y
+  const barH = 8
+  const barR = 4
+
+  box(doc, barX, barY, CW, barH, { fill: C.steel100, radius: barR })
+  if (pct > 0) {
+    const fillColor = pct === 1 ? C.safeGreenAccent : pct >= 0.8 ? C.warnYellowAccent : C.dangerRedAccent
+    box(doc, barX, barY, CW * pct, barH, { fill: fillColor, radius: barR })
+  }
+
+  doc.y = barY + barH + 4
+
+  // Summary row
+  doc.fontSize(6.5).fillColor(C.navy).font('Helvetica-Bold')
+  doc.text(`${checkedN} / ${totalN}`, ML, doc.y, { continued: true })
+  doc.font('Helvetica').fillColor(C.steel500)
+  doc.text(`  ítems verificados` + (notesN > 0 ? `  ·  ${notesN} con observaciones` : '') + `  ·  ${Math.round(pct * 100)}% completado`)
+  doc.y += 10
+
+  // ── Table ─────────────────────────────────────────────────
+  const COL = {
+    num:    { x: ML,               w: 22  },
+    item:   { x: ML + 22,          w: CW * 0.55 },
+    status: { x: ML + 22 + CW * 0.55, w: 50 },
+    note:   { x: ML + 22 + CW * 0.55 + 50, w: CW - 22 - CW * 0.55 - 50 },
+  }
+
+  // Header
+  const hdrH = 16
+  box(doc, ML, doc.y, CW, hdrH, { fill: C.navy, radius: 2 })
+  const hdrY = doc.y + 4
+  const headerFont = (t: string, x: number, w: number) => {
+    doc.fontSize(6).fillColor(C.steel300).font('Helvetica-Bold')
+    doc.text(t, x + 4, hdrY, { width: w - 4 })
+  }
+  headerFont('N°',           COL.num.x,    COL.num.w)
+  headerFont('ÍTEM DE VERIFICACIÓN HSE', COL.item.x, COL.item.w)
+  headerFont('ESTADO',       COL.status.x, COL.status.w)
+  headerFont('OBSERVACIÓN',  COL.note.x,   COL.note.w)
+  doc.y += hdrH
+
+  // Rows
+  entries.forEach(([key, value], idx) => {
+    const note     = notes[key] || ''
+    const label    = labelCase(key)
+    const noteLines = note
+      ? Math.ceil(doc.fontSize(6).font('Helvetica').widthOfString(note) / (COL.note.w - 8)) + 1
+      : 0
+    const rowH = Math.max(18, 18 + noteLines * 8)
+
+    ensureSpace(doc, rowH + 2)
+
+    const ry  = doc.y
+    const bg  = idx % 2 === 0 ? C.white : C.steel50
+
+    box(doc, ML, ry, CW, rowH, { fill: bg })
+    hline(doc, ry + rowH, ML, PW - ML, C.steel100, 0.3)
+
+    const cy = ry + 5
+
+    // Number
+    doc.fontSize(6).fillColor(C.steel500).font('Helvetica')
+    doc.text(`${idx + 1}`, COL.num.x + 6, cy, { width: COL.num.w - 6 })
+
+    // Label
+    doc.fontSize(6.5).fillColor(value ? C.steel700 : C.navy).font(value ? 'Helvetica' : 'Helvetica-Bold')
+    doc.text(label, COL.item.x + 4, cy, { width: COL.item.w - 8 })
+
+    // Status pill
+    if (value) {
+      box(doc, COL.status.x + 4, cy - 1, 36, 12, { fill: C.safeGreenBg, stroke: C.safeGreenAccent + '60', radius: 3, lw: 0.5 })
+      doc.fontSize(7).fillColor(C.safeGreen).font('Helvetica-Bold')
+      doc.text('✓ OK', COL.status.x + 6, cy + 1, { width: 32, align: 'center' })
+    } else {
+      box(doc, COL.status.x + 4, cy - 1, 36, 12, { fill: C.dangerRedBg, stroke: C.dangerRedAccent + '60', radius: 3, lw: 0.5 })
+      doc.fontSize(7).fillColor(C.dangerRed).font('Helvetica-Bold')
+      doc.text('✗ NO', COL.status.x + 6, cy + 1, { width: 32, align: 'center' })
+    }
+
+    // Note
+    if (note) {
+      doc.fontSize(6).fillColor(riskColor).font('Helvetica-Oblique')
+      doc.text(`↳ ${note}`, COL.note.x + 4, cy, { width: COL.note.w - 8 })
+    } else {
+      doc.fontSize(6).fillColor(C.steel300).font('Helvetica')
+      doc.text('—', COL.note.x + 4, cy, { width: COL.note.w - 8 })
+    }
+
+    doc.y = ry + rowH
+  })
+
+  // Table bottom border
+  hline(doc, doc.y, ML, PW - ML, C.navy + '40', 0.75)
+  doc.y += 6
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN HEADER (Page 1 only)
+// ══════════════════════════════════════════════════════════════
+function drawHeader(doc: PDFKit.PDFDocument, permit: PermitPDFData, risk: ReturnType<typeof getRisk>, stCfg: ReturnType<typeof getStatus>) {
+  // Top bar already drawn by drawBg()
+  doc.y = 14
+
+  // ── Left: Company identity ─────────────────────────────────
+  doc.fontSize(14).fillColor(C.navy).font('Helvetica-Bold')
+  doc.text('Energy-Compliance Hub', ML, doc.y, { width: CW * 0.6 })
+  doc.fontSize(6.5).fillColor(C.steel500).font('Helvetica')
+  doc.text('Sistema ATS de Gestión de Permisos y Cumplimiento HSE', ML, doc.y, { width: CW * 0.6 })
+  doc.text('Oil & Gas  ·  Mining  ·  Power Generation  ·  Petrochemical', ML, doc.y, { width: CW * 0.6 })
+
+  // ── Right: Permit number plate ─────────────────────────────
+  const npX = PW - ML - 140
+  box(doc, npX, 14, 140, 44, { fill: C.navy, radius: 4 })
+  box(doc, npX, 14, 140, 16, { fill: C.amber, radius: 4 })
+  box(doc, npX, 22, 140, 8, { fill: C.amber }) // square off bottom
+
+  doc.fontSize(6).fillColor(C.navy).font('Helvetica-Bold')
+  doc.text('N° DE PERMISO ATS', npX + 4, 17, { width: 132, align: 'center' })
+
+  doc.fontSize(11).fillColor(C.white).font('Helvetica-Bold')
+  doc.text(permit.permitNumber, npX + 4, 33, { width: 132, align: 'center' })
+
+  doc.y = 64
+
+  // ── Separator ─────────────────────────────────────────────
+  hline(doc, doc.y, ML, PW - ML, C.navy, 1.5)
+  doc.y += 10
+
+  // ── Permit title bar ──────────────────────────────────────
+  box(doc, ML, doc.y, CW, 28, { fill: C.navyTint, radius: 3 })
+  doc.fontSize(14).fillColor(C.navy).font('Helvetica-Bold')
+  doc.text('PERMISO DE TRABAJO SEGURO (ATS)', ML, doc.y + 7, { width: CW, align: 'center' })
+  doc.y += 34
+
+  doc.fontSize(7).fillColor(C.steel500).font('Helvetica')
+  doc.text('Documento oficial para el control y autorización de trabajos de alto riesgo en instalaciones energéticas', ML, doc.y, { width: CW, align: 'center' })
+  doc.y += 14
+
+  // ── Status + Risk badges row ───────────────────────────────
+  const badgeY = doc.y
+
+  // Status badge
+  const stLabelW = doc.fontSize(8.5).font('Helvetica-Bold').widthOfString(stCfg.label) + 32
+  box(doc, ML, badgeY, stLabelW, 22, { fill: stCfg.color, radius: 3 })
+  // Left color stripe
+  box(doc, ML, badgeY, 6, 22, { fill: stCfg.accent, radius: 3 })
+  doc.fontSize(8.5).fillColor(C.white).font('Helvetica-Bold')
+  doc.text(stCfg.label, ML + 14, badgeY + 6, { width: stLabelW - 14 })
+
+  // Risk badge
+  const riskLabelW = doc.fontSize(8.5).font('Helvetica-Bold').widthOfString(risk.label) + 32
+  const riskBadgeX = ML + stLabelW + 8
+  box(doc, riskBadgeX, badgeY, riskLabelW, 22, { fill: risk.color, radius: 3 })
+  box(doc, riskBadgeX, badgeY, 6, 22, { fill: C.amber, radius: 3 })
+  doc.fontSize(8.5).fillColor(C.white).font('Helvetica-Bold')
+  doc.text(risk.label, riskBadgeX + 14, badgeY + 6, { width: riskLabelW - 14 })
+
+  // Date — right aligned
+  doc.fontSize(7).fillColor(C.steel500).font('Helvetica')
+  doc.text(`Emisión: ${fmtDate(permit.createdAt)}`, ML, badgeY + 7, { width: CW, align: 'right' })
+
+  doc.y = badgeY + 28
+
+  // Risk tagline
+  doc.fontSize(6.5).fillColor(risk.color).font('Helvetica-Oblique')
+  doc.text(risk.tagline, ML, doc.y, { width: CW })
+  doc.y += 14
+
+  hline(doc, doc.y, ML, PW - ML, C.steel300)
+  doc.y += 10
+}
+
+// ══════════════════════════════════════════════════════════════
+//  LOOKUP HELPERS
+// ══════════════════════════════════════════════════════════════
+function getRisk(riskType: string) {
+  return RISK_CFG[riskType] ?? { label: riskType.toUpperCase(), color: C.riskDefault, tagline: '' }
+}
+
+function getStatus(status: string) {
+  return STATUS_CFG[status] ?? STATUS_CFG.PENDING
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -192,435 +607,183 @@ export async function generatePermitPDF(permit: PermitPDFData): Promise<Buffer> 
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ margin: 0, size: 'A4', bufferPages: true })
-      const buffers: Buffer[] = []
+      const chunks: Buffer[] = []
 
-      doc.on('data', (chunk: Buffer) => buffers.push(chunk))
-      doc.on('end', () => resolve(Buffer.concat(buffers)))
+      doc.on('data',  (c: Buffer) => chunks.push(c))
+      doc.on('end',   () => resolve(Buffer.concat(chunks)))
       doc.on('error', reject)
 
-      const risk  = RISK_CONFIG[permit.riskType]  || { label: permit.riskType.toUpperCase(), color: COLORS.primary, bg: COLORS.primaryLight }
-      const stCfg = STATUS_CONFIG[permit.status]   || STATUS_CONFIG.PENDING
+      const risk  = getRisk(permit.riskType)
+      const stCfg = getStatus(permit.status)
 
-      // ─────────── PAGE 1 ───────────
+      // ─── PAGE 1: Background + Header ────────────────────────
+      drawBg(doc)
+      drawWatermark(doc)
+      drawHeader(doc, permit, risk, stCfg)
 
-      // Top accent bar
-      drawPageBackground(doc)
-
-      // ── 1. HEADER ──────────────────────────────────────────
-      doc.y = 14
-
-      // Company name (left)
-      doc.fontSize(13).fillColor(COLORS.dark).font('Helvetica-Bold')
-      doc.text('Energy-Compliance Hub', M, doc.y, { width: CW * 0.55 })
-      doc.y -= 2
-      doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-      doc.text('Sistema de Gestión de Permisos y Cumplimiento HSE', M, doc.y, { width: CW * 0.55 })
-
-      // Permit number (right)
-      doc.fontSize(8).fillColor(COLORS.muted).font('Helvetica')
-      doc.text('N° DE PERMISO', M, doc.y, { width: CW, align: 'right' })
-      doc.y += 9
-      doc.fontSize(14).fillColor(COLORS.primary).font('Helvetica-Bold')
-      doc.text(permit.permitNumber, M, doc.y, { width: CW, align: 'right' })
-      doc.y += 18
-
-      // Header separator
-      drawLine(doc, doc.y, COLORS.primary + '40')
-      doc.y += 10
-
-      // ── 2. STATUS + RISK BADGES ────────────────────────────
-      // Status badge (left)
-      const stLabel = stCfg.label
-      const stW = doc.fontSize(8).font('Helvetica-Bold').widthOfString(stLabel) + 28
-      drawBox(doc, M, doc.y, stW, 20, { fill: stCfg.color, radius: 3 })
-      doc.fontSize(8).fillColor(COLORS.white).font('Helvetica-Bold')
-      doc.text(stLabel, M + 14, doc.y + 5.5)
-
-      // Risk badge (right of status)
-      const rLabel = risk.label
-      const rW = doc.fontSize(8).font('Helvetica-Bold').widthOfString(rLabel) + 28
-      drawBox(doc, M + stW + 8, doc.y, rW, 20, { fill: risk.color, radius: 3 })
-  doc.fontSize(8).fillColor(COLORS.white).font('Helvetica-Bold')
-  doc.text(rLabel, M + stW + 8 + 14, doc.y + 5.5)
-
-  // Date (right-aligned)
-  doc.fontSize(7).fillColor(COLORS.textSecondary).font('Helvetica')
-  doc.text(`Emisión: ${formatDate(permit.createdAt)}`, M, doc.y + 4, { width: CW, align: 'right' })
-
-  doc.y += 28
-
-      // ── 3. PERMIT TITLE ────────────────────────────────────
-      doc.fontSize(16).fillColor(COLORS.dark).font('Helvetica-Bold')
-      doc.text('PERMISO DE TRABAJO SEGURO', M, doc.y, { width: CW, align: 'center' })
-      doc.y += 18
-      doc.fontSize(7.5).fillColor(COLORS.muted).font('Helvetica')
-      doc.text('Documento oficial para el control y autorización de trabajos de alto riesgo', M, doc.y, { width: CW, align: 'center' })
-      doc.y += 14
-
-      drawLine(doc, doc.y)
-      doc.y += 10
-
-      // ── 4. INFO SECTION (2-column grid) ───────────────────
+      // ══ SECTION 1: DATOS GENERALES ══════════════════════════
       sectionTitle(doc, 'DATOS GENERALES DEL PERMISO', { number: '1' })
 
-      const gridY = doc.y
-      const halfW = (CW - 10) / 2
-      const leftX = M
-      const rightX = M + halfW + 10
+      const gridY  = doc.y
+      const colW   = (CW - 10) / 2
+      const leftX  = ML
+      const rightX = ML + colW + 10
+      const cellH  = 72
 
-      // Left box — People
-      drawBox(doc, leftX, gridY, halfW, 58, { fill: COLORS.lighter, stroke: COLORS.borderLight })
-      let bY = gridY + 8
-      tableRow(doc, 'Técnico:', permit.technicianName, leftX + 8, bY, halfW - 16, { boldValue: true })
-      bY += 14
-      tableRow(doc, 'Supervisor:', permit.supervisorName, leftX + 8, bY, halfW - 16)
-      bY += 14
+      // ── Left cell: Personnel ────────────────────────────────
+      box(doc, leftX, gridY, colW, cellH, { fill: C.navyTint, stroke: C.navy + '20', radius: 3, lw: 0.5 })
+      box(doc, leftX, gridY, colW, 14, { fill: C.navy + '15', radius: 3 })
+      box(doc, leftX, gridY + 7, colW, 7, { fill: C.navy + '15' }) // square off bottom corners
+      doc.fontSize(6).fillColor(C.navy).font('Helvetica-Bold')
+      doc.text('PERSONAL INVOLUCRADO', leftX + 6, gridY + 4, { width: colW - 12 })
+
+      infoRow(doc, 'Técnico Responsable', permit.technicianName, leftX + 8, gridY + 19, colW - 16, { boldValue: true })
+      infoRow(doc, 'Supervisor HSE',      permit.supervisorName, leftX + 8, gridY + 38, colW - 16)
       if (permit.approvedByName) {
-        tableRow(doc, 'Aprobado por:', permit.approvedByName, leftX + 8, bY, halfW - 16, { boldValue: true })
+        infoRow(doc, 'Autorizado por', permit.approvedByName, leftX + 8, gridY + 56, colW - 16, { boldValue: true, valueColor: C.safeGreen })
       }
 
-      // Right box — Location
-      drawBox(doc, rightX, gridY, halfW, 58, { fill: COLORS.lighter, stroke: COLORS.borderLight })
-      bY = gridY + 8
-      tableRow(doc, 'Ubicación:', permit.workLocation, rightX + 8, bY, halfW - 16, { boldValue: true })
-      bY += 14
+      // ── Right cell: Location ─────────────────────────────────
+      box(doc, rightX, gridY, colW, cellH, { fill: C.navyTint, stroke: C.navy + '20', radius: 3, lw: 0.5 })
+      box(doc, rightX, gridY, colW, 14, { fill: C.navy + '15', radius: 3 })
+      box(doc, rightX, gridY + 7, colW, 7, { fill: C.navy + '15' })
+      doc.fontSize(6).fillColor(C.navy).font('Helvetica-Bold')
+      doc.text('UBICACIÓN DEL TRABAJO', rightX + 6, gridY + 4, { width: colW - 12 })
+
+      infoRow(doc, 'Punto de trabajo', permit.workLocation, rightX + 8, gridY + 19, colW - 16, { boldValue: true })
+
       if (permit.workLatitude != null && permit.workLongitude != null) {
-        doc.fontSize(7).fillColor(COLORS.muted).font('Helvetica')
+        doc.fontSize(6).fillColor(C.steel500).font('Helvetica')
         doc.text(
-          `GPS: ${Number(permit.workLatitude).toFixed(6)}, ${Number(permit.workLongitude).toFixed(6)}  ·  Radio: ${permit.workRadius || 100}m`,
-          rightX + 8, bY, { width: halfW - 16 }
+          `GPS: ${fmtCoord(permit.workLatitude)}, ${fmtCoord(permit.workLongitude)}  ·  Radio geofence: ${permit.workRadius ?? 100} m`,
+          rightX + 8, gridY + 50, { width: colW - 16 }
         )
       }
 
-      doc.y = gridY + 66
+      doc.y = gridY + cellH + 8
 
-      // ── 5. WORK DESCRIPTION ────────────────────────────────
+      // ══ SECTION 2: DESCRIPCIÓN DEL TRABAJO ══════════════════
       sectionTitle(doc, 'DESCRIPCIÓN DEL TRABAJO', { number: '2' })
 
-      drawBox(doc, M, doc.y, CW, 40, { fill: COLORS.white, stroke: COLORS.borderLight })
-      doc.fontSize(8).fillColor(COLORS.text).font('Helvetica')
-      doc.text(permit.workDescription, M + 10, doc.y + 8, { width: CW - 20, align: 'justify', lineGap: 2 })
-      doc.y += 48
+      const descH = 46
+      box(doc, ML, doc.y, CW, descH, { fill: C.white, stroke: C.steel300, radius: 3, lw: 0.5 })
+      // Left accent
+      box(doc, ML, doc.y, 4, descH, { fill: risk.color })
+      doc.fontSize(8).fillColor(C.steel900).font('Helvetica')
+      doc.text(permit.workDescription, ML + 12, doc.y + 8, { width: CW - 20, align: 'justify', lineGap: 2 })
+      doc.y += descH + 8
 
-      // ── 6. SAFETY CHECKLIST ────────────────────────────────
-      sectionTitle(doc, 'LISTA DE VERIFICACIÓN DE SEGURIDAD', { number: '3', color: risk.color })
+      // ══ SECTION 3: LISTA DE VERIFICACIÓN ════════════════════
+      sectionTitle(doc, 'LISTA DE VERIFICACIÓN DE SEGURIDAD HSE', { number: '3', color: risk.color })
+      drawChecklist(doc, permit.safetyChecks, permit.checklistNotes ?? {}, risk.color)
 
-      const checks = permit.safetyChecks
-      const notes  = permit.checklistNotes || {}
-      const entries = (checks && typeof checks === 'object' ? Object.entries(checks) : [])
-      const checkedCount = entries.filter(([, v]) => v).length
-      const totalCount   = entries.length
-      const notesCount   = Object.values(notes).filter(Boolean).length
-
-      // Progress bar
-      const pct = totalCount > 0 ? checkedCount / totalCount : 0
-      const barW = CW - 8
-      const barH = 4
-      const barX = M + 4
-      const barY = doc.y
-      drawBox(doc, barX, barY, barW, barH, { fill: COLORS.borderLight, radius: 2 })
-      if (pct > 0) {
-        drawBox(doc, barX, barY, barW * pct, barH, { fill: pct === 1 ? COLORS.check : COLORS.pending, radius: 2 })
-      }
-      doc.y = barY + 10
-
-      // Summary line
-      doc.fontSize(7).fillColor(COLORS.textSecondary).font('Helvetica')
-      const summaryText = `${checkedCount}/${totalCount} items verificados` + (notesCount > 0 ? `  ·  ${notesCount} con observaciones` : '')
-      doc.text(summaryText, M, doc.y, { width: CW, align: 'right' })
-      doc.y += 8
-
-      if (entries.length > 0) {
-        // Table header
-        const tX = M
-        const tW = CW
-        drawBox(doc, tX, doc.y, tW, 15, { fill: COLORS.light })
-        doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica-Bold')
-        doc.text('N°', tX + 8, doc.y + 4, { width: 20 })
-        doc.text('ITEM DE VERIFICACIÓN', tX + 32, doc.y + 4, { width: tW * 0.58 })
-        doc.text('EST.', tX + tW - 80, doc.y + 4, { width: 30, align: 'center' })
-        doc.text('OBSERVACIONES', tX + tW - 45, doc.y + 4, { width: 40, align: 'center' })
-        doc.y += 15
-
-        // Table rows
-        entries.forEach(([key, value], idx) => {
-          const note = notes[key] || ''
-          const label = key.replace(/_/g, ' ').toUpperCase()
-          const noteLines = note ? Math.ceil(doc.fontSize(6.5).font('Helvetica').widthOfString(note) / (tW - 80)) : 0
-          const rowH = Math.max(16, 16 + (noteLines * 9) + (note ? 4 : 0))
-
-          ensureSpace(doc, rowH + 2, 48)
-
-          // Alternating row background
-          if (idx % 2 === 0) {
-            drawBox(doc, tX, doc.y, tW, rowH, { fill: COLORS.lighter })
-          }
-
-          // Row border
-          doc.save()
-          doc.moveTo(tX, doc.y + rowH).lineTo(tX + tW, doc.y + rowH)
-            .strokeColor(COLORS.borderLight).lineWidth(0.3).stroke()
-          doc.restore()
-
-          const cY = doc.y + 4
-
-          // Number
-          doc.fontSize(6.5).fillColor(COLORS.muted).font('Helvetica')
-          doc.text(`${idx + 1}`, tX + 8, cY, { width: 20 })
-
-          // Label
-          doc.fontSize(6.5).fillColor(value ? COLORS.textSecondary : COLORS.text)
-            .font(value ? 'Helvetica' : 'Helvetica-Bold')
-          doc.text(label, tX + 32, cY, { width: tW * 0.58 })
-
-          // Status
-          if (value) {
-            drawBox(doc, tX + tW - 74, cY - 1, 18, 10, { fill: COLORS.approvedBg, stroke: COLORS.approved + '40', radius: 2 })
-            doc.fontSize(8).fillColor(COLORS.check).font('Helvetica-Bold')
-            doc.text('✓', tX + tW - 70, cY)
-          } else {
-            drawBox(doc, tX + tW - 74, cY - 1, 18, 10, { fill: COLORS.rejectedBg, stroke: COLORS.rejected + '40', radius: 2 })
-            doc.fontSize(8).fillColor(COLORS.cross).font('Helvetica-Bold')
-            doc.text('✗', tX + tW - 70, cY)
-          }
-
-          // Note indicator
-          if (note) {
-            doc.fontSize(6).fillColor(COLORS.primary).font('Helvetica-BoldOblique')
-            doc.text('N', tX + tW - 42, cY, { width: 30, align: 'center' })
-            // Note text (full line below)
-            doc.fontSize(6).fillColor(COLORS.primary).font('Helvetica-Oblique')
-            doc.text(`↳ ${note}`, tX + 32, cY + 11, { width: tW - 80 })
-            doc.y = cY + 11 + (noteLines * 9) + 4
-          } else {
-            doc.fontSize(6).fillColor(COLORS.border).font('Helvetica')
-            doc.text('—', tX + tW - 42, cY, { width: 30, align: 'center' })
-            doc.y = cY + 12
-          }
-        })
-      } else {
-        doc.fontSize(7).fillColor(COLORS.muted).font('Helvetica-Oblique')
-        doc.text('No hay items de verificación registrados', M + 8, doc.y)
-        doc.y += 14
-      }
-
-      doc.y += 6
-
-      // ── 7. SIGNATURES ──────────────────────────────────────
+      // ══ SECTION 4: FIRMAS ═══════════════════════════════════
       sectionTitle(doc, 'FIRMAS DE AUTORIZACIÓN', { number: '4' })
+      ensureSpace(doc, 175)
 
       const sigColW = (CW - 12) / 2
-      const sigY = doc.y
+      const sigY    = doc.y
 
-      // ── TECHNICIAN SIGNATURE BLOCK ──
-      drawBox(doc, M, sigY, sigColW, 4, { fill: COLORS.primary })
-      doc.fontSize(6.5).fillColor(COLORS.white).font('Helvetica-Bold')
-      doc.text('  FIRMA DEL TÉCNICO', M + 2, sigY)
+      signatureBlock(doc, permit.technicianSignature, 'FIRMA DEL TÉCNICO RESPONSABLE',
+        permit.technicianName, ML, sigY, sigColW, C.navyLight)
 
-      const techSig = permit.technicianSignature
-      if (techSig) {
-        let ty = sigY + 10
-        doc.fontSize(7.5).fillColor(COLORS.text).font('Helvetica-Bold')
-        doc.text(techSig.signerName || permit.technicianName, M + 8, ty, { width: sigColW - 16 })
-        ty += 12
-        doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-        doc.text(`Fecha y hora: ${techSig.timestamp ? formatDateTime(techSig.timestamp) : 'N/A'}`, M + 8, ty, { width: sigColW - 16 })
-        ty += 10
-        if (techSig.location && techSig.location.latitude != null) {
-          doc.text(`GPS: ${Number(techSig.location.latitude).toFixed(6)}, ${Number(techSig.location.longitude).toFixed(6)}`, M + 8, ty, { width: sigColW - 16 })
-          ty += 9
-          if (techSig.location.accuracy != null) {
-            doc.text(`Precisión GPS: ±${Math.round(Number(techSig.location.accuracy))}m`, M + 8, ty, { width: sigColW - 16 })
-            ty += 9
-          }
-          if (techSig.is_within_geofence !== undefined) {
-            const ok = techSig.is_within_geofence
-            doc.fontSize(6.5).fillColor(ok ? COLORS.check : COLORS.cross).font('Helvetica-Bold')
-            doc.text(ok ? '✓ Dentro del área de trabajo' : '⚠ Fuera del área de trabajo', M + 8, ty, { width: sigColW - 16 })
-            ty += 9
-            if (techSig.distance_to_work_meters) {
-              doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-              doc.text(`Distancia al centro: ${Math.round(techSig.distance_to_work_meters)}m`, M + 8, ty, { width: sigColW - 16 })
-              ty += 9
-            }
-          }
-        }
-        ty += 4
-        if (techSig.signatureData) {
-          try {
-            const base64Data = techSig.signatureData.replace(/^data:image\/\w+;base64,/, '')
-            const imgBuf = Buffer.from(base64Data, 'base64')
-            // Signature image with dashed-style border
-            drawBox(doc, M + 8, ty, sigColW - 16, 50, { stroke: COLORS.border })
-            doc.image(imgBuf, M + 10, ty + 2, { width: sigColW - 20, height: 46 })
-            ty += 56
-          } catch {
-            doc.fontSize(6).fillColor(COLORS.muted).font('Helvetica-Oblique')
-            doc.text('(Firma digital disponible en el sistema)', M + 8, ty, { width: sigColW - 16 })
-            ty += 10
-          }
-        }
-      } else {
-        let ty = sigY + 12
-        doc.fontSize(7).fillColor(COLORS.muted).font('Helvetica-Oblique')
-        doc.text('Pendiente de firma', M + 8, ty, { width: sigColW - 16, align: 'center' })
-        ty += 12
-        drawBox(doc, M + 8, ty, sigColW - 16, 45, { stroke: COLORS.border })
-        // X mark for placeholder
-        doc.fontSize(7).fillColor(COLORS.border).font('Helvetica')
-        doc.text('X', M + 8 + (sigColW - 16) / 2 - 3, ty + 18)
-      }
+      signatureBlock(doc, permit.supervisorSignature, 'FIRMA DEL SUPERVISOR HSE',
+        permit.supervisorName, ML + sigColW + 12, sigY, sigColW, C.navy,
+        permit.status === 'PENDING')
 
-      // ── SUPERVISOR SIGNATURE BLOCK ──
-      const supX = M + sigColW + 12
-      drawBox(doc, supX, sigY, sigColW, 4, { fill: COLORS.dark })
-      doc.fontSize(6.5).fillColor(COLORS.white).font('Helvetica-Bold')
-      doc.text('  FIRMA DEL SUPERVISOR', supX + 2, sigY)
+      doc.y = sigY + 168
 
-      const supSig = permit.supervisorSignature
-      if (supSig) {
-        let sy = sigY + 10
-        doc.fontSize(7.5).fillColor(COLORS.text).font('Helvetica-Bold')
-        doc.text(supSig.signerName || 'Supervisor', supX + 8, sy, { width: sigColW - 16 })
-        sy += 12
-        doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-        doc.text(`Fecha y hora: ${supSig.timestamp ? formatDateTime(supSig.timestamp) : 'N/A'}`, supX + 8, sy, { width: sigColW - 16 })
-        sy += 10
-        if (supSig.location && supSig.location.latitude != null) {
-          doc.text(`GPS: ${Number(supSig.location.latitude).toFixed(6)}, ${Number(supSig.location.longitude).toFixed(6)}`, supX + 8, sy, { width: sigColW - 16 })
-          sy += 9
-          if (supSig.is_within_geofence !== undefined) {
-            const ok = supSig.is_within_geofence
-            doc.fontSize(6.5).fillColor(ok ? COLORS.check : COLORS.cross).font('Helvetica-Bold')
-            doc.text(ok ? '✓ Dentro del área' : '⚠ Fuera del área', supX + 8, sy, { width: sigColW - 16 })
-            sy += 9
-            if (supSig.distance_to_work_meters) {
-              doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-              doc.text(`Distancia: ${Math.round(supSig.distance_to_work_meters)}m`, supX + 8, sy, { width: sigColW - 16 })
-              sy += 9
-            }
-          }
-        }
-        sy += 4
-        if (supSig.signatureData) {
-          try {
-            const base64Data = supSig.signatureData.replace(/^data:image\/\w+;base64,/, '')
-            const imgBuf = Buffer.from(base64Data, 'base64')
-            drawBox(doc, supX + 8, sy, sigColW - 16, 50, { stroke: COLORS.border })
-            doc.image(imgBuf, supX + 10, sy + 2, { width: sigColW - 20, height: 46 })
-          } catch {
-            doc.fontSize(6).fillColor(COLORS.muted).font('Helvetica-Oblique')
-            doc.text('(Firma digital disponible en el sistema)', supX + 8, sy, { width: sigColW - 16 })
-          }
-        }
-      } else if (permit.status === 'PENDING') {
-        doc.fontSize(7).fillColor(COLORS.pending).font('Helvetica-Bold')
-        doc.text('PENDIENTE DE APROBACIÓN', supX + 8, sigY + 22, { width: sigColW - 16, align: 'center' })
-        doc.fontSize(6.5).fillColor(COLORS.textSecondary).font('Helvetica')
-        doc.text('Esperando firma del supervisor', supX + 8, sigY + 35, { width: sigColW - 16, align: 'center' })
-      } else {
-        doc.fontSize(7).fillColor(COLORS.muted).font('Helvetica-Oblique')
-        doc.text('No firmado', supX + 8, sigY + 22, { width: sigColW - 16, align: 'center' })
-      }
-
-      // Set doc.y after both signature blocks
-      const maxSigContentH = 130
-      doc.y = Math.max(doc.y, sigY + maxSigContentH)
-      doc.y += 8
-
-      // ── 8. REJECTION REASON ────────────────────────────────
+      // ══ SECTION 5: MOTIVO DE RECHAZO ════════════════════════
       if (permit.status === 'REJECTED' && permit.rejectionReason) {
-        sectionTitle(doc, 'MOTIVO DEL RECHAZO', { number: '5', color: COLORS.rejected })
-        drawBox(doc, M, doc.y, CW, 30, { fill: COLORS.rejectedBg, stroke: COLORS.rejected + '40' })
-        doc.fontSize(7.5).fillColor(COLORS.rejected).font('Helvetica')
-        doc.text(permit.rejectionReason, M + 10, doc.y + 8, { width: CW - 20 })
-        doc.y += 38
+        sectionTitle(doc, 'MOTIVO DEL RECHAZO', { number: '5', color: C.dangerRed })
+        ensureSpace(doc, 50)
+        box(doc, ML, doc.y, CW, 44, { fill: C.dangerRedBg, stroke: C.dangerRed + '50', radius: 3, lw: 0.75 })
+        box(doc, ML, doc.y, 5, 44, { fill: C.dangerRed })
+        doc.fontSize(7.5).fillColor(C.dangerRed).font('Helvetica')
+        doc.text(permit.rejectionReason, ML + 14, doc.y + 10, { width: CW - 22 })
+        doc.y += 52
       }
 
-      // ── 9. APPROVE JUSTIFICATION (outside geofence) ───────
+      // ══ SECTION 6: JUSTIFICACIÓN FUERA DE GEOFENCE ══════════
       if (permit.approveJustification) {
-        sectionTitle(doc, 'JUSTIFICACIÓN DE APROBACIÓN FUERA DE GEOFENCE', { number: '6', color: COLORS.pending })
-        drawBox(doc, M, doc.y, CW, 30, { fill: COLORS.pendingBg, stroke: COLORS.pending + '40' })
-        doc.fontSize(7.5).fillColor(COLORS.pending).font('Helvetica')
-        doc.text(permit.approveJustification, M + 10, doc.y + 8, { width: CW - 20 })
-        doc.y += 38
+        sectionTitle(doc, 'JUSTIFICACIÓN — APROBACIÓN FUERA DE GEOFENCE', { number: '6', color: C.warnYellow })
+        ensureSpace(doc, 50)
+        box(doc, ML, doc.y, CW, 44, { fill: C.warnYellowBg, stroke: C.warnYellow + '50', radius: 3, lw: 0.75 })
+        box(doc, ML, doc.y, 5, 44, { fill: C.amber })
+        doc.fontSize(7.5).fillColor(C.warnYellow).font('Helvetica')
+        doc.text(permit.approveJustification, ML + 14, doc.y + 10, { width: CW - 22 })
+        doc.y += 52
       }
 
-      // ── 10. PHOTO EVIDENCE ─────────────────────────────────
-      if (permit.photos && Array.isArray(permit.photos) && permit.photos.length > 0) {
-        sectionTitle(doc, `EVIDENCIA FOTOGRÁFICA (${permit.photos.length})`, { number: '7' })
+      // ══ SECTION 7: EVIDENCIA FOTOGRÁFICA ════════════════════
+      const photos = permit.photos?.filter(p => p.data) ?? []
+      if (photos.length > 0) {
+        sectionTitle(doc, `EVIDENCIA FOTOGRÁFICA (${photos.length} ${photos.length === 1 ? 'foto' : 'fotos'})`, { number: '7' })
 
-        const photoSize = 120
-        const photoGap = 10
-        const photosPerRow = Math.floor(CW / (photoSize + photoGap))
+        const maxPhotos  = 6
+        const photoSize  = 122
+        const photoGap   = 10
+        const perRow     = Math.floor(CW / (photoSize + photoGap))
+        let   rowStartY  = doc.y
 
-        permit.photos.slice(0, 6).forEach((photo, idx) => {
-          if (idx > 0 && idx % photosPerRow === 0) {
-            doc.addPage()
-            drawPageBackground(doc)
-            doc.y = M
+        photos.slice(0, maxPhotos).forEach((photo, idx) => {
+          const col = idx % perRow
+          const isNewRow = col === 0 && idx > 0
+
+          if (isNewRow) {
+            rowStartY = doc.y + photoSize + 18
           }
 
-          if (photo.data) {
-            try {
-              ensureSpace(doc, photoSize + 20, 48)
-              const base64Data = photo.data.replace(/^data:image\/\w+;base64,/, '')
-              const imgBuf = Buffer.from(base64Data, 'base64')
-              const px = M + (idx % photosPerRow) * (photoSize + photoGap)
-              const py = doc.y
+          if (col === 0) {
+            ensureSpace(doc, photoSize + 30)
+            if (isNewRow) rowStartY = doc.y
+          }
 
-              drawBox(doc, px, py, photoSize, photoSize, { stroke: COLORS.border })
-              doc.image(imgBuf, px + 1, py + 1, { width: photoSize - 2, height: photoSize - 2 })
+          const px = ML + col * (photoSize + photoGap)
+          const py = isNewRow ? rowStartY : doc.y
 
-              if (photo.caption) {
-                doc.fontSize(5.5).fillColor(COLORS.muted).font('Helvetica')
-                doc.text(photo.caption, px, py + photoSize + 2, { width: photoSize, align: 'center' })
-              }
-            } catch { /* skip */ }
+          // Photo frame
+          box(doc, px, py, photoSize, photoSize, { fill: C.steel50, stroke: C.steel300, radius: 3, lw: 0.5 })
+          // Top color accent
+          box(doc, px, py, photoSize, 5, { fill: C.navyMid, radius: 3 })
+          box(doc, px, py + 2, photoSize, 3, { fill: C.navyMid })
+
+          try {
+            const imgBuf = parseBase64Image(photo.data!)
+            doc.image(imgBuf, px + 2, py + 6, { width: photoSize - 4, height: photoSize - 12, fit: [photoSize - 4, photoSize - 12], align: 'center', valign: 'center' })
+          } catch { /* skip broken images */ }
+
+          if (photo.caption) {
+            doc.fontSize(5.5).fillColor(C.steel500).font('Helvetica')
+            doc.text(photo.caption, px, py + photoSize + 2, { width: photoSize, align: 'center' })
+          }
+
+          // Advance doc.y only on last in row or last photo
+          if (col === perRow - 1 || idx === Math.min(photos.length, maxPhotos) - 1) {
+            doc.y = py + photoSize + 16
           }
         })
 
-        const photoRows = Math.ceil(Math.min(permit.photos.length, 6) / photosPerRow)
-        doc.y += photoRows > 0 ? photoSize + 18 : 0
-
-        if (permit.photos.length > 6) {
-          doc.fontSize(6.5).fillColor(COLORS.muted).font('Helvetica')
-          doc.text(`... y ${permit.photos.length - 6} foto(s) adicional(es) disponible(s) en el sistema`, M, doc.y, { width: CW, align: 'center' })
-          doc.y += 12
+        if (photos.length > maxPhotos) {
+          doc.fontSize(6.5).fillColor(C.steel500).font('Helvetica-Oblique')
+          doc.text(
+            `… y ${photos.length - maxPhotos} foto(s) adicional(es) disponibles en el portal ATS`,
+            ML, doc.y + 4, { width: CW, align: 'center' }
+          )
+          doc.y += 16
         }
       }
 
-      // ─────────── FOOTER (all pages) ────────────────────────
-      const pages = doc.bufferedPageRange()
-      for (let i = 0; i < pages.count; i++) {
+      // ══ FLUSH FOOTERS (all pages) ════════════════════════════
+      const range = doc.bufferedPageRange()
+      for (let i = 0; i < range.count; i++) {
         doc.switchToPage(i)
-
-        const footY = PAGE_H - 32
-
-        // Footer separator
-        drawLine(doc, footY, COLORS.border)
-
-        // Footer text
-        doc.fontSize(5.5).fillColor(COLORS.muted).font('Helvetica')
-        doc.text(
-          'Energy-Compliance Hub  ·  Sistema de Gestión de Permisos y Cumplimiento HSE  ·  Documento confidencial',
-          M, footY + 5, { width: CW, align: 'center' }
-        )
-
-        // Page number
-        doc.text(`Página ${i + 1} de ${pages.count}`, M, footY + 14, { width: CW, align: 'center' })
-
-        // Verification code (last page)
-        if (i === pages.count - 1) {
-          const code = permit.permitNumber.split('-').pop() || permit.permitNumber
-          doc.fontSize(5.5).fillColor(COLORS.muted).font('Helvetica')
-          doc.text(`Código de verificación: ${code}  ·  Generado el ${formatDateTime(new Date().toISOString())}`, M, footY + 22, { width: CW, align: 'center' })
-        }
+        drawFooter(doc, i + 1, range.count, permit.permitNumber)
       }
 
       doc.end()
-    } catch (error) {
-      reject(error)
+    } catch (err) {
+      reject(err)
     }
   })
 }
