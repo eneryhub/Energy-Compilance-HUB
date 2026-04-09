@@ -77,23 +77,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'El contenido del documento es obligatorio' }, { status: 400 })
     }
 
-    if (content.length > 200000) {
-      return NextResponse.json(
-        { error: 'El documento es demasiado largo (maximo 200,000 caracteres)' },
-        { status: 400 }
-      )
-    }
-
     const docType = typeof documentType === 'string' && documentType.trim()
       ? documentType.trim()
       : 'documento'
+
+    if (content.length > 500000) {
+      return NextResponse.json(
+        { error: `El documento es demasiado largo (${Math.round(content.length / 1000)}K caracteres). Maximo permitido: 500,000 caracteres (${Math.round(500000 / 1000)}K). Dividelo en partes mas pequenas.` },
+        { status: 400 }
+      )
+    }
 
     // ── Get Supabase client ──
     const supabase = getSupabaseClient()
     if (!supabase) {
       return NextResponse.json(
-        { error: 'Supabase no esta configurado. Verifica las variables de entorno NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY.' },
-        { status: 500 }
+        { error: 'Supabase no esta configurado. Debes configurar NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en las variables de entorno de Vercel, y ejecutar la migracion SQL en Supabase.' },
+        { status: 503 }
       )
     }
 
@@ -104,13 +104,22 @@ export async function POST(req: NextRequest) {
 
     // ── Step 1: Split content into chunks ──
     const chunks = splitIntoChunks(content)
-    console.log(`[Paperclip Ingest] Document "${title}": split into ${chunks.length} chunks`)
+    console.log(`[Paperclip Ingest] Document "${title}": ${content.length} chars, split into ${chunks.length} chunks`)
 
     if (chunks.length === 0) {
       return NextResponse.json({ error: 'No se pudieron crear fragmentos del documento' }, { status: 400 })
     }
 
-    // ── Step 2: Embed each chunk and insert into Supabase ──
+    // ── Step 2: Verify OpenAI is available before processing all chunks ──
+    const testEmbedding = await getEmbeddings('test')
+    if (!testEmbedding) {
+      return NextResponse.json(
+        { error: 'No se pudo conectar con OpenAI para generar embeddings. Verifica que OPENAI_API_KEY este configurada en Vercel.' },
+        { status: 503 }
+      )
+    }
+
+    // ── Step 3: Embed each chunk and insert into Supabase ──
     let processedCount = 0
     const errors: string[] = []
 
@@ -120,7 +129,7 @@ export async function POST(req: NextRequest) {
         const embedding = await getEmbeddings(chunk)
 
         if (!embedding) {
-          errors.push(`Chunk ${i + 1}: no se pudo generar el embedding`)
+          errors.push(`Fragmento ${i + 1}: no se pudo generar el embedding`)
           continue
         }
 
@@ -139,14 +148,14 @@ export async function POST(req: NextRequest) {
 
         if (insertError) {
           console.error(`[Paperclip Ingest] Insert error for chunk ${i + 1}:`, insertError.message)
-          errors.push(`Chunk ${i + 1}: error al insertar en base de datos`)
+          errors.push(`Fragmento ${i + 1}: error al insertar en Supabase (${insertError.message})`)
           continue
         }
 
         processedCount++
       } catch (chunkError) {
         console.error(`[Paperclip Ingest] Error processing chunk ${i + 1}:`, chunkError)
-        errors.push(`Chunk ${i + 1}: error interno`)
+        errors.push(`Fragmento ${i + 1}: error interno`)
       }
     }
 
@@ -154,7 +163,7 @@ export async function POST(req: NextRequest) {
 
     if (processedCount === 0) {
       return NextResponse.json(
-        { error: 'No se pudo procesar ningun fragmento. Verifica que OpenAI API este configurada.', details: errors },
+        { error: 'No se pudo procesar ningun fragmento. Verifica que OpenAI API y Supabase esten configurados.', details: errors },
         { status: 500 }
       )
     }

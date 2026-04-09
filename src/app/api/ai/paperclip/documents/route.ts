@@ -18,10 +18,8 @@ export async function GET(req: NextRequest) {
     // ── Get Supabase client ──
     const supabase = getSupabaseClient()
     if (!supabase) {
-      return NextResponse.json(
-        { error: 'Supabase no esta configurado' },
-        { status: 500 }
-      )
+      console.warn('[Paperclip Documents] Supabase not configured — returning empty document list')
+      return NextResponse.json({ documents: [], supabaseNotConfigured: true })
     }
 
     // ── Query: use RPC for document stats ──
