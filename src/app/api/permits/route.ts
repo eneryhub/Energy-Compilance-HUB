@@ -5,7 +5,7 @@ import { checkUserCompliance } from '@/lib/compliance'
 import { createAuditLog } from '@/lib/audit'
 import { generatePermitPDF } from '@/lib/pdf-generator'
 import { calculateDistance } from '@/lib/gps'
-import { validateQrCode } from '@/lib/qr'
+import { validateQrPayload, decodeQrPayloadFromString } from '@/lib/qr'
 
 export async function GET(request: NextRequest) {
   try {
@@ -134,7 +134,8 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        if (!savedLocation.qrCodeSecret) {
+        const qrCodeSecret = (savedLocation as Record<string, unknown>).qrCodeSecret as string | null | undefined
+        if (!qrCodeSecret) {
           return NextResponse.json(
             {
               error: 'QR_NO_CONFIGURADO',
@@ -144,12 +145,24 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        const qrResult = validateQrCode(qrScannedCode, savedLocation.qrCodeSecret, savedLocation.id)
+        // Decode the scanned string and validate against stored secret
+        const decodedPayload = decodeQrPayloadFromString(qrScannedCode.trim())
+        if (!decodedPayload) {
+          return NextResponse.json(
+            {
+              error: 'QR_INVALIDO',
+              message: 'Formato de código QR no reconocido. Escanee el código QR de la ubicación.',
+            },
+            { status: 403 }
+          )
+        }
+
+        const qrResult = validateQrPayload(decodedPayload, qrCodeSecret)
         if (!qrResult.valid) {
           return NextResponse.json(
             {
               error: 'QR_INVALIDO',
-              message: `Verificación QR fallida: ${qrResult.error}`,
+              message: `Verificación QR fallida: ${qrResult.message}`,
             },
             { status: 403 }
           )
