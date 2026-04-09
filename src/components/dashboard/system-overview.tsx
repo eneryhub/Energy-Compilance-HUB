@@ -60,7 +60,7 @@ const modules = [
       'Control de vencimiento con alertas inteligentes (30 días)',
       'Clasificación por criticidad: CRÍTICO, NORMAL, BAJO',
       'Categorías: PERSONAL, EQUIPOS, LEGAL, AMBIENTAL',
-      'Extracción de datos con IA (DeepSeek Vision)',
+      'Extracción de datos con IA (OpenAI Vision)',
       'Auditoría completa de cambios y revisiones',
     ],
   },
@@ -393,7 +393,7 @@ export default function SystemOverview() {
                 { title: 'Firma Digital con Hash', desc: 'Canvas nativo, SHA-256 integrity hash, timestamp, coordenadas GPS embebidas', icon: PenLine },
                 { title: 'Generación PDF Server-Side', desc: 'PDFKit con datos completos, firmas embebidas, checklist, GPS, estado PENDIENTE/AUTORIZADO', icon: FileText },
                 { title: 'Auditoría Total', desc: 'AuditLog con acción, entidad, usuario, IP, timestamp. Trazabilidad completa', icon: Eye },
-                { title: 'Suscripción por Planes', desc: 'Starter ($149/mes), Business ($499/mes), Enterprise ($4,500/mes). Stripe-ready', icon: BarChart3 },
+                { title: 'Suscripción por Planes', desc: 'Starter ($149), Business ($499), Enterprise ($9999). Stripe-ready', icon: BarChart3 },
                 { title: 'Responsive + Mobile-First', desc: 'Diseño adaptado para campo: tablets, móviles, sidebar colapsable', icon: Wifi },
               ].map((feature, i) => {
                 const Icon = feature.icon

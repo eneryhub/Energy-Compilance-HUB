@@ -1,6 +1,14 @@
 // Energy-Compliance Hub — AI Utilities
 // Uses z-ai-web-dev-sdk when available (Z.ai sandbox),
 // falls back to OpenAI-compatible API on Vercel.
+//
+// ENV VARS REQUIRED ON VERCEL:
+//   OPENAI_API_KEY=sk-...        (your OpenAI API key)
+//   ZAI_OPENAI_BASE_URL=...       (optional, defaults to https://api.openai.com/v1)
+//   ZAI_MODEL=...                 (optional, defaults to gpt-4o-mini)
+//
+// DIAGNOSTICS: Check Vercel function logs for [AI] prefixed messages.
+//   Response objects include an `aiSource` field: 'openai' | 'sdk' | 'fallback'
 
 export interface DocumentExtraction {
   documentType: string
@@ -26,6 +34,7 @@ export async function getAI(): Promise<any | null> {
     const ZAI = (await import('z-ai-web-dev-sdk')).default
     _zaiInstance = await ZAI.create()
     _zaiAvailable = true
+    console.log('[AI] ✅ Connected via z-ai-web-dev-sdk (sandbox native)')
     return _zaiInstance
   } catch {
     // Fallback: OpenAI-compatible API
@@ -36,21 +45,37 @@ export async function getAI(): Promise<any | null> {
     if (apiKey) {
       _zaiInstance = { type: 'openai', apiKey, baseUrl, model }
       _zaiAvailable = true
+      console.log(`[AI] ✅ Connected via OpenAI — model: ${model}, base: ${baseUrl}`)
       return _zaiInstance
     }
 
     _zaiAvailable = false
+    console.error('[AI] ❌ No AI backend available! z-ai-web-dev-sdk not found AND OPENAI_API_KEY not set.')
+    console.error('[AI] → Set OPENAI_API_KEY in your Vercel environment variables to enable AI features.')
     return null
   }
+}
+
+/** Returns which AI backend is currently active */
+export function getAISource(): string {
+  if (!_zaiInitAttempted) return 'not-initialized'
+  if (!_zaiAvailable) return 'fallback'
+  if (!_zaiInstance) return 'fallback'
+  if (_zaiInstance.type === 'openai') return 'openai'
+  return 'sdk'
 }
 
 // ── Unified chat completion (works with both backends) ──
 
 export async function chatCompletion(messages: Array<{ role: string; content: string }>, options?: { temperature?: number }): Promise<string> {
   const ai = await getAI()
-  if (!ai) return ''
+  if (!ai) {
+    console.warn('[AI] chatCompletion called but no AI backend available — returning empty string (caller should use fallback)')
+    return ''
+  }
 
   if (ai.type === 'openai') {
+    console.log(`[AI] → Calling OpenAI: model=${ai.model}, messages=${messages.length}`)
     const response = await fetch(`${ai.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -64,12 +89,19 @@ export async function chatCompletion(messages: Array<{ role: string; content: st
         temperature: options?.temperature ?? 0.1,
       }),
     })
-    if (!response.ok) throw new Error(`OpenAI error: ${response.status}`)
+    if (!response.ok) {
+      const errText = await response.text().catch(() => 'unknown')
+      console.error(`[AI] ❌ OpenAI error ${response.status}: ${errText}`)
+      throw new Error(`OpenAI error: ${response.status}`)
+    }
     const data = await response.json()
-    return data.choices?.[0]?.message?.content || ''
+    const content = data.choices?.[0]?.message?.content || ''
+    console.log(`[AI] ✅ OpenAI response received (${content.length} chars)`)
+    return content
   }
 
   // Native z-ai-web-dev-sdk
+  console.log('[AI] → Calling z-ai-web-dev-sdk native')
   const response = await ai.chat.completions.create({
     messages: messages.map(m => ({
       role: m.role as 'user' | 'assistant' | 'system',
@@ -77,7 +109,9 @@ export async function chatCompletion(messages: Array<{ role: string; content: st
     })),
     thinking: { type: 'disabled' },
   })
-  return response.choices?.[0]?.message?.content || ''
+  const content = response.choices?.[0]?.message?.content || ''
+  console.log(`[AI] ✅ SDK response received (${content.length} chars)`)
+  return content
 }
 
 /**
@@ -113,7 +147,8 @@ Extrae información estructurada. Responde ÚNICAMENTE con JSON válido:
     if (!jsonMatch) return null
 
     return JSON.parse(jsonMatch[0])
-  } catch {
+  } catch (error) {
+    console.warn('[AI] extractDocumentData → FALLBACK (no extraction)', error instanceof Error ? error.message : error)
     return null
   }
 }
@@ -165,6 +200,7 @@ export interface PermitReviewResult {
   }>
   summary: string
   reviewedAt: string
+  aiSource: 'openai' | 'sdk' | 'fallback'
 }
 
 /**
@@ -254,10 +290,11 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
       findings: Array.isArray(result.findings) ? result.findings : [],
       summary: result.summary || 'Revision completada por IA.',
       reviewedAt: new Date().toISOString(),
+      aiSource: getAISource() as 'openai' | 'sdk',
     }
   } catch (error) {
     // Intelligent fallback when AI is unavailable — rule-based review
-    console.error('[AI] reviewPermitSafety fallback triggered:', error instanceof Error ? error.message : error)
+    console.warn(`[AI] reviewPermitSafety → FALLBACK to rule-based review (AI ${getAISource()})`, error instanceof Error ? error.message : error)
 
     let score = 100
     score -= failedChecks.length * 12
@@ -313,6 +350,7 @@ EVIDENCIA FOTOGRAFICA: ${hasPhotos ? `Si, ${photosCount} foto(s) adjuntada(s)` :
       findings,
       summary: `Revision automatica de permiso "${riskLabel}" en ${workLocation || 'ubicacion no especificada'}. ${passedChecks.length}/${totalChecks} checks completados.${hasPhotos ? ` ${photosCount} foto(s) adjuntada(s).` : ' Sin evidencia fotografica.'} ${recommendation === 'APROBAR' ? 'Permiso cumple con los requisitos minimos.' : 'Se requieren acciones correctivas antes de aprobar.'}`,
       reviewedAt: new Date().toISOString(),
+      aiSource: 'fallback',
     }
   }
 }

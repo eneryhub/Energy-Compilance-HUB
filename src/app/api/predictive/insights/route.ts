@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getTokenPayload } from '@/lib/auth'
-import { chatCompletion } from '@/lib/ai'
+import { chatCompletion, getAISource } from '@/lib/ai'
 
 // ============ In-memory cache ============
 const cache = new Map<string, { data: object; timestamp: number }>()
@@ -26,6 +26,7 @@ interface PredictiveResponse {
   summary: string
   sensors: SensorPrediction[]
   analyzedAt: string
+  aiSource: 'openai' | 'sdk' | 'fallback'
 }
 
 // ============ Helper: calculate trend from readings ============
@@ -190,6 +191,7 @@ export async function GET(req: NextRequest) {
         summary: 'No hay sensores activos para analizar.',
         sensors: [],
         analyzedAt: new Date().toISOString(),
+        aiSource: 'fallback',
       }
       return NextResponse.json(emptyResponse)
     }
@@ -203,11 +205,12 @@ export async function GET(req: NextRequest) {
         summary: 'Los sensores activos no tienen suficientes datos de telemetría para generar predicciones.',
         sensors: [],
         analyzedAt: new Date().toISOString(),
+        aiSource: 'fallback',
       }
       return NextResponse.json(emptyResponse)
     }
 
-    // Build prompt for DeepSeek AI
+    // Build prompt for AI (OpenAI on Vercel, SDK in sandbox)
     const sensorDataText = sensorsWithData
       .map((s) => {
         const readingsText = s.readings
@@ -259,7 +262,7 @@ Genera el análisis predictivo para cada sensor.`
 
     let result: PredictiveResponse
 
-    // Try AI via centralized chatCompletion (OpenAI)
+    // Try AI via centralized chatCompletion (OpenAI on Vercel)
     try {
       const content = await chatCompletion([
         { role: 'system', content: systemPrompt },
@@ -280,6 +283,9 @@ Genera el análisis predictivo para cada sensor.`
         throw new Error('Invalid AI response structure')
       }
 
+      const source = getAISource() as 'openai' | 'sdk'
+      console.log(`[AI] ✅ Predictive insights generated via ${source} for ${sensorsWithData.length} sensors`)
+
       result = {
         overallRisk: parsed.overallRisk,
         summary: parsed.summary || 'Análisis completado por IA.',
@@ -295,11 +301,13 @@ Genera el análisis predictivo para cada sensor.`
           recommendation: s.recommendation || 'Sin recomendación disponible.',
         })),
         analyzedAt: new Date().toISOString(),
+        aiSource: source,
       }
     } catch (aiError) {
       // Fall back to mock data if AI fails
-      console.error('AI prediction failed, using mock data:', aiError)
+      console.warn('[AI] ⚠️ Predictive insights → FALLBACK to mock data', aiError instanceof Error ? aiError.message : aiError)
       result = generateMockPredictions(sensorsWithData)
+      result.aiSource = 'fallback'
     }
 
     // Cache result

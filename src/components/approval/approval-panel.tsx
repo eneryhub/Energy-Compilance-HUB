@@ -638,7 +638,7 @@ export default function ApprovalPanel() {
                     </Button>
                   </div>
                   <CardDescription className="text-xs">
-                    DeepSeek AI analiza el permiso para detectar riesgos y dar recomendaciones
+                    OpenAI analiza el permiso para detectar riesgos y dar recomendaciones
                   </CardDescription>
                 </CardHeader>
                 {aiReview && (
