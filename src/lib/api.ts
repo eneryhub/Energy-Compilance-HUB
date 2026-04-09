@@ -245,8 +245,19 @@ export async function apiFetch<T = unknown>(
   })
 
   if (!res.ok) {
-    const data = await res.json().catch(() => ({ error: 'Error de servidor' }))
-    throw new Error(data.error || `Error ${res.status}: Error de servidor`)
+    // Try to parse as JSON first (our API errors)
+    const contentType = res.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      try {
+        const data = await res.json()
+        throw new Error(data.error || data.details || data.hint || `Error ${res.status}: Error de servidor`)
+      } catch (err) {
+        if (err instanceof Error) throw err
+        throw new Error(`Error ${res.status}: Error de servidor`)
+      }
+    }
+    // Non-JSON response (e.g., Vercel HTML error page)
+    throw new Error(`Error ${res.status} del servidor. Si el problema persiste, contacta al soporte tecnico.`)
   }
 
   return res.json()

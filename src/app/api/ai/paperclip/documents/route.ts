@@ -1,22 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getTokenPayload } from '@/lib/auth'
 
-// Lazy import — prevents serverless crash if @supabase/supabase-js isn't installed on Vercel
-let _getSupabaseClient: typeof import('@/lib/supabase').getSupabaseClient | null = null
-
-async function getSupabaseClient() {
-  if (!_getSupabaseClient) {
-    try {
-      const mod = await import('@/lib/supabase')
-      _getSupabaseClient = mod.getSupabaseClient
-    } catch (err) {
-      console.error('[Paperclip Documents] Failed to import @/lib/supabase — is @supabase/supabase-js installed?', err)
-      return null
-    }
-  }
-  return _getSupabaseClient()
-}
-
 export async function GET(req: NextRequest) {
   try {
     // ── Auth check ──
@@ -30,8 +14,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'No se encontro la empresa del usuario' }, { status: 400 })
     }
 
-    // ── Get Supabase client ──
-    const supabase = await getSupabaseClient()
+    // ── Get Supabase client (async dynamic import) ──
+    let supabase: Awaited<ReturnType<typeof import('@/lib/supabase').getSupabaseClient>> | null = null
+    try {
+      const { getSupabaseClient } = await import('@/lib/supabase')
+      supabase = await getSupabaseClient()
+    } catch (err) {
+      console.error('[Paperclip Documents] Error loading Supabase module:', err)
+    }
+
     if (!supabase) {
       console.warn('[Paperclip Documents] Supabase not configured — returning empty document list')
       return NextResponse.json({ documents: [], supabaseNotConfigured: true })
@@ -93,7 +84,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ documents })
   } catch (error) {
-    console.error('[Paperclip Documents Error]', error)
-    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
+    console.error('[Paperclip Documents UNHANDLED ERROR]', error)
+    return NextResponse.json({ documents: [], error: 'Error interno del servidor' }, { status: 500 })
   }
 }

@@ -503,6 +503,7 @@ function ToastNotification({ toast, onDismiss }: { toast: ToastMessage; onDismis
 function KnowledgeBasePanel() {
   const [documents, setDocuments] = useState<IndexedDocument[]>([])
   const [loadingDocs, setLoadingDocs] = useState(true)
+  const [supabaseNotReady, setSupabaseNotReady] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
   // Ingest form state
@@ -537,8 +538,11 @@ function KnowledgeBasePanel() {
   const loadDocuments = useCallback(async () => {
     setLoadingDocs(true)
     try {
-      const response = await apiFetch<{ documents: IndexedDocument[] }>('/ai/paperclip/documents')
+      const response = await apiFetch<{ documents: IndexedDocument[]; supabaseNotConfigured?: boolean }>('/ai/paperclip/documents')
       setDocuments(response.documents || [])
+      if (response.supabaseNotConfigured) {
+        setSupabaseNotReady(true)
+      }
     } catch {
       setDocuments([])
     } finally {
@@ -584,9 +588,12 @@ function KnowledgeBasePanel() {
       setIngestProgressLabel('Completando...')
 
       if (result.success) {
+        const timeStr = result.processingTimeSeconds
+          ? ` en ${result.processingTimeSeconds}s`
+          : ''
         addToast(
           'success',
-          `"${result.documentTitle}" indexado correctamente: ${result.chunksProcessed} fragmentos procesados${result.totalChunks && result.totalChunks > result.chunksProcessed ? ` de ${result.totalChunks}` : ''}`
+          `"${result.documentTitle}" indexado correctamente: ${result.chunksProcessed} fragmentos procesados${result.totalChunks && result.totalChunks > result.chunksProcessed ? ` de ${result.totalChunks}` : ''}${timeStr}`
         )
         setDocTitle('')
         setDocContent('')
@@ -594,7 +601,18 @@ function KnowledgeBasePanel() {
         setIngestProgress(100)
         await loadDocuments()
       } else {
-        addToast('error', 'Error al indexar el documento')
+        // The result might contain error details from the server
+        const errMsg = (result as any).error || 'Error al indexar el documento'
+        const checks = (result as any).checks
+        const required = (result as any).required
+        let detailMsg = errMsg
+        if (checks && Array.isArray(checks)) {
+          detailMsg += ' Verifica: ' + checks.join('; ')
+        }
+        if (required && Array.isArray(required)) {
+          detailMsg += ' Variables requeridas: ' + required.join(', ')
+        }
+        addToast('error', detailMsg)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error desconocido'
@@ -634,6 +652,30 @@ function KnowledgeBasePanel() {
           ))}
         </AnimatePresence>
       </div>
+
+      {/* Supabase not configured warning */}
+      {supabaseNotReady && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
+              <AlertCircle className="w-5 h-5 text-amber-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-800">Configuracion requerida</p>
+              <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                Para usar la Base de Conocimiento debes configurar Supabase en Vercel. Agrega estas variables de entorno:
+              </p>
+              <div className="mt-2 p-2 rounded-lg bg-amber-100/50 space-y-1">
+                <p className="text-xs font-mono text-amber-900">NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co</p>
+                <p className="text-xs font-mono text-amber-900">NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...</p>
+              </div>
+              <p className="text-xs text-amber-600 mt-2 leading-relaxed">
+                Tambien ejecuta la migracion SQL <code className="bg-amber-100 px-1 rounded font-mono">supabase/migrations/paperclip.sql</code> en el SQL Editor de Supabase.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Document Form */}
       {canManage && (
