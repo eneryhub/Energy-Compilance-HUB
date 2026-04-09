@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 import { checkSubscription } from '@/lib/subscription-guard'
-import { generateQrSecret, buildQrPayload, type QrPayload } from '@/lib/qr'
+import { generateQrSecret, buildQrPayload } from '@/lib/qr'
 import { generateBeaconUuid, isValidBeaconUuid } from '@/lib/beacon'
 
 // GET /api/locations - List work locations with verification fields
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error: unknown) {
-    console.error('[POST /api/locations GET] Error:', error)
+    console.error('[GET /api/locations] Error:', error)
     const message = error instanceof Error ? error.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })
   }
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
       verificationMethod: verificationMethod || null,
     }
 
-    let qrData: QrPayload | null = null
+    let qrData: string | null = null
     let qrSecret: string | null = null
     let beaconConfig: {
       uuid: string
@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
         data: createData,
       })
 
-      qrData = buildQrPayload(tempLocation.id, qrSecret, session.companyId)
+      qrData = buildQrPayload(tempLocation.id, qrSecret, name)
 
       // Update the location with QR fields
       try {
@@ -209,7 +209,7 @@ export async function POST(request: NextRequest) {
           )
         }
         // Check UUID uniqueness
-        const existing = await db.workLocation.findUnique({
+        const existing = await db.workLocation.findFirst({
           where: { beaconUuid: uuid },
         })
         if (existing) {

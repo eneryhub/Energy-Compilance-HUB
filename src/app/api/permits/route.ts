@@ -4,6 +4,8 @@ import { getSession } from '@/lib/auth'
 import { checkUserCompliance } from '@/lib/compliance'
 import { createAuditLog } from '@/lib/audit'
 import { generatePermitPDF } from '@/lib/pdf-generator'
+import { calculateDistance } from '@/lib/gps'
+import { validateQrCode } from '@/lib/qr'
 
 export async function GET(request: NextRequest) {
   try {
@@ -56,6 +58,7 @@ export async function POST(request: NextRequest) {
     const {
       riskType,
       safetyChecks,
+      checklistNotes,
       technicianName,
       supervisorName,
       workLocation,
@@ -64,11 +67,108 @@ export async function POST(request: NextRequest) {
       technicianSignatureGps,
       workLatitude,
       workLongitude,
+      workLocationId,
       photos,
+      qrScannedCode,
+      beaconDetected,
     } = body
 
     if (!riskType || !technicianName || !supervisorName || !workLocation || !workDescription) {
       return NextResponse.json({ error: 'Todos los campos son requeridos' }, { status: 400 })
+    }
+
+    // ---- Location verification ----
+    // If a WorkLocationId is provided, verify based on verificationMethod
+    if (workLocationId) {
+      // Verify the location belongs to the company
+      const savedLocation = await db.workLocation.findFirst({
+        where: { id: workLocationId, companyId: session.companyId },
+      })
+
+      if (!savedLocation) {
+        return NextResponse.json({ error: 'Ubicación no encontrada' }, { status: 404 })
+      }
+
+      const method = savedLocation.verificationMethod || 'GPS'
+
+      // ---- GPS verification (default) ----
+      if (method === 'GPS') {
+        if (!workLatitude || !workLongitude) {
+          return NextResponse.json(
+            {
+              error: 'GPS_REQUERIDO',
+              message: 'Debe capturar su ubicación GPS para crear un permiso en esta ubicación.',
+            },
+            { status: 400 }
+          )
+        }
+
+        const distance = calculateDistance(
+          { latitude: workLatitude, longitude: workLongitude },
+          { latitude: savedLocation.latitude, longitude: savedLocation.longitude }
+        )
+
+        if (distance > savedLocation.radiusMeters) {
+          return NextResponse.json(
+            {
+              error: 'GEOFENCE_VIOLATION',
+              message: `Fuera del área de trabajo. Está a ${Math.round(distance)}m de "${savedLocation.name}" (radio máximo: ${savedLocation.radiusMeters}m).`,
+              distance: Math.round(distance),
+              maxRadius: savedLocation.radiusMeters,
+              locationName: savedLocation.name,
+            },
+            { status: 403 }
+          )
+        }
+      }
+
+      // ---- QR Code verification ----
+      else if (method === 'QR_CODE') {
+        if (!qrScannedCode) {
+          return NextResponse.json(
+            {
+              error: 'QR_REQUERIDO',
+              message: 'Debe escanear el código QR de esta ubicación para crear el permiso.',
+            },
+            { status: 400 }
+          )
+        }
+
+        if (!savedLocation.qrCodeSecret) {
+          return NextResponse.json(
+            {
+              error: 'QR_NO_CONFIGURADO',
+              message: 'Esta ubicación no tiene código QR configurado. Genere uno desde SCADA → Ubicaciones.',
+            },
+            { status: 400 }
+          )
+        }
+
+        const qrResult = validateQrCode(qrScannedCode, savedLocation.qrCodeSecret, savedLocation.id)
+        if (!qrResult.valid) {
+          return NextResponse.json(
+            {
+              error: 'QR_INVALIDO',
+              message: `Verificación QR fallida: ${qrResult.error}`,
+            },
+            { status: 403 }
+          )
+        }
+      }
+
+      // ---- Beacon BLE verification ----
+      else if (method === 'BEACON') {
+        if (!beaconDetected) {
+          return NextResponse.json(
+            {
+              error: 'BEACON_REQUERIDO',
+              message: 'Debe estar dentro del rango del Beacon BLE para crear el permiso en esta ubicación.',
+            },
+            { status: 400 }
+          )
+        }
+        // beaconDetected=true means the client confirmed BLE proximity
+      }
     }
 
     // Generate permit number
@@ -86,6 +186,7 @@ export async function POST(request: NextRequest) {
         riskType,
         status: 'PENDING',
         safetyChecks: JSON.stringify(safetyChecks || {}),
+        checklistNotes: checklistNotes ? JSON.stringify(checklistNotes) : null,
         technicianName,
         supervisorName,
         workLocation,
@@ -100,7 +201,8 @@ export async function POST(request: NextRequest) {
         photosCount: photos?.length || 0,
         workLatitude: workLatitude || null,
         workLongitude: workLongitude || null,
-        locationSource: workLatitude ? 'gps' : 'manual',
+        locationSource: method === 'QR_CODE' ? 'qr' : method === 'BEACON' ? 'beacon' : (workLatitude ? 'gps' : 'manual'),
+        workLocationId: workLocationId || null,
         createdById: session.userId,
         createdByName: session.name,
         createdByRole: session.role,
@@ -114,7 +216,7 @@ export async function POST(request: NextRequest) {
       action: 'CREATE',
       entityType: 'PERMIT',
       entityId: permit.id,
-      details: { permitNumber, riskType, technicianName, workLocation, photosCount: photos?.length || 0 },
+      details: { permitNumber, riskType, technicianName, workLocation, photosCount: photos?.length || 0, workLocationId: workLocationId || null },
     }, request)
 
     // Generate PDF for the new permit
@@ -128,6 +230,7 @@ export async function POST(request: NextRequest) {
       workLocation: permit.workLocation,
       workDescription: permit.workDescription,
       safetyChecks: JSON.parse(permit.safetyChecks || '{}'),
+      checklistNotes: permit.checklistNotes ? JSON.parse(permit.checklistNotes) : {},
       technicianSignature: permit.technicianSignature ? (() => {
         try {
           const sig = JSON.parse(permit.technicianSignature)
