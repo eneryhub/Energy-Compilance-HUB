@@ -38,11 +38,13 @@ export async function getAI(): Promise<any | null> {
     return _zaiInstance
   } catch {
     // Fallback: OpenAI-compatible API
-    const apiKey = process.env.ZAI_OPENAI_API_KEY || process.env.OPENAI_API_KEY
-    const baseUrl = process.env.ZAI_OPENAI_BASE_URL || 'https://api.openai.com/v1'
-    const model = process.env.ZAI_MODEL || 'gpt-4o-mini'
+    const apiKey = (process.env.ZAI_OPENAI_API_KEY || process.env.OPENAI_API_KEY || '').trim()
+    const baseUrl = (process.env.ZAI_OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
+    const model = (process.env.ZAI_MODEL || 'gpt-4o-mini').trim()
 
     if (apiKey) {
+      // Validate API key format (sk-... or similar)
+      console.log(`[AI] OpenAI key preview: ${apiKey.substring(0, 7)}...${apiKey.length > 10 ? apiKey.substring(apiKey.length - 4) : ''}`)
       _zaiInstance = { type: 'openai', apiKey, baseUrl, model }
       _zaiAvailable = true
       console.log(`[AI] ✅ Connected via OpenAI — model: ${model}, base: ${baseUrl}`)
@@ -75,23 +77,35 @@ export async function chatCompletion(messages: Array<{ role: string; content: st
   }
 
   if (ai.type === 'openai') {
-    console.log(`[AI] → Calling OpenAI: model=${ai.model}, messages=${messages.length}`)
+    // Build body with explicit field mapping — avoids prototype/extra-property issues on Vercel Edge
+    const cleanMessages = messages.map(m => ({
+      role: String(m.role),
+      content: String(m.content),
+    }))
+    const temperature = typeof options?.temperature === 'number' ? options.temperature : 0.1
+    const bodyObj = {
+      model: String(ai.model),
+      messages: cleanMessages,
+      max_tokens: 2048,
+      temperature,
+    }
+    const bodyStr = JSON.stringify(bodyObj)
+
+    console.log(`[AI] → Calling OpenAI: model=${ai.model}, messages=${cleanMessages.length}, body=${bodyStr.length} bytes`)
+
     const response = await fetch(`${ai.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${ai.apiKey}`,
+        'Accept': 'application/json',
       },
-      body: JSON.stringify({
-        model: ai.model,
-        messages,
-        max_tokens: 2048,
-        temperature: options?.temperature ?? 0.1,
-      }),
+      body: bodyStr,
     })
     if (!response.ok) {
       const errText = await response.text().catch(() => 'unknown')
       console.error(`[AI] ❌ OpenAI error ${response.status}: ${errText}`)
+      console.error(`[AI] ❌ Request body (first 500 chars): ${bodyStr.substring(0, 500)}`)
       throw new Error(`OpenAI error: ${response.status}`)
     }
     const data = await response.json()
