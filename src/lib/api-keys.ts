@@ -18,14 +18,28 @@ function generateRawKey(): string {
 }
 
 /**
- * Hash an API key using SHA-256 for secure storage
+ * Hash an API key using SHA-256 for secure storage.
+ * Uses Web Crypto API (crypto.subtle) when available,
+ * falls back to Node.js crypto for Edge Runtime compatibility.
  */
 async function hashKey(key: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(key)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  // Try Web Crypto API first (available in Node.js 20+ and modern runtimes)
+  if (typeof crypto !== 'undefined' && typeof crypto.subtle?.digest === 'function') {
+    try {
+      const encoder = new TextEncoder()
+      const data = encoder.encode(key)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+      const hashArray = Array.from(new Uint8Array(hashBuffer))
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+    } catch {
+      // Fall through to Node.js crypto
+    }
+  }
+
+  // Fallback: Node.js crypto module (works in all Node.js versions and Vercel Serverless)
+  const nodeCrypto = await import('node:crypto')
+  const hash = nodeCrypto.createHash('sha256').update(key).digest('hex')
+  return hash
 }
 
 /**
