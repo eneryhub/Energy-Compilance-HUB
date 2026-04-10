@@ -49,8 +49,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    if (!['ADMIN', 'SUPERVISOR', 'MANAGER'].includes(payload.role)) {
-      return NextResponse.json({ error: 'Sin permisos' }, { status: 403 })
+    if (payload.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Sin permisos: solo ADMIN puede crear sensores' }, { status: 403 })
     }
 
     const body = await req.json()
@@ -91,6 +91,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Defensive guard: companyId MUST be present (prevents orphan sensors)
+    if (!payload.companyId) {
+      return NextResponse.json({ error: 'Sesion invalida: companyId ausente' }, { status: 401 })
+    }
+
     const sensorType = type as SensorType
     const defaults = getSensorProfileDefaults(sensorType)
 
@@ -104,7 +109,7 @@ export async function POST(req: NextRequest) {
           unit: unit || defaults.unit,
           thresholdCritical: thresholdCritical || defaults.thresholdCritical,
           thresholdWarning: thresholdWarning || defaults.thresholdWarning,
-          isSimulated: isSimulated !== false,
+          isSimulated: false,
           currentValue: generateSimulatedValue({
             id: 'temp',
             type,

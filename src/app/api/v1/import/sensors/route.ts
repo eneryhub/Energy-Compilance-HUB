@@ -11,7 +11,7 @@ const SENSOR_PROFILES: Record<string, { unit: string; thresholdCritical: number;
 }
 
 const VALID_TYPES = Object.keys(SENSOR_PROFILES)
-const ALLOWED_ROLES = ['ADMIN', 'SUPERVISOR', 'MANAGER']
+const ALLOWED_ROLES = ['ADMIN']
 
 interface RowError {
   row: number
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
     }
     if (!ALLOWED_ROLES.includes(payload.role)) {
-      return NextResponse.json({ error: 'Acceso denegado. Se requiere rol ADMIN, SUPERVISOR o MANAGER.' }, { status: 403 })
+      return NextResponse.json({ error: 'Acceso denegado. Solo ADMIN puede importar sensores.' }, { status: 403 })
     }
 
     const companyId = payload.companyId
@@ -232,7 +232,7 @@ export async function POST(req: NextRequest) {
               thresholdCritical,
               thresholdWarning,
               locationId,
-              isSimulated: true,
+              isSimulated: false,
               isActive: true,
             },
           })
