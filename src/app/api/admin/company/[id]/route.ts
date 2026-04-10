@@ -34,7 +34,7 @@ export async function GET(
             sensors: true,
             workLocations: true,
             apiKeys: true,
-            supportMessages: true,
+           
           },
         },
       },
