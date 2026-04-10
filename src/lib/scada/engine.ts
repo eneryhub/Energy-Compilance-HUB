@@ -300,7 +300,7 @@ export async function ingestSensorData(
   value: number,
   source: 'webhook' | 'mqtt' | 'manual' = 'webhook',
   companyId?: string | null
-): Promise<TelemetryPoint | null> {
+): Promise<TelemetryPoint | { blocked: true; reason: string } | null> {
   // ── Find sensor with optional multi-tenant guard ───────
   const sensor = await db.sensor.findFirst({
     where: {
@@ -324,6 +324,14 @@ export async function ingestSensorData(
       `[Ingest] SECURITY: Sensor ${sensorId} belongs to company ${sensor.companyId}, not ${companyId}`
     )
     return null
+  }
+
+  // ── Block external data for simulated sensors ───────────
+  if (sensor.isSimulated) {
+    console.warn(
+      `[Ingest] BLOCKED: Sensor ${sensorId} is in demo/simulation mode — external telemetry rejected`
+    )
+    return { blocked: true, reason: 'Sensor en modo demostración: no se acepta telemetría externa' }
   }
 
   const status = getSensorStatus(value, sensor.thresholdCritical, sensor.thresholdWarning)

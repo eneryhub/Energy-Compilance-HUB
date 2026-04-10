@@ -1121,6 +1121,12 @@ export default function TelemetryBoard() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        {sensor.isSimulated && (
+                          <Badge className="text-[10px] bg-amber-100 text-amber-700 border-amber-200">
+                            <Radio className="w-2.5 h-2.5 mr-0.5" />
+                            MODO DEMO
+                          </Badge>
+                        )}
                         <Badge className="text-[10px] bg-slate-100 text-slate-500">
                           Crít: {sensor.thresholdCritical} {sensor.unit}
                         </Badge>

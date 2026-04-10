@@ -91,6 +91,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // ── Handle blocked sensors (e.g. simulated/demo mode) ──
+    if ('blocked' in result) {
+      console.warn('[Ingest] 403 — Sensor blocked:', { sensorId, reason: result.reason })
+      return NextResponse.json(
+        {
+          error: result.reason,
+          sensorId,
+          hint: 'Para enviar datos externos, el sensor debe estar configurado como real (isSimulated: false).',
+        },
+        { status: 403 }
+      )
+    }
+
     // ── Response ──────────────────────────────────────────
     console.log('[Ingest] Success:', { sensorId: result.sensorId, sensorName: result.sensorName, value: result.value, status: result.status, authMethod })
     return NextResponse.json({
