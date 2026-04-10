@@ -27,8 +27,10 @@ export async function POST(request: NextRequest) {
     // Try API Key if no JWT
     if (!companyId) {
       const apiKeyHeader = request.headers.get('x-api-key')
+      console.log('[Ingest] Trying API Key auth, header:', apiKeyHeader ? `${apiKeyHeader.substring(0, 20)}...` : '(empty)')
       if (apiKeyHeader) {
         const keyValidation = await validateApiKey(apiKeyHeader)
+        console.log('[Ingest] API Key validation result:', keyValidation ? `VALID (companyId=${keyValidation.companyId})` : 'INVALID')
         if (keyValidation) {
           companyId = keyValidation.companyId
           authMethod = 'api_key'
@@ -37,6 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!companyId || !authMethod) {
+      console.warn('[Ingest] Auth failed — no valid JWT or API Key')
       return NextResponse.json(
         {
           error: 'No autorizado',
@@ -67,20 +70,29 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Ingest data ───────────────────────────────────────
+    console.log('[Ingest] Incoming data:', { sensorId, value: numericValue, source, companyId, authMethod })
+
     const result = await ingestSensorData(
       sensorId,
       numericValue,
-      (source as 'webhook' | 'mqtt' | 'manual') || 'webhook'
+      (source as 'webhook' | 'mqtt' | 'manual') || 'webhook',
+      companyId  // Pass companyId for multi-tenant validation
     )
 
     if (!result) {
+      console.warn('[Ingest] 404 — Sensor not found, inactive, or wrong company:', { sensorId, companyId })
       return NextResponse.json(
-        { error: 'Sensor no encontrado o inactivo', sensorId },
+        {
+          error: 'Sensor no encontrado, inactivo, o no pertenece a tu empresa',
+          sensorId,
+          hint: 'Verifica que el sensorId sea correcto y que pertenezca a la misma empresa que la API Key.',
+        },
         { status: 404 }
       )
     }
 
     // ── Response ──────────────────────────────────────────
+    console.log('[Ingest] Success:', { sensorId: result.sensorId, sensorName: result.sensorName, value: result.value, status: result.status, authMethod })
     return NextResponse.json({
       success: true,
       sensorId: result.sensorId,

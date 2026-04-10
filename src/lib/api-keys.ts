@@ -91,10 +91,12 @@ export async function validateApiKey(rawKey: string): Promise<{
   permissions: string
 } | null> {
   if (!rawKey || !rawKey.startsWith(API_KEY_PREFIX)) {
+    console.warn('[ApiKey] Rejected: missing or wrong prefix', { prefix: rawKey?.substring(0, 20) || '(empty)' })
     return null
   }
 
   const keyHash = await hashKey(rawKey)
+  console.log('[ApiKey] Looking up hash:', keyHash.substring(0, 16) + '...')
 
   const record = await db.apiKey.findFirst({
     where: {
@@ -103,7 +105,10 @@ export async function validateApiKey(rawKey: string): Promise<{
     },
   })
 
-  if (!record) return null
+  if (!record) {
+    console.warn('[ApiKey] No matching active key found in DB', { hashPrefix: keyHash.substring(0, 16) })
+    return null
+  }
 
   // Check expiration
   if (record.expiresAt && record.expiresAt < new Date()) {

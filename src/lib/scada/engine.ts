@@ -5,7 +5,6 @@
 
 import { db } from '@/lib/db'
 import { demoModeCache } from '@/lib/demo-mode-cache'
-import { emitGOCAlert } from '@/lib/goc-alerts'
 import type { Sensor } from '@prisma/client'
 
 // ── Types ───────────────────────────────────────────────────
@@ -299,16 +298,39 @@ export async function isCompanySafe(companyId: string): Promise<SiteSafetyCheck>
 export async function ingestSensorData(
   sensorId: string,
   value: number,
-  source: 'webhook' | 'mqtt' | 'manual' = 'webhook'
+  source: 'webhook' | 'mqtt' | 'manual' = 'webhook',
+  companyId?: string | null
 ): Promise<TelemetryPoint | null> {
-  const sensor = await db.sensor.findUnique({ where: { id: sensorId } })
-  if (!sensor || !sensor.isActive) return null
+  // ── Find sensor with optional multi-tenant guard ───────
+  const sensor = await db.sensor.findFirst({
+    where: {
+      id: sensorId,
+      ...(companyId ? { companyId } : {}),
+      isActive: true,
+    },
+  })
+
+  if (!sensor) {
+    console.error(
+      `[Ingest] Sensor not found or inactive`,
+      { sensorId, companyId: companyId || '(none)', source }
+    )
+    return null
+  }
+
+  // If companyId was provided, verify ownership
+  if (companyId && sensor.companyId !== companyId) {
+    console.error(
+      `[Ingest] SECURITY: Sensor ${sensorId} belongs to company ${sensor.companyId}, not ${companyId}`
+    )
+    return null
+  }
 
   const status = getSensorStatus(value, sensor.thresholdCritical, sensor.thresholdWarning)
 
   // Update current value
   await db.sensor.update({
-    where: { id: sensorId },
+    where: { id: sensor.id },
     data: {
       currentValue: value,
       lastReadingAt: new Date(),
@@ -318,43 +340,15 @@ export async function ingestSensorData(
   // Store reading
   await db.sensorReading.create({
     data: {
-      sensorId,
+      sensorId: sensor.id,
       value,
       status,
     },
   })
 
-  // ── GOC Side Effect: Emit alert when sensor is CRITICO ──
-  if (status === 'CRITICO') {
-    try {
-      emitGOCAlert({
-        companyId: sensor.companyId,
-        type: 'SENSOR_CRITICAL',
-        severity: 'CRITICAL',
-        title: `Sensor Crítico: ${sensor.name}`,
-        message: `El sensor ${sensor.name} (${sensor.type}) ha alcanzado un valor crítico de ${value} ${sensor.unit}. Umbral: ${sensor.thresholdCritical} ${sensor.unit}.`,
-        metadata: {
-          sensorId: sensor.id,
-          sensorName: sensor.name,
-          sensorType: sensor.type,
-          value,
-          unit: sensor.unit,
-          thresholdCritical: sensor.thresholdCritical,
-          thresholdWarning: sensor.thresholdWarning,
-          locationId: sensor.locationId,
-          source,
-        },
-        relatedEntityId: sensor.id,
-        relatedEntityType: 'SENSOR',
-      })
-    } catch {
-      // Fire-and-forget: don't block sensor ingestion
-    }
-  }
-
   // Cleanup old readings (keep last 200 per sensor)
   const oldReadings = await db.sensorReading.findMany({
-    where: { sensorId },
+    where: { sensorId: sensor.id },
     orderBy: { timestamp: 'asc' },
     take: 50,
     select: { id: true },
@@ -366,7 +360,7 @@ export async function ingestSensorData(
   }
 
   return {
-    sensorId,
+    sensorId: sensor.id,
     sensorName: sensor.name,
     type: sensor.type as SensorType,
     value,
@@ -418,34 +412,6 @@ export async function runSimulationTick(companyId: string): Promise<TelemetryPoi
         status,
       },
     })
-
-    // ── GOC Side Effect: Emit alert when sensor is CRITICO ──
-    if (status === 'CRITICO') {
-      try {
-        emitGOCAlert({
-          companyId: sensor.companyId,
-          type: 'SENSOR_CRITICAL',
-          severity: 'CRITICAL',
-          title: `Sensor Crítico: ${sensor.name}`,
-          message: `El sensor ${sensor.name} (${sensor.type}) ha alcanzado un valor crítico de ${newValue} ${sensor.unit}. Umbral: ${sensor.thresholdCritical} ${sensor.unit}.`,
-          metadata: {
-            sensorId: sensor.id,
-            sensorName: sensor.name,
-            sensorType: sensor.type,
-            value: newValue,
-            unit: sensor.unit,
-            thresholdCritical: sensor.thresholdCritical,
-            thresholdWarning: sensor.thresholdWarning,
-            locationId: sensor.locationId,
-            source: 'simulation',
-          },
-          relatedEntityId: sensor.id,
-          relatedEntityType: 'SENSOR',
-        })
-      } catch {
-        // Fire-and-forget: don't block simulation tick
-      }
-    }
 
     results.push({
       sensorId: sensor.id,
