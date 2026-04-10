@@ -109,54 +109,51 @@ async function loadSupabase() {
  * elemento del array es el texto de UNA página.
  */
 async function loadPdfPageExtractor(): Promise<((buf: Buffer) => Promise<string[]>) | null> {
-  // ── Opción 1: pdf-parse-fork (soporte página-por-página) ──────────────────
+    // ── Opción 1: pdf-parse-fork (Soporte nativo para páginas si está instalado) ──
+    try {
+      const pdfParse = (await import('pdf-parse-fork')).default
+      return async (buf: Buffer): Promise<string[]> => {
+        const pages: string[] = []
+        await pdfParse(buf, {
+          pagerender: (pageData: any) => {
+            return pageData.getTextContent().then((tc: any) => {
+              const text = tc.items.map((i: any) => i.str).join(' ')
+              pages.push(text)
+              return text
+            })
+          },
+        })
+        // Si el fork no extrajo nada, devolvemos el array vacío para intentar la sig. opción
+        return pages.length > 0 ? pages : []
+      }
+    } catch { /* Si no está instalado, pasamos a la siguiente */ }
+  
+    // ── Opción 2: pdf-parse estándar (La opción más estable para Vercel) ──
+   // ── Opción 2: pdf-parse estándar (La opción más estable para Vercel) ──
   try {
-    const pdfParse = (await import('pdf-parse-fork')).default
-    return async (buf: Buffer): Promise<string[]> => {
-      const pages: string[] = []
-      await pdfParse(buf, {
-        pagerender: (pageData: any) => {
-          return pageData.getTextContent().then((tc: any) => {
-            const text = tc.items.map((i: any) => i.str).join(' ')
-            pages.push(text)
-            return text
-          })
-        },
-      })
-      return pages
-    }
-  } catch { /* continúa */ }
+    // Usamos (await import('pdf-parse')) as any para evitar el error de .default
+    const pdfModule = (await import('pdf-parse')) as any
+    const pdfParse = pdfModule.default || pdfModule
 
-  // ── Opción 2: pdf-parse estándar (texto completo, simular páginas) ─────────
-  try {
-    const pdfParse = (await import('pdf-parse')).default
     return async (buf: Buffer): Promise<string[]> => {
       const result = await pdfParse(buf)
-      // pdf-parse concatena todo; dividimos por saltos de página (\x0c)
-      const rawPages = result.text.split('\x0c').map((p: string) => p.trim()).filter(Boolean)
+      
+      const rawPages = result.text
+        .split('\x0c')
+        .map((p: string) => p.trim())
+        .filter((p: string) => p.length > 0)
+
       return rawPages.length > 0 ? rawPages : [result.text]
     }
-  } catch { /* continúa */ }
-
-  // ── Opción 3: pdfjs-dist (más pesado pero muy robusto) ────────────────────
-  try {
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js')
-    return async (buf: Buffer): Promise<string[]> => {
-      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise
-      const pages: string[] = []
-      for (let i = 1; i <= doc.numPages; i++) {
-        const page    = await doc.getPage(i)
-        const tc      = await page.getTextContent()
-        const text    = tc.items.map((item: any) => item.str).join(' ').trim()
-        pages.push(text)
-        page.cleanup()   // libera recursos de la página
-      }
-      return pages
-    }
-  } catch { /* continúa */ }
-
-  return null
-}
+  } catch (err) {
+    console.error('[Paperclip] No se pudo cargar pdf-parse:', err)
+  }
+  
+    // NOTA: Se eliminó la Opción 3 (pdfjs-dist) porque requiere la librería 'canvas',
+    // la cual no es compatible con el entorno de ejecución de Vercel sin configuraciones complejas.
+    
+    return null
+  }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CHUNKER
