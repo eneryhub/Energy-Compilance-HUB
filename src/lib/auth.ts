@@ -53,13 +53,27 @@ export async function getSession(request: Request): Promise<Session | null> {
 
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET)
+
+    // Extract all fields — validate required ones
+    const userId = payload.userId as string | undefined
+    const companyId = payload.companyId as string | undefined
+    const role = payload.role as string | undefined
+    const email = payload.email as string | undefined
+    const name = payload.name as string | undefined
+    const subscriptionPlan = payload.subscriptionPlan as string | undefined
+
+    // Required fields must be present — if any is missing, treat as invalid token
+    if (!userId || !companyId || !role || !email) {
+      return null
+    }
+
     return {
-      userId: payload.userId as string,
-      companyId: payload.companyId as string,
-      role: payload.role as string,
-      email: payload.email as string,
-      name: payload.name as string,
-      subscriptionPlan: (payload.subscriptionPlan as string) || 'starter',
+      userId,
+      companyId,
+      role,
+      email,
+      name: name || '',
+      subscriptionPlan: subscriptionPlan || 'starter',
     }
   } catch {
     return null
