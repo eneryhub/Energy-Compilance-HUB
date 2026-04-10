@@ -52,6 +52,11 @@ export async function createApiKey(params: {
   name: string
   expiresAt?: Date
 }): Promise<{ id: string; name: string; key: string; prefix: string }> {
+  // Defensive: ensure required fields exist before hitting Prisma
+  if (!params.userId || !params.companyId || !params.name) {
+    throw new Error('Faltan datos obligatorios (userId, companyId, name). Cierra sesión y vuelve a iniciar sesión.')
+  }
+
   const rawKey = generateRawKey()
   const keyHash = await hashKey(rawKey)
   const keyPrefix = rawKey.substring(0, API_KEY_PREFIX.length + 8) + '...'

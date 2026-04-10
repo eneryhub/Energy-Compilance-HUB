@@ -56,8 +56,11 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await getSession(request)
-    if (!session) {
-      return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
+    if (!session || !session.userId) {
+      return NextResponse.json(
+        { error: 'Sesión inválida o expirada. Cierra sesión y vuelve a iniciar sesión.', code: 'INVALID_SESSION' },
+        { status: 401 }
+      )
     }
     if (!['ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
       return NextResponse.json({ error: 'Solo administradores pueden crear API keys' }, { status: 403 })
@@ -84,6 +87,7 @@ export async function POST(request: NextRequest) {
     const apiKey = await db.apiKey.create({
       data: {
         companyId: session.companyId,
+        userId: session.userId,
         name: name.trim(),
         keyHash: hash,
         keyPrefix: prefix,
@@ -127,8 +131,11 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getSession(request)
-    if (!session) {
-      return NextResponse.json({ error: 'No autenticado' }, { status: 401 })
+    if (!session || !session.userId) {
+      return NextResponse.json(
+        { error: 'Sesión inválida o expirada. Cierra sesión y vuelve a iniciar sesión.', code: 'INVALID_SESSION' },
+        { status: 401 }
+      )
     }
     if (!['ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
       return NextResponse.json({ error: 'Sin permisos' }, { status: 403 })

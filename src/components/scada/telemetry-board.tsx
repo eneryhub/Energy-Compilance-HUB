@@ -564,7 +564,7 @@ export default function TelemetryBoard() {
     try {
       const data = await apiFetch<{ key: string; name: string; id: string; keyPrefix: string; permissions: string; expiresAt: string | null }>('/api-keys', {
         method: 'POST',
-        body: JSON.stringify({ name: apiKeyName.trim(), permissions: apiKeyPermissions, expiresInDays: parseInt(apiKeyExpiry) || 90 }),
+        body: JSON.stringify({ name: apiKeyName.trim(), permissions: apiKeyPermissions, expiresDays: parseInt(apiKeyExpiry) || 90 }),
       })
       setNewApiKeyData({ key: data.key, name: data.name })
       setApiKeyName('')
@@ -572,6 +572,11 @@ export default function TelemetryBoard() {
       setApiKeyExpiry('90')
       loadApiKeys()
     } catch (err: any) {
+      // If token was cleared by apiFetch (401), force reload to show login
+      if (!getToken()) {
+        window.location.reload()
+        return
+      }
       alert(err.message || 'Error al crear API Key')
     } finally {
       setCreatingApiKey(false)
@@ -582,7 +587,7 @@ export default function TelemetryBoard() {
     if (!confirm('¿Revocar esta API Key? Esta acción no se puede deshacer.')) return
     setRevokingKeyId(id)
     try {
-      await apiFetch(`/api-keys/${id}`, { method: 'DELETE' })
+      await apiFetch(`/api-keys?id=${id}`, { method: 'DELETE' })
       loadApiKeys()
     } catch (err: any) {
       alert(err.message || 'Error al revocar API Key')

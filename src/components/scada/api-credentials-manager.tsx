@@ -32,7 +32,7 @@ import {
   Info,
   ExternalLink,
 } from 'lucide-react'
-import { apiFetch, getToken } from '@/lib/api'
+import { apiFetch, getToken, removeToken } from '@/lib/api'
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -136,11 +136,17 @@ export default function ApiCredentialsManager() {
         },
         body: JSON.stringify({
           name: newKeyName.trim(),
-          expiresInDays: parseInt(newKeyExpiry) || 90,
+          expiresDays: parseInt(newKeyExpiry) || 90,
         }),
       })
       if (!res.ok) {
         const err = await res.json()
+        // Invalid session — force re-login
+        if (err.code === 'INVALID_SESSION' || res.status === 401) {
+          removeToken()
+          window.location.reload()
+          return
+        }
         alert(err.error || 'Error al crear la clave')
         return
       }
@@ -162,7 +168,7 @@ export default function ApiCredentialsManager() {
     if (!confirm('¿Revocar esta clave? Los dispositivos que la usen perderán acceso inmediatamente.')) return
     setRevokingId(id)
     try {
-      await fetch(`/api/api-keys/${id}`, {
+      await fetch(`/api/api-keys?id=${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${getToken()}` },
       })
