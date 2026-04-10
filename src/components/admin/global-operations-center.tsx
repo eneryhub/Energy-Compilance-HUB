@@ -46,7 +46,7 @@ import { Separator } from '@/components/ui/separator'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useGOCAlerts, GOCAlert, AlertTypeFilter, AlertSeverityFilter } from '@/hooks/useGOCAlerts'
-import { useSystemHealth, useKnowledgeBase } from '@/hooks/useSystemAndCompany'
+import { useSystemHealth, useKnowledgeBase, useCompanyManagement } from '@/hooks/useSystemAndCompany'
 
 /* ═══════════════════════════════════════════════════════════════════
    CONSTANTS & PURE HELPERS — defined outside component for referential stability
@@ -112,7 +112,6 @@ function formatRelative(dateStr: string): string {
 function LiveClock() {
   const [time, setTime] = useState('')
   const ref = useRef<NodeJS.Timeout | null>(null)
-  // Update once on mount, then every second
   const update = useCallback(() => {
     setTime(new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
   }, [])
@@ -143,7 +142,7 @@ function StatPill({ icon: Icon, value, label, variant = 'default', pulse = false
   )
 }
 
-/* ── Alert Row — memoized to prevent re-renders when sibling alerts change ── */
+/* ── Alert Row — memoized with click-to-open knowledge ── */
 const AlertRow = memo(function AlertRow({
   alert,
   isNew,
@@ -160,15 +159,30 @@ const AlertRow = memo(function AlertRow({
   const TypeIcon = TYPE_ICON[alert.type] ?? AlertTriangle
   const isCritical = alert.severity === 'CRITICAL'
 
+  const handleRowClick = () => {
+    onKnowledge(alert)
+  }
+
+  const handleAckClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onAcknowledge(alert.id)
+  }
+
+  const handleKBClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onKnowledge(alert)
+  }
+
   return (
     <motion.div
-      layout           // animates reordering without snapshot issues
+      layout
       layoutId={alert.id}
       initial={isNew ? { opacity: 0, x: -20, scale: 0.98 } : false}
       animate={{ opacity: 1, x: 0, scale: 1 }}
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      onClick={handleRowClick}
       className={cn(
-        'relative rounded-xl border p-4 transition-colors duration-300',
+        'relative rounded-xl border p-4 transition-colors duration-300 cursor-pointer hover:brightness-105',
         SEVERITY_RING[alert.severity],
         alert.isAcknowledged && 'opacity-40 grayscale',
         isNew && 'ring-1 ring-yellow-400/40'
@@ -229,7 +243,7 @@ const AlertRow = memo(function AlertRow({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => onKnowledge(alert)}
+                  onClick={handleKBClick}
                   className="h-7 px-2 text-[10px] text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-300 gap-1"
                 >
                   <BookOpen className="w-3 h-3" />
@@ -241,7 +255,7 @@ const AlertRow = memo(function AlertRow({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => onAcknowledge(alert.id)}
+                  onClick={handleAckClick}
                   disabled={acknowledging}
                   className="h-7 px-2 text-[10px] text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 gap-1"
                 >
@@ -391,7 +405,6 @@ function EnterpriseQuotaCard({ companies }: {
                   {c._count.users}/{c.maxUsers}
                 </span>
               </div>
-              {/* Segmented progress bar — visual density over raw number */}
               <div className="relative h-2 rounded-full bg-slate-800 overflow-hidden">
                 <motion.div
                   className={cn('h-full rounded-full', barColor)}
@@ -457,6 +470,9 @@ function KnowledgeDialog({
 
   const canSubmit = form.errorCode.trim() && form.title.trim() && form.rootCause.trim() && form.appliedSolution.trim()
 
+  // Caso especial: alerta sin código de error
+  const hasNoErrorCode = alert && !alert.errorCode
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-slate-900 border-slate-700/50 text-slate-200 max-w-lg max-h-[85vh] overflow-y-auto">
@@ -466,7 +482,11 @@ function KnowledgeDialog({
             {showCreate ? 'Nueva Entrada de Conocimiento' : 'Base de Conocimiento'}
           </DialogTitle>
           <DialogDescription className="text-slate-500 text-xs">
-            {alert?.errorCode ? `Ref: ${alert.errorCode} — ${alert?.title}` : 'Buscando solución...'}
+            {hasNoErrorCode
+              ? 'Esta alerta no tiene código de error asociado'
+              : alert?.errorCode
+              ? `Ref: ${alert.errorCode} — ${alert?.title}`
+              : 'Buscando solución...'}
           </DialogDescription>
         </DialogHeader>
 
@@ -479,7 +499,19 @@ function KnowledgeDialog({
             </motion.div>
           )}
 
-          {!loading && entry && !showCreate && (
+          {hasNoErrorCode && !loading && (
+            <motion.div key="no-errorcode" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-6 text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mx-auto">
+                <Info className="w-6 h-6 text-slate-600" />
+              </div>
+              <p className="text-sm text-slate-400 font-medium">Sin diagnóstico disponible</p>
+              <p className="text-xs text-slate-600">
+                Esta alerta no tiene un código de error asociado. Solo las alertas de tipo Sistema, Seguridad, Sensor, Geofence y Suscripción pueden tener diagnóstico.
+              </p>
+            </motion.div>
+          )}
+
+          {!hasNoErrorCode && !loading && entry && !showCreate && (
             <motion.div key="entry" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-4 py-2">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge className={cn('text-xs', SEVERITY_BADGE[entry.severity])}>{entry.severity}</Badge>
@@ -509,7 +541,7 @@ function KnowledgeDialog({
             </motion.div>
           )}
 
-          {!loading && notFound && !showCreate && (
+          {!hasNoErrorCode && !loading && notFound && !showCreate && (
             <motion.div key="notfound" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-6 text-center space-y-3">
               <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mx-auto">
                 <X className="w-6 h-6 text-slate-600" />
@@ -616,12 +648,16 @@ export default function GlobalOperationsCenter() {
   const goc = useGOCAlerts(soundEnabled)
   const healthHook = useSystemHealth()
   const kb = useKnowledgeBase()
+  const { enterpriseCompanies } = useCompanyManagement()
 
   // Handlers
   const handleKnowledgeOpen = useCallback((alert: GOCAlert) => {
     setSelectedAlert(alert)
-    if (alert.errorCode) kb.lookup(alert.errorCode)
-    else kb.clear()
+    if (alert.errorCode) {
+      kb.lookup(alert.errorCode)
+    } else {
+      kb.clear()
+    }
   }, [kb])
 
   const handleKBClose = useCallback((open: boolean) => {
@@ -882,7 +918,7 @@ export default function GlobalOperationsCenter() {
         {/* ── RIGHT: SIDEBAR ── */}
         <div className="space-y-4">
           <SystemHealthCard health={healthHook.health} loading={healthHook.loading} />
-          <EnterpriseQuotaCard companies={/* passed from parent */ []} />
+          <EnterpriseQuotaCard companies={enterpriseCompanies} />
         </div>
       </div>
 
