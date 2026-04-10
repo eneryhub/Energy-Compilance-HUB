@@ -150,10 +150,12 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     try {
       const data = await apiFetch('/admin/goc/alerts')
       
-      // VALIDACIÓN DE FECHAS AQUÍ
-      const validatedData = (data || []).map((alert: any) => ({
+      // 🔥 FIX: Ensure data is an array
+      let alertsArray = Array.isArray(data) ? data : []
+      
+      // VALIDACIÓN DE FECHAS
+      const validatedData = alertsArray.map((alert: any) => ({
         ...alert,
-        // Si no hay fecha, usamos la actual para evitar que la UI explote
         createdAt: alert.createdAt ? alert.createdAt : new Date().toISOString()
       }))
   
