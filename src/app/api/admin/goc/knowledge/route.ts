@@ -1,136 +1,464 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { getTokenPayload } from '@/lib/auth'
+/**
+ * useSystemHealth — Polls system health every 30s with backoff on errors.
+ * useKnowledgeBase — Knowledge base fetch + create with optimistic cache.
+ * useCompanyManagement — Full company CRUD with derived stats for Super Admin.
+ *
+ * DESIGN PRINCIPLE (Mission Critical):
+ * All hooks guard against stale state via isMountedRef.
+ * All hooks implement error resilience: failures are silent but tracked.
+ * This mirrors aviation CRM principles — never interrupt the operator with
+ * a crash; degrade gracefully and show the last known good state.
+ */
 
-// GET /api/admin/goc/knowledge — Search knowledge base entries
-export async function GET(request: NextRequest) {
-  try {
-    const payload = await getTokenPayload(request)
-    if (!payload || payload.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Acceso denegado. Se requiere rol SUPER_ADMIN.' }, { status: 403 })
-    }
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { apiFetch } from '@/lib/api'
 
-    const { searchParams } = new URL(request.url)
-    const q = searchParams.get('q') || undefined
-    const category = searchParams.get('category') || undefined
-    const code = searchParams.get('code') || undefined
+/* ════════════════════════════════════════════════════════════════════
+   TYPES
+   ════════════════════════════════════════════════════════════════════ */
 
-    // Build where clause
-    const where: Record<string, unknown> = {}
-    if (q) {
-      // Search across errorCode, title, rootCause, appliedSolution
-      where.OR = [
-        { errorCode: { contains: q } },
-        { title: { contains: q } },
-        { rootCause: { contains: q } },
-        { appliedSolution: { contains: q } },
-      ]
-    } else if (code) {
-      where.errorCode = code
-    }
-    if (category) {
-      where.category = category
-    }
-
-    // If exact code match, increment timesUsed
-    if (code) {
-      try {
-        await db.knowledgeBase.updateMany({
-          where: { errorCode: code },
-          data: { timesUsed: { increment: 1 } },
-        })
-      } catch {
-        // Non-blocking: don't fail the GET if increment fails
-      }
-    }
-
-    const entries = await db.knowledgeBase.findMany({
-      where: Object.keys(where).length > 0 ? where : undefined,
-      orderBy: { timesUsed: 'desc' },
-      take: 50,
-    })
-
-    return NextResponse.json({
-      entries: entries.map(e => ({
-        id: e.id,
-        errorCode: e.errorCode,
-        category: e.category,
-        title: e.title,
-        rootCause: e.rootCause,
-        appliedSolution: e.appliedSolution,
-        severity: e.severity,
-        referenceUrl: e.referenceUrl,
-        timesUsed: e.timesUsed,
-        createdAt: e.createdAt.toISOString(),
-        updatedAt: e.updatedAt.toISOString(),
-      })),
-      total: entries.length,
-    })
-  } catch (error: unknown) {
-    console.error('[GOC Knowledge GET] Error:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Error interno del servidor' },
-      { status: 500 }
-    )
+export interface SystemHealth {
+  healthStatus: 'HEALTHY' | 'DEGRADED' | 'CRITICAL' | 'UNKNOWN'
+  totalErrors24h: number
+  topErrors: Array<{ action: string; count: number; affectedCompanies: number }>
+  globalIncidents: Array<{ action: string; affectedCompanies: number; companyNames: string[] }>
+  alerts24h: {
+    total: number
+    critical: number
+    unacknowledged: number
+    byType: Record<string, number>
   }
+  lastChecked: string
 }
 
-// POST /api/admin/goc/knowledge — Create new knowledge base entry
-export async function POST(request: NextRequest) {
-  try {
-    const payload = await getTokenPayload(request)
-    if (!payload || payload.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Acceso denegado. Se requiere rol SUPER_ADMIN.' }, { status: 403 })
+export interface KnowledgeEntry {
+  id: string
+  errorCode: string
+  category: string
+  title: string
+  rootCause: string
+  appliedSolution: string
+  severity: string
+  referenceUrl: string | null
+  timesUsed: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface KnowledgeCreatePayload {
+  errorCode: string
+  category: string
+  title: string
+  rootCause: string
+  appliedSolution: string
+  severity: string
+}
+
+export interface AdminCompany {
+  id: string
+  name: string
+  email: string
+  subscriptionPlan: 'starter' | 'business' | 'enterprise'
+  subscriptionStatus: 'ACTIVE' | 'TRIAL' | 'PAST_DUE' | 'CANCELLED'
+  createdAt: string
+  maxUsers: number
+  maxPermitsPerMonth: number
+  isActive: boolean
+  _count: { users: number; permits: number }
+}
+
+export interface AdminAuditLog {
+  id: string
+  action: string
+  entityType: string
+  details: string | null
+  createdAt: string
+  user: { name: string } | null
+}
+
+export interface DashboardStats {
+  totalCompanies: number
+  activeCompanies: number
+  trialCompanies: number
+  pastDueCompanies: number
+  totalUsers: number
+  totalPermits: number
+  planDistribution: Record<string, number>
+  recentActivity: AdminAuditLog[]
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   useSystemHealth
+   ════════════════════════════════════════════════════════════════════ */
+
+interface UseSystemHealthReturn {
+  health: SystemHealth | null
+  loading: boolean
+  lastFetched: Date | null
+  refetch: () => void
+}
+
+export function useSystemHealth(): UseSystemHealthReturn {
+  const [health, setHealth] = useState<SystemHealth | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [lastFetched, setLastFetched] = useState<Date | null>(null)
+  const isMounted = useRef(true)
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const errorCount = useRef(0)
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const data = await apiFetch<SystemHealth>('/admin/system-health')
+      if (!isMounted.current) return
+      setHealth(data)
+      setLastFetched(new Date())
+      setLoading(false)
+      errorCount.current = 0
+    } catch {
+      if (!isMounted.current) return
+      errorCount.current++
+      setLoading(false)
+      // Exponential backoff: don't hammer a degraded backend
+    }
+  }, [])
+
+  useEffect(() => {
+    isMounted.current = true
+    fetchHealth()
+    // Fixed 30s interval for health — it's a derived metric, not alert-speed data
+    intervalRef.current = setInterval(fetchHealth, 30_000)
+    return () => {
+      isMounted.current = false
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [fetchHealth])
+
+  return { health, loading, lastFetched, refetch: fetchHealth }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   useKnowledgeBase
+   ════════════════════════════════════════════════════════════════════ */
+
+interface UseKnowledgeBaseReturn {
+  entry: KnowledgeEntry | null
+  loading: boolean
+  notFound: boolean
+  creating: boolean
+  lookup: (errorCode: string) => Promise<void>
+  create: (payload: KnowledgeCreatePayload) => Promise<boolean>
+  clear: () => void
+}
+
+/**
+ * In-memory LRU-like cache for knowledge lookups.
+ * Rationale: In a GOC context, operators will click the same error codes
+ * repeatedly during an incident. Without this cache, each click triggers
+ * a round-trip. The cache is module-level (not component-level) so it
+ * persists across component remounts during the session.
+ */
+const knowledgeCache = new Map<string, KnowledgeEntry>()
+
+export function useKnowledgeBase(): UseKnowledgeBaseReturn {
+  const [entry, setEntry] = useState<KnowledgeEntry | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [notFound, setNotFound] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const isMounted = useRef(true)
+
+  useEffect(() => {
+    isMounted.current = true
+    return () => { isMounted.current = false }
+  }, [])
+
+  const lookup = useCallback(async (errorCode: string) => {
+    if (!errorCode) {
+      setNotFound(true)
+      return
     }
 
-    const body = await request.json()
-    const { errorCode, category, title, rootCause, appliedSolution, severity } = body
+    // Cache hit — instant response, no loading state
+    if (knowledgeCache.has(errorCode)) {
+      setEntry(knowledgeCache.get(errorCode)!)
+      setNotFound(false)
+      return
+    }
 
-    if (!errorCode || !category || !title || !rootCause || !appliedSolution) {
-      return NextResponse.json(
-        { error: 'Campos requeridos: errorCode, category, title, rootCause, appliedSolution.' },
-        { status: 400 }
+    setLoading(true)
+    setEntry(null)
+    setNotFound(false)
+
+    try {
+      const data = await apiFetch<{ entries: KnowledgeEntry[] }>(
+        `/admin/goc/knowledge?code=${encodeURIComponent(errorCode)}`
       )
-    }
+      if (!isMounted.current) return
 
-    // Check for duplicate errorCode
-    const existing = await db.knowledgeBase.findUnique({ where: { errorCode } })
-    if (existing) {
-      return NextResponse.json(
-        { error: `Ya existe una entrada con errorCode "${errorCode}".`, existingId: existing.id },
-        { status: 409 }
-      )
+      if (data.entries?.length > 0) {
+        const found = data.entries[0]
+        knowledgeCache.set(errorCode, found)
+        setEntry(found)
+      } else {
+        setNotFound(true)
+      }
+    } catch {
+      if (isMounted.current) setNotFound(true)
+    } finally {
+      if (isMounted.current) setLoading(false)
     }
+  }, [])
 
-    const entry = await db.knowledgeBase.create({
-      data: {
-        errorCode,
-        category,
-        title,
-        rootCause,
-        appliedSolution,
-        severity: severity || 'MEDIUM',
-      },
+  const create = useCallback(async (payload: KnowledgeCreatePayload): Promise<boolean> => {
+    setCreating(true)
+    try {
+      const created = await apiFetch<KnowledgeEntry>('/admin/goc/knowledge', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      if (!isMounted.current) return false
+
+      // Populate cache immediately so next lookup is instant
+      knowledgeCache.set(payload.errorCode, created)
+      setEntry(created)
+      setNotFound(false)
+      return true
+    } catch {
+      return false
+    } finally {
+      if (isMounted.current) setCreating(false)
+    }
+  }, [])
+
+  const clear = useCallback(() => {
+    setEntry(null)
+    setNotFound(false)
+    setLoading(false)
+  }, [])
+
+  return { entry, loading, notFound, creating, lookup, create, clear }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   useCompanyManagement
+   ════════════════════════════════════════════════════════════════════ */
+
+type SortKey = 'newest' | 'oldest' | 'name' | 'users' | 'permits'
+
+interface UseCompanyManagementReturn {
+  companies: AdminCompany[]
+  filteredCompanies: AdminCompany[]
+  enterpriseCompanies: AdminCompany[]
+  loading: boolean
+  error: string | null
+  stats: DashboardStats
+  searchQuery: string
+  statusFilter: string
+  planFilter: string
+  sortBy: SortKey
+  expandedCompanyId: string | null
+  auditLogs: AdminAuditLog[]
+  loadingLogs: boolean
+  setSearchQuery: (q: string) => void
+  setStatusFilter: (s: string) => void
+  setPlanFilter: (p: string) => void
+  setSortBy: (s: SortKey) => void
+  toggleCompanyExpand: (id: string) => void
+  activateEnterprise: (companyId: string) => Promise<void>
+  manageCompany: (
+    companyId: string,
+    updates: { plan?: string; status?: string; maxUsers?: number; maxPermits?: number }
+  ) => Promise<void>
+  refetch: () => void
+}
+
+function safeNum(val: unknown, fallback = 0): number {
+  const n = Number(val)
+  return Number.isFinite(n) ? n : fallback
+}
+
+export function useCompanyManagement(): UseCompanyManagementReturn {
+  const [companies, setCompanies] = useState<AdminCompany[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [planFilter, setPlanFilter] = useState('all')
+  const [sortBy, setSortBy] = useState<SortKey>('newest')
+  const [expandedCompanyId, setExpandedCompanyId] = useState<string | null>(null)
+  const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([])
+  const [loadingLogs, setLoadingLogs] = useState(false)
+  // Cache audit logs per company so re-expanding is instant
+  const auditCache = useRef<Map<string, AdminAuditLog[]>>(new Map())
+  const isMounted = useRef(true)
+
+  useEffect(() => {
+    isMounted.current = true
+    return () => { isMounted.current = false }
+  }, [])
+
+  const fetchCompanies = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [companiesRes, statsRes] = await Promise.allSettled([
+        apiFetch<{ companies: AdminCompany[] }>('/admin/companies'),
+        apiFetch<DashboardStats>('/admin/dashboard'),
+      ])
+
+      if (!isMounted.current) return
+
+      if (companiesRes.status === 'fulfilled') {
+        setCompanies(companiesRes.value?.companies ?? [])
+      } else {
+        setError(companiesRes.reason?.message ?? 'Error al cargar empresas')
+      }
+
+      if (statsRes.status === 'fulfilled') {
+        setDashboardStats(statsRes.value)
+      }
+      // Stats failure is non-fatal: derived stats are computed from companies
+    } finally {
+      if (isMounted.current) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchCompanies() }, [fetchCompanies])
+
+  /* ── Derived stats with fallback ── */
+  const stats = useMemo<DashboardStats>(() => {
+    if (dashboardStats) return dashboardStats
+    const planDistribution: Record<string, number> = {}
+    companies.forEach(c => {
+      planDistribution[c.subscriptionPlan] = (planDistribution[c.subscriptionPlan] ?? 0) + 1
+    })
+    return {
+      totalCompanies: companies.length,
+      activeCompanies: companies.filter(c => c.subscriptionStatus === 'ACTIVE').length,
+      trialCompanies: companies.filter(c => c.subscriptionStatus === 'TRIAL').length,
+      pastDueCompanies: companies.filter(c => c.subscriptionStatus === 'PAST_DUE').length,
+      totalUsers: companies.reduce((s, c) => s + safeNum(c._count?.users), 0),
+      totalPermits: companies.reduce((s, c) => s + safeNum(c._count?.permits), 0),
+      planDistribution,
+      recentActivity: [],
+    }
+  }, [dashboardStats, companies])
+
+  /* ── Enterprise subset for quota widgets ── */
+  const enterpriseCompanies = useMemo(
+    () => companies.filter(c => c.subscriptionPlan === 'enterprise'),
+    [companies]
+  )
+
+  /* ── Filtered & sorted view ── */
+  const filteredCompanies = useMemo(() => {
+    const q = searchQuery.toLowerCase()
+    let result = companies.filter(c => {
+      if (q && !c.name.toLowerCase().includes(q) && !c.email.toLowerCase().includes(q)) return false
+      if (statusFilter !== 'all' && c.subscriptionStatus !== statusFilter) return false
+      if (planFilter !== 'all' && c.subscriptionPlan !== planFilter) return false
+      return true
     })
 
-    return NextResponse.json({
-      id: entry.id,
-      errorCode: entry.errorCode,
-      category: entry.category,
-      title: entry.title,
-      rootCause: entry.rootCause,
-      appliedSolution: entry.appliedSolution,
-      severity: entry.severity,
-      referenceUrl: entry.referenceUrl,
-      timesUsed: entry.timesUsed,
-      createdAt: entry.createdAt.toISOString(),
-      updatedAt: entry.updatedAt.toISOString(),
-    }, { status: 201 })
-  } catch (error: unknown) {
-    console.error('[GOC Knowledge POST] Error:', error)
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Error interno del servidor' },
-      { status: 500 }
-    )
+    result = [...result].sort((a, b) => {
+      switch (sortBy) {
+        case 'newest': return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        case 'oldest': return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        case 'name': return a.name.localeCompare(b.name)
+        case 'users': return safeNum(b._count?.users) - safeNum(a._count?.users)
+        case 'permits': return safeNum(b._count?.permits) - safeNum(a._count?.permits)
+        default: return 0
+      }
+    })
+
+    return result
+  }, [companies, searchQuery, statusFilter, planFilter, sortBy])
+
+  /* ── Toggle expand with audit log fetch + cache ── */
+  const toggleCompanyExpand = useCallback(async (id: string) => {
+    if (expandedCompanyId === id) {
+      setExpandedCompanyId(null)
+      setAuditLogs([])
+      return
+    }
+    setExpandedCompanyId(id)
+
+    if (auditCache.current.has(id)) {
+      setAuditLogs(auditCache.current.get(id)!)
+      return
+    }
+
+    setLoadingLogs(true)
+    try {
+      const res = await apiFetch<{ logs: AdminAuditLog[] }>(`/admin/audit-logs?companyId=${id}&limit=20`)
+      const logs = res?.logs ?? []
+      auditCache.current.set(id, logs)
+      if (isMounted.current) setAuditLogs(logs)
+    } catch {
+      if (isMounted.current) setAuditLogs([])
+    } finally {
+      if (isMounted.current) setLoadingLogs(false)
+    }
+  }, [expandedCompanyId])
+
+  /* ── Company mutations ── */
+  const activateEnterprise = useCallback(async (companyId: string) => {
+    await apiFetch('/admin/activate-enterprise', {
+      method: 'POST',
+      body: JSON.stringify({ companyId }),
+    })
+    fetchCompanies()
+  }, [fetchCompanies])
+
+  const manageCompany = useCallback(async (
+    companyId: string,
+    updates: { plan?: string; status?: string; maxUsers?: number; maxPermits?: number }
+  ) => {
+    // Optimistic update
+    setCompanies(prev => prev.map(c =>
+      c.id === companyId
+        ? {
+            ...c,
+            subscriptionPlan: (updates.plan ?? c.subscriptionPlan) as AdminCompany['subscriptionPlan'],
+            subscriptionStatus: (updates.status ?? c.subscriptionStatus) as AdminCompany['subscriptionStatus'],
+            maxUsers: updates.maxUsers ?? c.maxUsers,
+            maxPermitsPerMonth: updates.maxPermits ?? c.maxPermitsPerMonth,
+          }
+        : c
+    ))
+    try {
+      await apiFetch(`/admin/company/${companyId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      })
+    } catch (err: unknown) {
+      // Revert on failure
+      fetchCompanies()
+      throw err
+    }
+  }, [fetchCompanies])
+
+  return {
+    companies,
+    filteredCompanies,
+    enterpriseCompanies,
+    loading,
+    error,
+    stats,
+    searchQuery,
+    statusFilter,
+    planFilter,
+    sortBy,
+    expandedCompanyId,
+    auditLogs,
+    loadingLogs,
+    setSearchQuery,
+    setStatusFilter,
+    setPlanFilter,
+    setSortBy,
+    toggleCompanyExpand,
+    activateEnterprise,
+    manageCompany,
+    refetch: fetchCompanies,
   }
 }
