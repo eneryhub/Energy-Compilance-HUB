@@ -146,48 +146,70 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
 
   /* ── Core fetch logic ── */
   const fetchAlerts = useCallback(async (isInitial = false) => {
-    if (isInitial) setLoading(true);
+    if (isInitial) setLoading(true)
     try {
-      const data = await apiFetch('/admin/goc/alerts');
+      const data = await apiFetch('/admin/goc/alerts')
       
       // VALIDACIÓN DE FECHAS AQUÍ
       const validatedData = (data || []).map((alert: any) => ({
         ...alert,
         // Si no hay fecha, usamos la actual para evitar que la UI explote
         createdAt: alert.createdAt ? alert.createdAt : new Date().toISOString()
-      }));
+      }))
   
       setAlerts(prev => {
-        if (isInitial) return validatedData;
+        if (isInitial) return validatedData
         
         const newIds = validatedData
           .filter((a: GOCAlert) => !prev.find(p => p.id === a.id))
-          .map((a: GOCAlert) => a.id);
+          .map((a: GOCAlert) => a.id)
   
         if (newIds.length > 0) {
-          setNewAlertIds(prevIds => new Set([...prevIds, ...newIds]));
+          setNewAlertIds(prevIds => new Set([...prevIds, ...newIds]))
+          // Limpiar el indicador "nuevo" después de 5 segundos
+          if (newAlertClearTimer.current) clearTimeout(newAlertClearTimer.current)
+          newAlertClearTimer.current = setTimeout(() => {
+            setNewAlertIds(new Set())
+          }, 5000)
         }
-        return validatedData;
-      });
+        return validatedData
+      })
     } catch (err) {
-      console.error('Error fetching alerts:', err);
+      console.error('Error fetching alerts:', err)
     } finally {
-      if (isInitial) setLoading(false);
+      if (isInitial) setLoading(false)
     }
-  }, []);
+  }, [])
+
+  /* ── Smart scheduling: decide interval based on critical alerts ── */
+  const scheduleNextPoll = useCallback(() => {
+    if (!isMountedRef.current) return
+    // Determine interval: 5s if there are critical unacknowledged alerts, else 15s
+    const hasCritical = alerts.some(a => a.severity === 'CRITICAL' && !a.isAcknowledged)
+    const intervalMs = hasCritical ? 5000 : 15000
+    pollingRef.current = setTimeout(() => {
+      fetchAlerts().then(() => scheduleNextPoll())
+    }, intervalMs)
+  }, [alerts, fetchAlerts])
+
   /* ── Visibility API: pause polling on hidden tab ── */
   useEffect(() => {
     isMountedRef.current = true
 
     const handleVisibility = () => {
       if (document.hidden) {
-        if (pollingRef.current) clearTimeout(pollingRef.current)
+        if (pollingRef.current) {
+          clearTimeout(pollingRef.current)
+          pollingRef.current = null
+        }
       } else {
-        fetchAlerts().then(scheduleNextPoll)
+        // Tab visible again: fetch immediately and resume polling
+        fetchAlerts().then(() => scheduleNextPoll())
       }
     }
 
-    fetchAlerts().then(scheduleNextPoll)
+    // Initial fetch and start polling
+    fetchAlerts(true).then(() => scheduleNextPoll())
     document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
@@ -265,6 +287,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     setSearchQuery,
     setPanicMode,
     acknowledgeAlert,
-    refetch: fetchAlerts,
+    refetch: () => fetchAlerts(true),
   }
 }
