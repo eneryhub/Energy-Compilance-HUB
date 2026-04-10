@@ -149,8 +149,9 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     try {
       const data = await apiFetch('/admin/goc/alerts')
       
-      // Ensure data is an array
-      let alertsArray = Array.isArray(data) ? data : []
+      // 🔥 FIX: Extract alerts array from the response object
+      // The API returns { alerts: [...], total, unacknowledged }
+      const alertsArray = Array.isArray(data) ? data : (data?.alerts ?? [])
       
       const validatedData = alertsArray.map((alert: any) => ({
         ...alert,
