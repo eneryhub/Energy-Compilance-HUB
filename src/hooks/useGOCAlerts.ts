@@ -90,14 +90,15 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
   const [searchQuery, setSearchQuery] = useState('')
   const [panicMode, setPanicMode] = useState(false)
 
-  // Ref-based new alert tracking: avoids setState + re-render cycle for animation tracking
+  // Ref-based new alert tracking
   const [newAlertIds, setNewAlertIds] = useState<Set<string>>(new Set())
-  const knownIdsRef = useRef<Set<string>>(new Set())
   const newAlertClearTimer = useRef<NodeJS.Timeout | null>(null)
   const pollingRef = useRef<NodeJS.Timeout | null>(null)
   const isMountedRef = useRef(true)
+  // Ref to store current alerts for interval decision without triggering re-renders
+  const alertsRef = useRef<GOCAlert[]>([])
 
-  /* ── Audio context (lazy init — avoids browser autoplay blocks) ── */
+  /* ── Audio context (lazy init) ── */
   const audioCtxRef = useRef<AudioContext | null>(null)
 
   const playCriticalBeep = useCallback((severity: AlertSeverity) => {
@@ -112,7 +113,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
       osc.connect(gain)
       gain.connect(ctx.destination)
 
-      // Different frequencies by severity — operators learn to distinguish by ear
       const freqMap: Record<AlertSeverity, number> = {
         CRITICAL: 1200,
         HIGH: 880,
@@ -127,7 +127,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
       osc.start()
 
       if (repeats > 1) {
-        // Triple-beep for CRITICAL
         gain.gain.setValueAtTime(0.4, ctx.currentTime)
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15)
         gain.gain.setValueAtTime(0.4, ctx.currentTime + 0.2)
@@ -140,7 +139,7 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
         osc.stop(ctx.currentTime + 0.3)
       }
     } catch {
-      // Audio API not available (SSR / permissions)
+      // Audio API not available
     }
   }, [soundEnabled])
 
@@ -150,10 +149,9 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     try {
       const data = await apiFetch('/admin/goc/alerts')
       
-      // 🔥 FIX: Ensure data is an array
+      // Ensure data is an array
       let alertsArray = Array.isArray(data) ? data : []
       
-      // VALIDACIÓN DE FECHAS
       const validatedData = alertsArray.map((alert: any) => ({
         ...alert,
         createdAt: alert.createdAt ? alert.createdAt : new Date().toISOString()
@@ -168,7 +166,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
   
         if (newIds.length > 0) {
           setNewAlertIds(prevIds => new Set([...prevIds, ...newIds]))
-          // Limpiar el indicador "nuevo" después de 5 segundos
           if (newAlertClearTimer.current) clearTimeout(newAlertClearTimer.current)
           newAlertClearTimer.current = setTimeout(() => {
             setNewAlertIds(new Set())
@@ -176,6 +173,8 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
         }
         return validatedData
       })
+      // Update ref with latest alerts for polling decision
+      alertsRef.current = validatedData
     } catch (err) {
       console.error('Error fetching alerts:', err)
     } finally {
@@ -183,16 +182,16 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     }
   }, [])
 
-  /* ── Smart scheduling: decide interval based on critical alerts ── */
+  /* ── Smart scheduling: uses ref to avoid re-creating the function ── */
   const scheduleNextPoll = useCallback(() => {
     if (!isMountedRef.current) return
-    // Determine interval: 5s if there are critical unacknowledged alerts, else 15s
-    const hasCritical = alerts.some(a => a.severity === 'CRITICAL' && !a.isAcknowledged)
+    // Use ref to read current alerts without causing re-renders
+    const hasCritical = alertsRef.current.some(a => a.severity === 'CRITICAL' && !a.isAcknowledged)
     const intervalMs = hasCritical ? 5000 : 15000
     pollingRef.current = setTimeout(() => {
       fetchAlerts().then(() => scheduleNextPoll())
     }, intervalMs)
-  }, [alerts, fetchAlerts])
+  }, [fetchAlerts])
 
   /* ── Visibility API: pause polling on hidden tab ── */
   useEffect(() => {
@@ -205,7 +204,7 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
           pollingRef.current = null
         }
       } else {
-        // Tab visible again: fetch immediately and resume polling
+        // Resume: fetch immediately and restart polling
         fetchAlerts().then(() => scheduleNextPoll())
       }
     }
@@ -220,9 +219,10 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
       if (newAlertClearTimer.current) clearTimeout(newAlertClearTimer.current)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [fetchAlerts, scheduleNextPoll])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Empty dependency array ensures effect runs only once
 
-  /* ── Derived stats: memoized, recomputes only on alerts change ── */
+  /* ── Derived stats ── */
   const stats = useMemo<AlertStats>(() => ({
     total: alerts.length,
     unacknowledged: alerts.filter(a => !a.isAcknowledged).length,
@@ -230,11 +230,10 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
     high: alerts.filter(a => a.severity === 'HIGH' && !a.isAcknowledged).length,
   }), [alerts])
 
-  /* ── Filtered view: O(n) single-pass filter, no intermediate arrays ── */
+  /* ── Filtered view ── */
   const filteredAlerts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     return alerts.filter(alert => {
-      // In panic mode: only show unacknowledged CRITICAL/HIGH
       if (panicMode && (alert.isAcknowledged || (alert.severity !== 'CRITICAL' && alert.severity !== 'HIGH'))) {
         return false
       }
@@ -254,7 +253,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
   /* ── Optimistic acknowledge ── */
   const acknowledgeAlert = useCallback(async (alertId: string) => {
     setAcknowledging(alertId)
-    // Optimistic update: immediately reflect in UI
     setAlerts(prev =>
       prev.map(a => a.id === alertId ? { ...a, isAcknowledged: true } : a)
     )
@@ -264,7 +262,6 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
         body: JSON.stringify({ alertId }),
       })
     } catch {
-      // Rollback on failure
       setAlerts(prev =>
         prev.map(a => a.id === alertId ? { ...a, isAcknowledged: false } : a)
       )
