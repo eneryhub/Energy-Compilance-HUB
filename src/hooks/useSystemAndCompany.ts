@@ -326,8 +326,9 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
   useEffect(() => { fetchCompanies() }, [fetchCompanies])
 
   /* ── Derived stats with fallback ── */
+  // Siempre se calculan a partir de companies para garantizar números,
+  // solo se toma recentActivity del dashboard (si existe)
   const stats = useMemo<DashboardStats>(() => {
-    if (dashboardStats) return dashboardStats
     const planDistribution: Record<string, number> = {}
     companies.forEach(c => {
       planDistribution[c.subscriptionPlan] = (planDistribution[c.subscriptionPlan] ?? 0) + 1
@@ -340,9 +341,9 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
       totalUsers: companies.reduce((s, c) => s + safeNum(c._count?.users), 0),
       totalPermits: companies.reduce((s, c) => s + safeNum(c._count?.permits), 0),
       planDistribution,
-      recentActivity: [],
+      recentActivity: dashboardStats?.recentActivity ?? [],
     }
-  }, [dashboardStats, companies])
+  }, [companies, dashboardStats])
 
   /* ── Enterprise subset for quota widgets ── */
   const enterpriseCompanies = useMemo(

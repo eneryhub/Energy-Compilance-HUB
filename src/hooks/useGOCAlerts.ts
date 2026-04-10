@@ -145,67 +145,36 @@ export function useGOCAlerts(soundEnabled: boolean): UseGOCAlertsReturn {
   }, [soundEnabled])
 
   /* ── Core fetch logic ── */
-  const fetchAlerts = useCallback(async () => {
+  const fetchAlerts = useCallback(async (isInitial = false) => {
+    if (isInitial) setLoading(true);
     try {
-      const res = await apiFetch<{ alerts: GOCAlert[]; total: number; unacknowledged: number }>(
-        '/admin/goc/alerts?limit=200'
-      )
-      if (!isMountedRef.current) return
-
-      const incoming = res.alerts ?? []
-
-      // Delta detection: find IDs not in our known set
-      const freshIds = new Set<string>()
-      let highestNewSeverity: AlertSeverity | null = null
-      const severityOrder: AlertSeverity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
-
-      for (const alert of incoming) {
-        if (!knownIdsRef.current.has(alert.id) && !alert.isAcknowledged) {
-          freshIds.add(alert.id)
-          // Track the worst severity of new alerts
-          const idx = severityOrder.indexOf(alert.severity)
-          const currentIdx = highestNewSeverity ? severityOrder.indexOf(highestNewSeverity) : 999
-          if (idx < currentIdx) highestNewSeverity = alert.severity
+      const data = await apiFetch('/admin/goc/alerts');
+      
+      // VALIDACIÓN DE FECHAS AQUÍ
+      const validatedData = (data || []).map((alert: any) => ({
+        ...alert,
+        // Si no hay fecha, usamos la actual para evitar que la UI explote
+        createdAt: alert.createdAt ? alert.createdAt : new Date().toISOString()
+      }));
+  
+      setAlerts(prev => {
+        if (isInitial) return validatedData;
+        
+        const newIds = validatedData
+          .filter((a: GOCAlert) => !prev.find(p => p.id === a.id))
+          .map((a: GOCAlert) => a.id);
+  
+        if (newIds.length > 0) {
+          setNewAlertIds(prevIds => new Set([...prevIds, ...newIds]));
         }
-        knownIdsRef.current.add(alert.id)
-      }
-
-      if (freshIds.size > 0) {
-        setNewAlertIds(freshIds)
-        if (highestNewSeverity) playCriticalBeep(highestNewSeverity)
-
-        // Auto-enter panic mode on CRITICAL
-        if (highestNewSeverity === 'CRITICAL') {
-          setPanicMode(true)
-        }
-
-        // Clear "new" highlight after 3 seconds
-        if (newAlertClearTimer.current) clearTimeout(newAlertClearTimer.current)
-        newAlertClearTimer.current = setTimeout(() => {
-          setNewAlertIds(new Set())
-        }, 3000)
-      }
-
-      setAlerts(incoming)
-      setLoading(false)
-    } catch {
-      if (isMountedRef.current) setLoading(false)
+        return validatedData;
+      });
+    } catch (err) {
+      console.error('Error fetching alerts:', err);
+    } finally {
+      if (isInitial) setLoading(false);
     }
-  }, [playCriticalBeep])
-
-  /* ── Adaptive polling: 5s when critical present, 15s otherwise ── */
-  const scheduleNextPoll = useCallback(() => {
-    if (pollingRef.current) clearTimeout(pollingRef.current)
-    setAlerts(current => {
-      const hasCritical = current.some(a => a.severity === 'CRITICAL' && !a.isAcknowledged)
-      const delay = hasCritical ? 5_000 : 15_000
-      pollingRef.current = setTimeout(() => {
-        fetchAlerts().then(scheduleNextPoll)
-      }, delay)
-      return current
-    })
-  }, [fetchAlerts])
-
+  }, []);
   /* ── Visibility API: pause polling on hidden tab ── */
   useEffect(() => {
     isMountedRef.current = true
