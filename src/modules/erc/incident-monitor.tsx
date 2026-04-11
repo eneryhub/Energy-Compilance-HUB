@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { io, Socket } from 'socket.io-client'
 import { motion, AnimatePresence } from 'framer-motion'
 import { apiFetch } from '@/lib/api'
 import { useToast } from '@/hooks/use-toast'
@@ -58,6 +57,8 @@ import {
   AlertOctagon,
   MessageSquare,
   ChevronRight,
+  WifiOff,
+  RefreshCw,
 } from 'lucide-react'
 
 // ============ Types ============
@@ -225,7 +226,6 @@ export default function IncidentMonitor({
   userName,
 }: IncidentMonitorProps) {
   const { toast } = useToast()
-  const socketRef = useRef<Socket | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Data state
@@ -266,20 +266,51 @@ export default function IncidentMonitor({
 
   const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'MANAGER'].includes(userRole)
 
-  // ============ Data fetching ============
+  // ============ Data fetching with failure tracking ============
 
-  const fetchData = useCallback(async () => {
+  const failureCountRef = useRef(0)
+  const MAX_FAILURES = 5
+  const [dataError, setDataError] = useState<string | null>(null)
+
+  const fetchData = useCallback(async (isRetry = false) => {
     try {
-      const [alertsData, reportsData, statsData] = await Promise.all([
+      // Use allSettled so stats failure doesn't kill alerts/reports loading
+      const [alertsResult, reportsResult, statsResult] = await Promise.allSettled([
         apiFetch<EmergencyAlert[]>('/erc/alerts'),
         apiFetch<HSEReport[]>('/erc/reports'),
         apiFetch<ErcStats>('/erc/stats'),
       ])
-      setAlerts(alertsData)
-      setReports(reportsData)
-      setStats(statsData)
+
+      if (alertsResult.status === 'fulfilled') setAlerts(alertsResult.value)
+      else console.warn('[ERC] Failed to load alerts')
+
+      if (reportsResult.status === 'fulfilled') setReports(reportsResult.value)
+      else console.warn('[ERC] Failed to load reports')
+
+      if (statsResult.status === 'fulfilled') {
+        setStats(statsResult.value)
+        failureCountRef.current = 0
+        setDataError(null)
+      } else {
+        // Stats failed — set empty defaults so UI doesn't crash
+        setStats({
+          activeAlerts: 0, totalAlerts: 0, totalReports: 0, openReports: 0,
+          resolvedReports: 0, criticalOpenReports: 0,
+          alertsByType: {}, reportsByCategoria: {}, reportsByEstado: {},
+          recentAlerts: [], recentReports: [],
+          alertsLast7Days: 0, reportsLast7Days: 0, reportsLast30Days: 0,
+          avgResolutionHours: null, resolutionRate: 0,
+        })
+        failureCountRef.current++
+      }
+
+      // If alerts AND reports both failed, that's a real connectivity issue
+      if (alertsResult.status === 'rejected' && reportsResult.status === 'rejected') {
+        failureCountRef.current++
+        setDataError('Error de conexion. Verifica tu red.')
+      }
     } catch {
-      // Silent fail — data will remain as-is or empty
+      failureCountRef.current++
     } finally {
       setLoading(false)
     }
@@ -301,8 +332,6 @@ export default function IncidentMonitor({
       })
 
       setAlerts((prev) => prev.map((a) => (a.id === alertId ? updated : a)))
-
-      socketRef.current?.emit('alert-updated', { companyId, alert: updated })
 
       toast({
         title: estado === 'ATENDIDA' ? 'Alerta atendida' : 'Alerta descartada',
@@ -350,85 +379,98 @@ export default function IncidentMonitor({
     }
   }
 
-  // ============ Effects ============
+  // ============ Effects — polling with backoff ============
 
   useEffect(() => {
     fetchData()
-    pollingRef.current = setInterval(fetchData, 15_000)
+
+    // Polling with exponential backoff on repeated failures
+    // Normal: every 15s. After failures: 30s, 60s, 120s, up to 120s max
+    const BASE_INTERVAL = 15_000
+    const MAX_INTERVAL = 120_000
+
+    const tick = async () => {
+      if (failureCountRef.current >= MAX_FAILURES) {
+        // Too many failures — stop polling entirely, user must retry manually
+        if (pollingRef.current) clearInterval(pollingRef.current)
+        pollingRef.current = null
+        setDataError('Se detuvo la actualizacion automatica.')
+        return
+      }
+
+      await fetchData()
+
+      // Adjust interval based on failure count
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        const interval = Math.min(
+          BASE_INTERVAL * Math.pow(2, failureCountRef.current),
+          MAX_INTERVAL
+        )
+        pollingRef.current = setInterval(tick, interval)
+      }
+    }
+
+    pollingRef.current = setInterval(tick, BASE_INTERVAL)
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
     }
   }, [fetchData])
 
-  // WebSocket connection (graceful degradation)
-  useEffect(() => {
-    let connected = false
-
-    try {
-      const socket = io('/?XTransformPort=3004', {
-        transports: ['websocket', 'polling'],
-        forceNew: true,
-        reconnection: true,
-        reconnectionAttempts: 2,
-        reconnectionDelay: 5000,
-        timeout: 5_000,
-      })
-
-      socketRef.current = socket
-
-      socket.on('connect_error', () => {
-        connected = false
-      })
-
-      socket.on('connect', () => {
-        connected = true
-        socket.emit('join-company', { companyId })
-      })
-
-      socket.on('emergency-alert', (data: { alert: EmergencyAlert }) => {
-        const newAlert = data.alert
-        setAlerts((prev) => {
-          if (prev.some((a) => a.id === newAlert.id)) return prev
-          return [newAlert, ...prev]
-        })
-
-        setStats((prev) => {
-          if (!prev) return prev
-          return {
-            ...prev,
-            activeAlerts: prev.activeAlerts + 1,
-            totalAlerts: prev.totalAlerts + 1,
-            alertsLast7Days: prev.alertsLast7Days + 1,
-          }
-        })
-
-        toast({
-          title: 'Nueva Alerta de Emergencia',
-          description: `${getAlertTypeConfig(newAlert.tipo).label} — ${newAlert.user?.name || 'Usuario'}`,
-          variant: 'destructive',
-        })
-      })
-
-      socket.on('alert-status-changed', (data: { alert: EmergencyAlert }) => {
-        setAlerts((prev) =>
-          prev.map((a) => (a.id === data.alert.id ? data.alert : a))
-        )
-      })
-
-      return () => {
-        socket.disconnect()
-        socketRef.current = null
-      }
-    } catch {
-      // WebSocket not available — polling is the fallback
-    }
-  }, [companyId, toast])
+  // WebSocket DISABLED — mini-service on port 3004 is not deployed to production.
+  // The polling fallback with backoff handles real-time updates reliably.
+  // Uncomment below when the WebSocket service is deployed.
+  //
+  // useEffect(() => {
+  //   try {
+  //     const socket = io('/?XTransformPort=3004', {
+  //       transports: ['websocket', 'polling'],
+  //       forceNew: true,
+  //       reconnection: true,
+  //       reconnectionAttempts: 2,
+  //       reconnectionDelay: 5000,
+  //       timeout: 5_000,
+  //     })
+  //     socketRef.current = socket
+  //     socket.on('connect_error', () => {})
+  //     socket.on('connect', () => { socket.emit('join-company', { companyId }) })
+  //     socket.on('emergency-alert', (data: { alert: EmergencyAlert }) => {
+  //       setAlerts((prev) => prev.some((a) => a.id === data.alert.id) ? prev : [data.alert, ...prev])
+  //       toast({ title: 'Nueva Alerta de Emergencia', description: `${getAlertTypeConfig(data.alert.tipo).label}`, variant: 'destructive' })
+  //     })
+  //     socket.on('alert-status-changed', (data: { alert: EmergencyAlert }) => {
+  //       setAlerts((prev) => prev.map((a) => (a.id === data.alert.id ? data.alert : a)))
+  //     })
+  //     return () => { socket.disconnect(); socketRef.current = null }
+  //   } catch { /* polling fallback */ }
+  // }, [companyId, toast])
 
   // ============ Image preview handler ============
 
   const openImagePreview = (url: string) => {
     setImagePreviewUrl(url)
   }
+
+  // ============ Manual retry handler ============
+
+  const handleManualRetry = useCallback(() => {
+    failureCountRef.current = 0
+    setDataError(null)
+    setLoading(true)
+    fetchData()
+    // Restart polling
+    if (!pollingRef.current) {
+      pollingRef.current = setInterval(async () => {
+        if (failureCountRef.current >= MAX_FAILURES) {
+          if (pollingRef.current) clearInterval(pollingRef.current)
+          pollingRef.current = null
+          setDataError('Se detuvo la actualizacion automatica.')
+          return
+        }
+        await fetchData()
+      }, 15_000)
+    }
+  }, [fetchData])
 
   // ============ Loading state ============
 
@@ -465,6 +507,25 @@ export default function IncidentMonitor({
 
   return (
     <div className="space-y-6">
+      {/* ── Data Error / Retry Banner ── */}
+      {dataError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <WifiOff className="h-4 w-4 text-amber-600 shrink-0" />
+            <p className="text-xs text-amber-700 font-medium">{dataError}</p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs border-amber-300 text-amber-700 hover:bg-amber-100 gap-1"
+            onClick={handleManualRetry}
+          >
+            <RefreshCw className="h-3 w-3" />
+            Reintentar
+          </Button>
+        </div>
+      )}
+
       {/* ── Active Alerts Banner ── */}
       <AnimatePresence>
         {activeAlerts.length > 0 && (
@@ -675,8 +736,9 @@ export default function IncidentMonitor({
           <CardContent className="px-4 pb-4">
             <div className="space-y-2.5">
               {Object.entries(ALERT_TYPE_CONFIG).map(([tipo, config]) => {
-                const count = stats?.alertsByType[tipo] ?? 0
-                const maxCount = Math.max(...Object.values(stats?.alertsByType ?? {}), 1)
+                const count = stats?.alertsByTipo?.[tipo] ?? stats?.alertsByType?.[tipo] ?? 0
+                const alertsByTypeData = stats?.alertsByTipo ?? stats?.alertsByType ?? {}
+                const maxCount = Math.max(...Object.values(alertsByTypeData), 1)
                 const pct = Math.round((count / maxCount) * 100)
 
                 return (
@@ -714,8 +776,9 @@ export default function IncidentMonitor({
           <CardContent className="px-4 pb-4">
             <div className="space-y-2.5">
               {Object.entries(CATEGORIA_LABELS).map(([cat, label]) => {
-                const count = stats?.reportsByCategoria[cat] ?? 0
-                const maxCount = Math.max(...Object.values(stats?.reportsByCategoria ?? {}), 1)
+                const catData = stats?.reportsByCategoria ?? {}
+                const count = catData[cat] ?? 0
+                const maxCount = Math.max(...Object.values(catData), 1)
                 const pct = Math.round((count / maxCount) * 100)
                 const CatIcon = CATEGORIA_ICONS[cat] || HelpCircle
 
@@ -858,13 +921,18 @@ export default function IncidentMonitor({
                       </Button>
                     </div>
                     <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-                      {(stats?.recentAlerts ?? []).length === 0 ? (
-                        <div className="text-center py-8 text-slate-400">
-                          <ShieldAlert className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                          <p className="text-xs">Sin alertas registradas</p>
-                        </div>
-                      ) : (
-                        (stats?.recentAlerts ?? []).map((alert) => {
+                      {/* Prefer stats.recentAlerts, fall back to direct alerts state */}
+                      {(() => {
+                        const recentAlertsToShow = (stats?.recentAlerts && stats.recentAlerts.length > 0)
+                          ? stats.recentAlerts
+                          : alerts.slice(0, 10)
+                        return recentAlertsToShow.length === 0 ? (
+                          <div className="text-center py-8 text-slate-400">
+                            <ShieldAlert className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                            <p className="text-xs">Sin alertas registradas</p>
+                          </div>
+                        ) : (
+                          recentAlertsToShow.map((alert) => {
                           const typeConfig = getAlertTypeConfig(alert.tipo)
                           const estadoConfig = ESTADO_CONFIG[alert.estado] || ESTADO_CONFIG.ACTIVA
                           const TipoIcon = typeConfig.icon
@@ -902,7 +970,8 @@ export default function IncidentMonitor({
                             </button>
                           )
                         })
-                      )}
+                        )
+                      })()}
                     </div>
                   </div>
 
@@ -918,13 +987,18 @@ export default function IncidentMonitor({
                       </Button>
                     </div>
                     <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-                      {(stats?.recentReports ?? []).length === 0 ? (
-                        <div className="text-center py-8 text-slate-400">
-                          <FileText className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                          <p className="text-xs">Sin reportes registrados</p>
-                        </div>
-                      ) : (
-                        (stats?.recentReports ?? []).map((report) => {
+                      {/* Prefer stats.recentReports, fall back to direct reports state */}
+                      {(() => {
+                        const recentReportsToShow = (stats?.recentReports && stats.recentReports.length > 0)
+                          ? stats.recentReports
+                          : reports.slice(0, 10)
+                        return recentReportsToShow.length === 0 ? (
+                          <div className="text-center py-8 text-slate-400">
+                            <FileText className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                            <p className="text-xs">Sin reportes registrados</p>
+                          </div>
+                        ) : (
+                          recentReportsToShow.map((report) => {
                           const estadoConfig = ESTADO_CONFIG[report.estado] || {
                             label: report.estado,
                             className: 'bg-slate-100 text-slate-600 border-slate-300',
@@ -970,7 +1044,8 @@ export default function IncidentMonitor({
                             </button>
                           )
                         })
-                      )}
+                        )
+                      })()}
                     </div>
                   </div>
                 </div>

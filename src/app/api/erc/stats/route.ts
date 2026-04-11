@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 
-// ============ GET: ERC Dashboard Stats (Industrial-Grade) ============
+// ============ GET: ERC Dashboard Stats (Ultra-Defensive) ============
+// Each query is independently wrapped so one failure never crashes the whole response.
+// Returns partial data with safe defaults (0/null/empty) for any failing query.
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession(request)
@@ -15,7 +17,17 @@ export async function GET(request: NextRequest) {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
-    // Run all queries in parallel for performance
+    // Helper: run a single Prisma query, return fallback on ANY error
+    async function safeQuery<T>(fn: () => Promise<T>, fallback: T, label: string): Promise<T> {
+      try {
+        return await fn()
+      } catch (err) {
+        console.error(`[ERC Stats] Query failed (${label}):`, err instanceof Error ? err.message : err)
+        return fallback
+      }
+    }
+
+    // Run all queries in parallel, each independently safe
     const [
       activeAlerts,
       totalAlerts,
@@ -33,126 +45,84 @@ export async function GET(request: NextRequest) {
       avgResolutionTimeResult,
       criticalOpenReports,
     ] = await Promise.all([
-      // Active alerts count (estado = ACTIVA)
-      db.emergencyAlert.count({
-        where: { companyId, estado: 'ACTIVA' },
-      }),
-
-      // Total alerts all time
-      db.emergencyAlert.count({
-        where: { companyId },
-      }),
-
-      // Total HSE reports
-      db.hSEReport.count({
-        where: { companyId },
-      }),
-
-      // Open reports count (estado = ABIERTO)
-      db.hSEReport.count({
-        where: { companyId, estado: 'ABIERTO' },
-      }),
-
-      // Resolved reports count
-      db.hSEReport.count({
-        where: { companyId, estado: 'RESUELTO' },
-      }),
-
-      // Alerts grouped by tipo
-      db.emergencyAlert.groupBy({
-        by: ['tipo'],
-        where: { companyId },
-        _count: { tipo: true },
-      }),
-
-      // Reports grouped by categoria
-      db.hSEReport.groupBy({
-        by: ['categoria'],
-        where: { companyId },
-        _count: { categoria: true },
-      }),
-
-      // Reports grouped by estado
-      db.hSEReport.groupBy({
-        by: ['estado'],
-        where: { companyId },
-        _count: { estado: true },
-      }),
-
-      // Last 10 alerts with user name
-      db.emergencyAlert.findMany({
-        where: { companyId },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-        include: {
-          user: {
-            select: { id: true, name: true, email: true },
-          },
-        },
-      }),
-
-      // Last 10 reports with user name
-      db.hSEReport.findMany({
-        where: { companyId },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-        include: {
-          user: {
-            select: { id: true, name: true, email: true },
-          },
-        },
-      }),
-
-      // Alerts in the last 7 days
-      db.emergencyAlert.count({
-        where: {
-          companyId,
-          createdAt: { gte: sevenDaysAgo },
-        },
-      }),
-
-      // Reports in the last 7 days
-      db.hSEReport.count({
-        where: {
-          companyId,
-          createdAt: { gte: sevenDaysAgo },
-        },
-      }),
-
-      // Reports in the last 30 days
-      db.hSEReport.count({
-        where: {
-          companyId,
-          createdAt: { gte: thirtyDaysAgo },
-        },
-      }),
-
-      // Average resolution time for resolved reports (in hours)
-      db.hSEReport.findMany({
-        where: {
-          companyId,
-          estado: 'RESUELTO',
-          updatedAt: { not: null },
-        },
-        select: {
-          createdAt: true,
-          updatedAt: true,
-        },
-        take: 50,
-        orderBy: { updatedAt: 'desc' },
-      }),
-
-      // Critical open reports (ALTA priority + ABIERTO)
-      db.hSEReport.count({
-        where: {
-          companyId,
-          estado: 'ABIERTO',
-          prioridad: 'ALTA',
-        },
-      }),
+      safeQuery(
+        () => db.emergencyAlert.count({ where: { companyId, estado: 'ACTIVA' } }),
+        0, 'activeAlerts'
+      ),
+      safeQuery(
+        () => db.emergencyAlert.count({ where: { companyId } }),
+        0, 'totalAlerts'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId } }),
+        0, 'totalReports'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId, estado: 'ABIERTO' } }),
+        0, 'openReports'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId, estado: 'RESUELTO' } }),
+        0, 'resolvedReports'
+      ),
+      safeQuery(
+        () => db.emergencyAlert.groupBy({ by: ['tipo'], where: { companyId }, _count: { tipo: true } }),
+        [] as Array<{ tipo: string; _count: { tipo: number } }>, 'alertsByType'
+      ),
+      safeQuery(
+        () => db.hSEReport.groupBy({ by: ['categoria'], where: { companyId }, _count: { categoria: true } }),
+        [] as Array<{ categoria: string; _count: { categoria: number } }>, 'reportsByCategoria'
+      ),
+      safeQuery(
+        () => db.hSEReport.groupBy({ by: ['estado'], where: { companyId }, _count: { estado: true } }),
+        [] as Array<{ estado: string; _count: { estado: number } }>, 'reportsByEstado'
+      ),
+      safeQuery(
+        () => db.emergencyAlert.findMany({
+          where: { companyId },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          include: { user: { select: { id: true, name: true, email: true } } },
+        }),
+        [], 'recentAlerts'
+      ),
+      safeQuery(
+        () => db.hSEReport.findMany({
+          where: { companyId },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          include: { user: { select: { id: true, name: true, email: true } } },
+        }),
+        [], 'recentReports'
+      ),
+      safeQuery(
+        () => db.emergencyAlert.count({ where: { companyId, createdAt: { gte: sevenDaysAgo } } }),
+        0, 'alertsLast7Days'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId, createdAt: { gte: sevenDaysAgo } } }),
+        0, 'reportsLast7Days'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId, createdAt: { gte: thirtyDaysAgo } } }),
+        0, 'reportsLast30Days'
+      ),
+      safeQuery(
+        () => db.hSEReport.findMany({
+          where: { companyId, estado: 'RESUELTO', updatedAt: { not: null } },
+          select: { createdAt: true, updatedAt: true },
+          take: 50,
+          orderBy: { updatedAt: 'desc' },
+        }),
+        [] as Array<{ createdAt: Date; updatedAt: Date }>, 'avgResolutionTime'
+      ),
+      safeQuery(
+        () => db.hSEReport.count({ where: { companyId, estado: 'ABIERTO', prioridad: 'ALTA' } }),
+        0, 'criticalOpenReports'
+      ),
     ])
 
-    // Build alertsByType record from groupBy result
+    // Build alertsByType record
     const alertsByType: Record<string, number> = {}
     for (const item of alertsByTypeResult) {
       alertsByType[item.tipo] = item._count.tipo
@@ -207,8 +177,28 @@ export async function GET(request: NextRequest) {
       resolutionRate,
     })
   } catch (error: unknown) {
+    // Last resort fallback — return empty stats so the dashboard still renders
     const message = error instanceof Error ? error.message : 'Error del servidor'
-    console.error('Get ERC stats error:', error)
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error('[ERC Stats] Fatal error:', error)
+
+    // Return 200 with safe defaults instead of 500 — the dashboard should ALWAYS render
+    return NextResponse.json({
+      activeAlerts: 0,
+      totalAlerts: 0,
+      totalReports: 0,
+      openReports: 0,
+      resolvedReports: 0,
+      criticalOpenReports: 0,
+      alertsByType: {},
+      reportsByCategoria: {},
+      reportsByEstado: {},
+      recentAlerts: [],
+      recentReports: [],
+      alertsLast7Days: 0,
+      reportsLast7Days: 0,
+      reportsLast30Days: 0,
+      avgResolutionHours: null,
+      resolutionRate: 0,
+    })
   }
 }

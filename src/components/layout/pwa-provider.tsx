@@ -177,10 +177,7 @@ export function PWAProvider({ children }: PWAProviderProps) {
 
   // Only show banner when truly offline, actively syncing, or just got a sync result
   // pendingCount alone does NOT trigger the banner (prevents false positives from stuck items)
-  const shouldShowBanner = isOffline || isSyncing || syncResult
-
-  // ── DIAGNOSTIC: Log every render to verify banner decision ──
-  console.log('[PWA] render — networkOffline:', networkOffline, 'forceOffline:', forceOffline, 'isOffline:', isOffline, 'shouldShowBanner:', shouldShowBanner)
+  const shouldShowBanner = !!(isOffline || isSyncing || syncResult)
 
   return (
     <>
