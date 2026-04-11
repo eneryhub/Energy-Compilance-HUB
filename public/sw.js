@@ -1,6 +1,4 @@
-// Energy-Compliance Hub — Service Worker v3.1
-// Based on v3 with surgical fix: /api/sensors/simulation is NEVER cached
-//
+// Energy-Compliance Hub — Service Worker v3.2
 // Strategy:
 //   - /api/sensors/simulation   → PASS-THROUGH (no cache, control endpoint)
 //   - /api/subscription/status  → PASS-THROUGH (no cache, volatile state)
@@ -12,7 +10,7 @@
 //   - Images / Fonts            → Cache First (safe to cache long-term)
 //   - HTML pages                → Network First (App Shell)
 
-const CACHE_VERSION = 'ech-v3.1';
+const CACHE_VERSION = 'ech-v3.2';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL_CACHE = `${CACHE_VERSION}-appshell`;
 const SENSOR_CACHE = `${CACHE_VERSION}-sensors`;
@@ -45,16 +43,16 @@ function shouldNeverCache(url) {
 
 // Install — pre-cache App Shell and activate immediately
 self.addEventListener('install', (event) => {
-  console.log('[SW v3.1] Installing Service Worker...');
+  console.log('[SW v3.2] Installing Service Worker...');
 
   // Skip waiting to force new version immediately
   self.skipWaiting();
 
   event.waitUntil(
     caches.open(APP_SHELL_CACHE).then((cache) => {
-      console.log('[SW v3.1] Pre-caching App Shell');
+      console.log('[SW v3.2] Pre-caching App Shell');
       return cache.addAll(APP_SHELL_URLS).catch((err) => {
-        console.warn('[SW v3.1] Some App Shell resources failed to cache:', err);
+        console.warn('[SW v3.2] Some App Shell resources failed to cache:', err);
         return Promise.resolve();
       });
     })
@@ -63,7 +61,7 @@ self.addEventListener('install', (event) => {
 
 // Activate — clean old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW v3.1] Activating Service Worker...');
+  console.log('[SW v3.2] Activating Service Worker...');
 
   // Take control of all clients immediately
   event.waitUntil(
@@ -222,7 +220,7 @@ async function networkOnlyWithLastCache(request, cacheName) {
     if (cached) {
       const headers = new Headers(cached.headers);
       headers.set('X-Offline-Data', 'true');
-      headers.set('X-Offline-Warning', 'Datos fuera de linea — ultimo valor guardado');
+      headers.set('X-Offline-Warning', 'Offline - cached data');
 
       const body = await cached.blob();
       return new Response(body, {

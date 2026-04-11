@@ -164,6 +164,8 @@ class SyncManager {
 
       for (const item of items) {
         try {
+          console.log(`[SyncManager] Replaying queued ${item.method} ${item.url} (retry ${item.retryCount}/${item.maxRetries}, type: ${item.resourceType})`)
+
           const response = await fetch(item.url, {
             method: item.method || 'POST',
             headers: item.headers || {},
@@ -172,18 +174,23 @@ class SyncManager {
 
           if (response.ok) {
             success++
+            console.log(`[SyncManager] Sync OK: ${item.method} ${item.url}`)
             // Remove successfully synced item from queue
             if (item.id != null) {
               await offlineDB.removeFromQueue(item.id)
             }
           } else {
+            // Log error details for debugging
+            const errBody = await response.text().catch(() => '(unreadable)')
+            console.warn(`[SyncManager] Sync FAILED: ${item.method} ${item.url} → ${response.status} ${errBody.substring(0, 200)}`)
             failed++
             // Increment retry count
             if (item.id != null) {
               await offlineDB.incrementRetry(item.id)
             }
           }
-        } catch {
+        } catch (err) {
+          console.warn(`[SyncManager] Sync ERROR: ${item.method} ${item.url}`, err)
           failed++
           if (item.id != null) {
             await offlineDB.incrementRetry(item.id)

@@ -77,6 +77,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Todos los campos son requeridos' }, { status: 400 })
     }
 
+    // Resolve verification method at function scope (used later in permit.create)
+    let verificationMethod: string | null = null
+
     // ---- Location verification ----
     // If a WorkLocationId is provided, verify based on verificationMethod
     if (workLocationId) {
@@ -90,6 +93,7 @@ export async function POST(request: NextRequest) {
       }
 
       const method = savedLocation.verificationMethod || 'GPS'
+      verificationMethod = method
 
       // ---- GPS verification (default) ----
       if (method === 'GPS') {
@@ -214,7 +218,7 @@ export async function POST(request: NextRequest) {
         photosCount: photos?.length || 0,
         workLatitude: workLatitude || null,
         workLongitude: workLongitude || null,
-        locationSource: method === 'QR_CODE' ? 'qr' : method === 'BEACON' ? 'beacon' : (workLatitude ? 'gps' : 'manual'),
+        locationSource: verificationMethod === 'QR_CODE' ? 'qr' : verificationMethod === 'BEACON' ? 'beacon' : (workLatitude ? 'gps' : 'manual'),
         workLocationId: workLocationId || null,
         createdById: session.userId,
         createdByName: session.name,
@@ -243,7 +247,7 @@ export async function POST(request: NextRequest) {
       workLocation: permit.workLocation,
       workDescription: permit.workDescription,
       safetyChecks: JSON.parse(permit.safetyChecks || '{}'),
-      checklistNotes: permit.checklistNotes ? JSON.parse(permit.checklistNotes) : {},
+      checklistNotes: (permit as Record<string, unknown>).checklistNotes ? JSON.parse(String((permit as Record<string, unknown>).checklistNotes)) : {},
       technicianSignature: permit.technicianSignature ? (() => {
         try {
           const sig = JSON.parse(permit.technicianSignature)
