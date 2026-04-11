@@ -182,7 +182,7 @@ class SyncManager {
           } else {
             // Log error details for debugging
             const errBody = await response.text().catch(() => '(unreadable)')
-            console.warn(`[SyncManager] Sync FAILED: ${item.method} ${item.url} → ${response.status} ${errBody.substring(0, 200)}`)
+            console.warn(`[SyncManager] Sync FAILED: ${item.method} ${item.url} → ${response.status} ${errBody.substring(0, 500)}`)
             failed++
             // Increment retry count
             if (item.id != null) {

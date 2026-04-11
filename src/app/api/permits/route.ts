@@ -282,7 +282,11 @@ export async function POST(request: NextRequest) {
       pdf: pdfBase64,
     })
   } catch (error: any) {
-    console.error('Create permit error:', error)
-    return NextResponse.json({ error: 'Error del servidor' }, { status: 500 })
+    console.error('Create permit error:', error?.message || error?.name || error, error?.stack || '')
+    return NextResponse.json({
+      error: 'Error del servidor',
+      debug: error?.message || 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined,
+    }, { status: 500 })
   }
 }

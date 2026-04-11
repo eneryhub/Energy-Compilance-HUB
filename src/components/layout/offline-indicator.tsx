@@ -1,61 +1,58 @@
 // Energy-Compliance Hub — Offline Status Indicator
 // Shows connection status: Online / Offline / Syncing
+//
+// DETECTION STRATEGY (3 layers, bulletproof):
+//   1. useSyncExternalStore(navigator.onLine) — synchronous during render, zero delay
+//   2. useConnectionStatus hook — periodic probe (detects "fake online" / WiFi without internet)
+//   3. SyncManager events — auto-sync on reconnection
 
 'use client'
 
-import { useConnectionStatus, type ConnectionStatus } from '@/hooks/use-connection-status'
-import { Wifi, WifiOff, RefreshCw, ArrowUpFromLine, X } from 'lucide-react'
+import { useSyncExternalStore, useState, useEffect, useCallback } from 'react'
+import { useConnectionStatus } from '@/hooks/use-connection-status'
+import { WifiOff, RefreshCw, ArrowUpFromLine, X, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { useState, useEffect, useCallback } from 'react'
 import { syncManager } from '@/lib/offline/sync-manager'
 
-const statusConfig: Record<ConnectionStatus, {
-  icon: typeof Wifi
-  label: string
-  description: string
-  color: string
-  bg: string
-  border: string
-  animate?: boolean
-}> = {
-  online: {
-    icon: Wifi,
-    label: 'En Linea',
-    description: 'Conexion estable',
-    color: 'text-emerald-700',
-    bg: 'bg-emerald-50',
-    border: 'border-emerald-200',
-  },
-  offline: {
-    icon: WifiOff,
-    label: 'Modo Offline Activo',
-    description: 'Los cambios se sincronizaran al recuperar señal',
-    color: 'text-amber-700',
-    bg: 'bg-amber-50',
-    border: 'border-amber-300',
-    animate: true,
-  },
-  syncing: {
-    icon: RefreshCw,
-    label: 'Sincronizando...',
-    description: 'Enviando datos pendientes',
-    color: 'text-blue-700',
-    bg: 'bg-blue-50',
-    border: 'border-blue-200',
-    animate: true,
-  },
+// ═══════════════════════════════════════════════════════════
+// Layer 1: useSyncExternalStore — reads navigator.onLine
+// SYNCHRONOUSLY during render. Works on the very first
+// paint, no useEffect delay, no chunk race conditions.
+// ═══════════════════════════════════════════════════════════
+
+function subscribeToNavigatorOnline(callback: () => void) {
+  window.addEventListener('online', callback)
+  window.addEventListener('offline', callback)
+  return () => {
+    window.removeEventListener('online', callback)
+    window.removeEventListener('offline', callback)
+  }
+}
+
+function getOnlineSnapshot() {
+  return navigator.onLine
+}
+
+// Server always returns true (no navigator on server)
+function getServerSnapshot() {
+  return true
 }
 
 export function OfflineIndicator() {
+  // ── Layer 1: Direct navigator.onLine (synchronous, zero delay) ──
+  const navigatorOnline = useSyncExternalStore(
+    subscribeToNavigatorOnline,
+    getOnlineSnapshot,
+    getServerSnapshot
+  )
+
+  // ── Layer 2: Hook-based probe detection (detects "fake online") ──
   const { status, pendingCount, showSyncNotification, dismissSyncNotification, forceSync } = useConnectionStatus()
   const [syncResult, setSyncResult] = useState<{ success: number; failed: number } | null>(null)
 
-  const config = statusConfig[status]
-  const Icon = config.icon
-
-  // Listen for sync completion events (callback in event listener, not sync setState)
+  // ── Layer 3: SyncManager events ──
   useEffect(() => {
     const onComplete = (_event: string, data?: unknown) => {
       setSyncResult(data as { success: number; failed: number })
@@ -64,10 +61,10 @@ export function OfflineIndicator() {
     return () => syncManager.off('sync-complete', onComplete)
   }, [])
 
-  // Auto-dismiss sync result
+  // Auto-dismiss sync result after 5s
   useEffect(() => {
     if (!syncResult) return
-    const timer = setTimeout(() => setSyncResult(null), 4000)
+    const timer = setTimeout(() => setSyncResult(null), 5000)
     return () => clearTimeout(timer)
   }, [syncResult])
 
@@ -77,92 +74,205 @@ export function OfflineIndicator() {
     setSyncResult(result)
   }, [dismissSyncNotification, forceSync])
 
-  // Only show when offline, syncing, has sync notification, or sync result
-  if (status === 'online' && pendingCount === 0 && !showSyncNotification && !syncResult) {
-    return null
-  }
+  // ═══════════════════════════════════════════════════════
+  // Determine effective display state
+  // Show offline banner if EITHER navigator says offline
+  // OR the hook detected "fake online" (status === 'offline')
+  // ═══════════════════════════════════════════════════════
+  const isReallyOffline = !navigatorOnline || status === 'offline'
+  const isFullyOnline = navigatorOnline && status === 'online' && pendingCount === 0 && !showSyncNotification && !syncResult
+  if (isFullyOnline) return null
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 flex flex-col items-center gap-2 pointer-events-none sm:left-auto sm:right-4 sm:w-96">
-      {/* Offline / Syncing main indicator */}
-      {status !== 'online' && (
-        <div
-          className={cn(
-            'w-full pointer-events-auto rounded-xl border-2 px-4 py-3 shadow-lg transition-all',
-            config.bg,
-            config.border,
-            config.animate && 'animate-pulse'
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <div className={cn('flex-shrink-0', config.animate && 'animate-spin')}>
-              <Icon className={cn('w-5 h-5', config.color)} />
+    <div className="fixed bottom-0 left-0 right-0 z-50 flex flex-col items-center pointer-events-none sm:bottom-4 sm:left-auto sm:right-4 sm:w-[420px]">
+      {/* ── OFFLINE: Full-width bottom bar (mobile) / Card (desktop) ── */}
+      {isReallyOffline && (
+        <div className="w-full pointer-events-auto">
+          {/* Mobile: full-width bar at bottom */}
+          <div className="sm:hidden">
+            <div className="w-full border-t-2 border-amber-400 bg-amber-50 px-4 py-3 animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0 w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center">
+                  <WifiOff className="w-5 h-5 text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-amber-800">Modo Offline Activo</p>
+                  <p className="text-[11px] text-amber-600 leading-tight mt-0.5">
+                    Sus cambios se guardan localmente y se sincronizaran al recuperar conexion.
+                  </p>
+                </div>
+                {pendingCount > 0 && (
+                  <Badge className="bg-amber-200 text-amber-800 text-[10px] font-bold flex-shrink-0 px-2 py-0.5">
+                    {pendingCount}
+                  </Badge>
+                )}
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className={cn('text-sm font-semibold', config.color)}>{config.label}</p>
-              <p className="text-xs text-slate-500 truncate">{config.description}</p>
+          </div>
+
+          {/* Desktop: floating card */}
+          <div className="hidden sm:block">
+            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 shadow-lg animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                  <WifiOff className="w-5 h-5 text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-amber-800">Modo Offline Activo</p>
+                  <p className="text-xs text-amber-600 truncate">
+                    Los cambios se guardaran localmente y se sincronizaran automaticamente
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {pendingCount > 0 && (
+                    <Badge className="bg-amber-200 text-amber-800 text-[10px] font-bold px-2 py-0.5">
+                      {pendingCount} pendiente{pendingCount !== 1 ? 's' : ''}
+                    </Badge>
+                  )}
+                </div>
+              </div>
             </div>
-            {status === 'offline' && pendingCount > 0 && (
-              <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] flex-shrink-0">
-                {pendingCount} pendiente{pendingCount !== 1 ? 's' : ''}
-              </Badge>
-            )}
           </div>
         </div>
       )}
 
-      {/* Sync notification when coming back online */}
-      {showSyncNotification && status === 'online' && (
-        <div className="w-full pointer-events-auto rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 shadow-lg">
-          <div className="flex items-center gap-3">
-            <ArrowUpFromLine className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-emerald-700">Conexion Restaurada</p>
-              <p className="text-xs text-slate-500 truncate">
-                {pendingCount} cambio{pendingCount !== 1 ? 's' : ''} pendiente{pendingCount !== 1 ? 's' : ''} por sincronizar
-              </p>
+      {/* ── SYNCING ── */}
+      {status === 'syncing' && (
+        <div className="w-full pointer-events-auto sm:mt-2">
+          {/* Mobile */}
+          <div className="sm:hidden border-t-2 border-blue-300 bg-blue-50 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center">
+                <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-blue-800">Sincronizando...</p>
+                <p className="text-[11px] text-blue-600">Enviando datos pendientes al servidor</p>
+              </div>
             </div>
-            <Button
-              size="sm"
-              onClick={handleSyncNow}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1 flex-shrink-0"
-            >
-              <RefreshCw className="w-3 h-3" />
-              Sincronizar
-            </Button>
-            <button
-              onClick={dismissSyncNotification}
-              className="text-slate-400 hover:text-slate-600 flex-shrink-0"
-            >
-              <X className="w-4 h-4" />
-            </button>
+          </div>
+          {/* Desktop */}
+          <div className="hidden sm:block rounded-xl border-2 border-blue-200 bg-blue-50 px-4 py-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-blue-800">Sincronizando...</p>
+                <p className="text-xs text-blue-600">Enviando datos pendientes al servidor</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Sync result */}
+      {/* ── CONNECTION RESTORED + pending items ── */}
+      {showSyncNotification && navigatorOnline && (
+        <div className="w-full pointer-events-auto sm:mt-2">
+          {/* Mobile */}
+          <div className="sm:hidden border-t-2 border-emerald-300 bg-emerald-50 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center">
+                <ArrowUpFromLine className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-emerald-800">Conexion Restaurada</p>
+                <p className="text-[11px] text-emerald-600">
+                  {pendingCount} cambio{pendingCount !== 1 ? 's' : ''} pendiente{pendingCount !== 1 ? 's' : ''} por sincronizar
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleSyncNow}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1 flex-shrink-0 h-8"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Sync
+              </Button>
+            </div>
+          </div>
+          {/* Desktop */}
+          <div className="hidden sm:block rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
+                <ArrowUpFromLine className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-emerald-800">Conexion Restaurada</p>
+                <p className="text-xs text-emerald-600 truncate">
+                  {pendingCount} cambio{pendingCount !== 1 ? 's' : ''} pendiente{pendingCount !== 1 ? 's' : ''} por sincronizar
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleSyncNow}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1 flex-shrink-0"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Sincronizar
+              </Button>
+              <button
+                onClick={dismissSyncNotification}
+                className="text-slate-400 hover:text-slate-600 flex-shrink-0 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SYNC RESULT ── */}
       {syncResult && (
-        <div className={cn(
-          'w-full pointer-events-auto rounded-xl border-2 px-4 py-3 shadow-lg transition-opacity',
-          syncResult.failed === 0
-            ? 'border-emerald-200 bg-emerald-50'
-            : 'border-amber-200 bg-amber-50'
-        )}>
-          <div className="flex items-center gap-3">
-            <div className={cn(
-              'w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0',
-              syncResult.failed === 0 ? 'bg-emerald-500' : 'bg-amber-500'
-            )}>
-              ✓
+        <div className="w-full pointer-events-auto sm:mt-2">
+          {/* Mobile */}
+          <div className={cn(
+            'sm:hidden border-t-2 px-4 py-3',
+            syncResult.failed === 0
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-amber-300 bg-amber-50'
+          )}>
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-white',
+                syncResult.failed === 0 ? 'bg-emerald-500' : 'bg-amber-500'
+              )}>
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={cn('text-sm font-bold', syncResult.failed === 0 ? 'text-emerald-800' : 'text-amber-800')}>
+                  {syncResult.failed === 0 ? 'Sincronizacion Completa' : 'Sincronizacion Parcial'}
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  {syncResult.success} sincronizado{syncResult.success !== 1 ? 's' : ''}
+                  {syncResult.failed > 0 && ` · ${syncResult.failed} fallido${syncResult.failed !== 1 ? 's' : ''}`}
+                </p>
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className={cn('text-sm font-semibold', syncResult.failed === 0 ? 'text-emerald-700' : 'text-amber-700')}>
-                Sincronizacion Completa
-              </p>
-              <p className="text-xs text-slate-500">
-                {syncResult.success} elemento{syncResult.success !== 1 ? 's' : ''} sincronizado{syncResult.success !== 1 ? 's' : ''}
-                {syncResult.failed > 0 && ` · ${syncResult.failed} fallido${syncResult.failed !== 1 ? 's' : ''}`}
-              </p>
+          </div>
+          {/* Desktop */}
+          <div className={cn(
+            'hidden sm:block rounded-xl border-2 px-4 py-3 shadow-lg',
+            syncResult.failed === 0
+              ? 'border-emerald-200 bg-emerald-50'
+              : 'border-amber-200 bg-amber-50'
+          )}>
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white',
+                syncResult.failed === 0 ? 'bg-emerald-500' : 'bg-amber-500'
+              )}>
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={cn('text-sm font-bold', syncResult.failed === 0 ? 'text-emerald-800' : 'text-amber-800')}>
+                  {syncResult.failed === 0 ? 'Sincronizacion Completa' : 'Sincronizacion Parcial'}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {syncResult.success} elemento{syncResult.success !== 1 ? 's' : ''} sincronizado{syncResult.success !== 1 ? 's' : ''}
+                  {syncResult.failed > 0 && ` · ${syncResult.failed} fallido${syncResult.failed !== 1 ? 's' : ''}`}
+                </p>
+              </div>
             </div>
           </div>
         </div>
