@@ -1,6 +1,8 @@
 // Energy-Compliance Hub — Offline Sync Manager
 // Manages offline data queuing, background sync, and service worker communication
 
+import { offlineDB } from '@/lib/offline/offline-queue'
+
 type EventCallback = (...args: any[]) => void
 
 class SyncManager {
@@ -151,16 +153,65 @@ class SyncManager {
   }
 
   /**
+   * Drain IndexedDB offline queue (the primary queue used by offlineFetch)
+   */
+  private async drainIndexedDBQueue(): Promise<{ success: number; failed: number }> {
+    let success = 0
+    let failed = 0
+
+    try {
+      const items = await offlineDB.getQueue()
+
+      for (const item of items) {
+        try {
+          const response = await fetch(item.url, {
+            method: item.method || 'POST',
+            headers: item.headers || {},
+            body: item.body || undefined,
+          })
+
+          if (response.ok) {
+            success++
+            // Remove successfully synced item from queue
+            if (item.id != null) {
+              await offlineDB.removeFromQueue(item.id)
+            }
+          } else {
+            failed++
+            // Increment retry count
+            if (item.id != null) {
+              await offlineDB.incrementRetry(item.id)
+            }
+          }
+        } catch {
+          failed++
+          if (item.id != null) {
+            await offlineDB.incrementRetry(item.id)
+          }
+        }
+      }
+    } catch (dbError) {
+      console.warn('[SyncManager] IndexedDB queue drain failed:', dbError)
+    }
+
+    return { success, failed }
+  }
+
+  /**
    * Trigger auto-sync when coming back online
    */
   private async autoSync(): Promise<void> {
     const pending = this.getPendingRequests()
-    if (pending.length === 0) return
 
-    console.log(`[SyncManager] Auto-syncing ${pending.length} pending requests`)
+    // Also drain IndexedDB queue (primary queue for offlineFetch)
+    const idbResult = await this.drainIndexedDBQueue()
 
-    let success = 0
-    let failed = 0
+    if (pending.length === 0 && idbResult.success === 0 && idbResult.failed === 0) return
+
+    console.log(`[SyncManager] Auto-syncing ${pending.length} localStorage + ${idbResult.success + idbResult.failed} IndexedDB pending requests`)
+
+    let success = idbResult.success
+    let failed = idbResult.failed
     const remaining: any[] = []
 
     for (const item of pending) {
@@ -189,8 +240,10 @@ class SyncManager {
     // Update pending queue
     localStorage.setItem('ech-pending-sync', JSON.stringify(remaining))
 
+    const total = pending.length + idbResult.success + idbResult.failed
+
     // Emit event with results
-    this.emit('sync-complete', { success, failed, total: pending.length })
+    this.emit('sync-complete', { success, failed, total })
 
     // Notify service worker
     if (this.swRegistration) {
@@ -206,12 +259,16 @@ class SyncManager {
    */
   async syncAll(): Promise<{ success: number; failed: number }> {
     const pending = this.getPendingRequests()
-    if (pending.length === 0) return { success: 0, failed: 0 }
 
-    this.emit('sync-start', { count: pending.length })
+    // Also drain IndexedDB queue
+    const idbResult = await this.drainIndexedDBQueue()
 
-    let success = 0
-    let failed = 0
+    if (pending.length === 0 && idbResult.success === 0 && idbResult.failed === 0) return { success: 0, failed: 0 }
+
+    this.emit('sync-start', { count: pending.length + idbResult.success + idbResult.failed })
+
+    let success = idbResult.success
+    let failed = idbResult.failed
     const remaining: any[] = []
 
     for (const item of pending) {
@@ -239,7 +296,7 @@ class SyncManager {
 
     localStorage.setItem('ech-pending-sync', JSON.stringify(remaining))
 
-    const result = { success, failed, total: pending.length }
+    const result = { success, failed, total: pending.length + idbResult.success + idbResult.failed }
     this.emit('sync-complete', result)
 
     return result

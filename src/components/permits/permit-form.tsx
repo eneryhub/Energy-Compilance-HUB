@@ -38,9 +38,11 @@ import {
   ChevronUp,
   PenLine,
   ClipboardCheck,
+  WifiOff,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiFetch, type ComplianceCheck, type CreatePermitRequest } from '@/lib/api'
+import { offlineFetch } from '@/lib/offline/offline-fetch'
 import { RISK_TYPES, getChecklistForRiskType } from '@/lib/plans'
 import SignaturePad from '@/components/signature/signature-pad'
 import PhotoEvidence, { type PhotoItem } from '@/components/photo/photo-evidence'
@@ -108,6 +110,7 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
   const [pdfData, setPdfData] = useState<string | null>(null)
   const [showPdf, setShowPdf] = useState(false)
   const [photos, setPhotos] = useState<PhotoItem[]>([])
+  const [offlineQueued, setOfflineQueued] = useState(false)
 
   // Checklist UI state
   const [checklistExpanded, setChecklistExpanded] = useState(true)
@@ -389,13 +392,29 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
         }
       }
 
-      const data = await apiFetch<{ pdf: string; permitNumber: string }>('/permits', {
+      // Use offlineFetch — queues in IndexedDB when offline, sends normally when online
+      const result = await offlineFetch<{ pdf: string; permitNumber: string }>('/api/permits', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: payload,
+        resourceType: 'permit',
       })
 
-      if (data.pdf) {
-        setPdfData(data.pdf)
+      // Offline: request was queued for later sync
+      if (result.offline) {
+        setOfflineQueued(true)
+        onPermitCreated?.()
+        return
+      }
+
+      // Server error (non-offline)
+      if (!result.ok) {
+        alert(`Error ${result.status} del servidor. Si el problema persiste, contacta al soporte tecnico.`)
+        return
+      }
+
+      // Online success
+      if (result.data?.pdf) {
+        setPdfData(result.data.pdf)
         setShowPdf(true)
       }
 
@@ -495,6 +514,42 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
           <span className="text-sm font-medium text-emerald-700">Cumplimiento HSE: OK — Puede crear permisos</span>
         </motion.div>
       )}
+
+      {/* Offline Queued Notification */}
+      <AnimatePresence>
+        {offlineQueued && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5"
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-amber-100">
+                <WifiOff className="w-5 h-5 text-amber-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-amber-800">Permiso Guardado Localmente</h3>
+                <p className="text-sm text-amber-700 mt-1">
+                  No hay conexión a internet. El permiso se ha guardado en su dispositivo y se sincronizará automáticamente cuando recupere señal.
+                </p>
+                <p className="text-xs text-amber-600 mt-2">
+                  No cierre esta sesión hasta que se sincronice. Puede continuar trabajando sin conexión.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setOfflineQueued(false)}
+                  className="mt-3 border-amber-300 text-amber-700 hover:bg-amber-100 text-xs"
+                >
+                  Entendido
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Form */}
       <form onSubmit={handleSubmit}>

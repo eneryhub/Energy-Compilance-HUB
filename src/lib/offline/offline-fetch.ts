@@ -5,6 +5,7 @@
 
 import { queueApiRequest } from '@/lib/offline/offline-queue'
 import { cacheSensorData } from '@/lib/offline/offline-queue'
+import { getToken } from '@/lib/api'
 
 type ResourceType = 'permit' | 'document' | 'photo' | 'sensor' | 'general'
 
@@ -65,12 +66,14 @@ export async function offlineFetch<T = unknown>(
   if (navigator.onLine) {
     try {
       const fetchBody = body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
-      
+      const token = typeof window !== 'undefined' ? getToken() : null
+
       const response = await fetch(url, {
         ...fetchOptions,
         body: fetchBody,
         headers: {
           ...fetchOptions.headers,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(body && !(body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         },
       })
