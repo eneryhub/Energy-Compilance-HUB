@@ -3,7 +3,37 @@ import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 
+// ============ Helper: Extract ID from URL (reliable, params-independent) ============
+
+function extractIdFromUrl(request: NextRequest): string | null {
+  const pathname = request.nextUrl.pathname
+  // pathname: /api/erc/alerts/{id}
+  const match = pathname.match(/\/api\/erc\/alerts\/([^/]+)$/)
+  return match?.[1] ?? null
+}
+
+async function resolveId(request: NextRequest, params: Promise<{ id: string }>): Promise<string> {
+  // Method 1: Extract from URL (most reliable)
+  const fromUrl = extractIdFromUrl(request)
+  if (fromUrl && fromUrl !== 'undefined' && fromUrl !== 'null') {
+    return fromUrl
+  }
+
+  // Method 2: Await params (Next.js standard)
+  try {
+    const resolved = await params
+    if (resolved?.id && resolved.id !== 'undefined' && resolved.id !== 'null') {
+      return resolved.id
+    }
+  } catch {
+    // params resolution failed
+  }
+
+  return ''
+}
+
 // ============ PATCH: Update alert status (attend / discard) ============
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -23,7 +53,16 @@ export async function PATCH(
       )
     }
 
-    const { id } = await params
+    // ---- Resolve alert ID from URL (reliable) or params (fallback) ----
+    const id = await resolveId(request, params)
+
+    if (!id) {
+      console.error('[ERC] PATCH alert: ID could not be resolved from URL or params', {
+        pathname: request.nextUrl.pathname,
+      })
+      return NextResponse.json({ error: 'ID de alerta no proporcionado' }, { status: 400 })
+    }
+
     const body = await request.json()
     const { estado, attendedById, attendedByName } = body
 
@@ -33,6 +72,8 @@ export async function PATCH(
         { status: 400 }
       )
     }
+
+    console.log(`[ERC] PATCH alert ${id}: changing estado to ${estado}`)
 
     // Find the alert (with error tolerance)
     const alert = await db.emergencyAlert.findUnique({
@@ -71,9 +112,8 @@ export async function PATCH(
     }).catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error('[ERC] Alert update failed:', errMsg)
-      // If it's a constraint error, return clear message
       if (errMsg.includes('constraint') || errMsg.includes('CHECK') || errMsg.includes('column')) {
-        return null // Will be caught below
+        return null
       }
       throw err
     })

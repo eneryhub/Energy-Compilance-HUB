@@ -3,14 +3,44 @@ import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 
+// ============ Helper: Extract ID from URL (reliable, params-independent) ============
+
+function extractIdFromUrl(request: NextRequest): string | null {
+  const pathname = request.nextUrl.pathname
+  // pathname: /api/erc/reports/{id}
+  const match = pathname.match(/\/api\/erc\/reports\/([^/]+)$/)
+  return match?.[1] ?? null
+}
+
+async function resolveId(request: NextRequest, params: Promise<{ id: string }>): Promise<string> {
+  // Method 1: Extract from URL (most reliable)
+  const fromUrl = extractIdFromUrl(request)
+  if (fromUrl && fromUrl !== 'undefined' && fromUrl !== 'null') {
+    return fromUrl
+  }
+
+  // Method 2: Await params (Next.js standard)
+  try {
+    const resolved = await params
+    if (resolved?.id && resolved.id !== 'undefined' && resolved.id !== 'null') {
+      return resolved.id
+    }
+  } catch {
+    // params resolution failed
+  }
+
+  return ''
+}
+
 // ============ PATCH: Update HSE report status ============
+
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   let session
-  let reportId: string
-  let estado: string
+  let reportId = ''
+  let estado = ''
   let previousEstado: string | null = null
 
   try {
@@ -27,8 +57,15 @@ export async function PATCH(
       )
     }
 
-    const { id } = await params
-    reportId = id
+    // ---- Resolve report ID from URL (reliable) or params (fallback) ----
+    reportId = await resolveId(request, params)
+
+    if (!reportId) {
+      console.error('[ERC] PATCH report: ID could not be resolved from URL or params', {
+        pathname: request.nextUrl.pathname,
+      })
+      return NextResponse.json({ error: 'ID de reporte no proporcionado' }, { status: 400 })
+    }
 
     const body = await request.json()
     estado = body.estado
@@ -41,35 +78,41 @@ export async function PATCH(
       )
     }
 
+    console.log(`[ERC] PATCH report ${reportId}: changing estado to ${estado}`)
+
     // ---- Step 1: Find the report using Prisma ORM ----
     let existingReport = await db.hSEReport.findUnique({
       where: { id: reportId },
+    }).catch((err) => {
+      console.error('[ERC] Prisma findUnique failed:', err instanceof Error ? err.message : err)
+      return null
     })
 
-    // ---- Step 2: If Prisma fails, fallback to raw SQL ----
+    // ---- Step 2: If Prisma fails or returns null, fallback to raw SQL ----
     if (!existingReport) {
       console.warn(`[ERC] Prisma findUnique returned null for report ${reportId}, trying raw SQL fallback`)
 
       try {
         const rows = await db.$queryRawUnsafe<Array<{
-          id: string; companyId: string; estado: string; descripcion: string;
-        }>>(`SELECT "id", "companyId", "estado", "descripcion" FROM "HSEReport" WHERE "id" = '${reportId}' LIMIT 1`)
+          id: string; companyId: string; userId: string; estado: string; descripcion: string
+          fotoUrl: string | null; categoria: string; prioridad: string; ubicacion: string | null
+          createdAt: Date; updatedAt: Date
+        }>>(`SELECT "id", "companyId", "userId", "estado", "descripcion", "fotoUrl", "categoria", "prioridad", "ubicacion", "createdAt", "updatedAt" FROM "HSEReport" WHERE "id" = '${reportId}' LIMIT 1`)
 
         if (rows.length > 0) {
           const row = rows[0]
           existingReport = {
             id: row.id,
             companyId: row.companyId,
+            userId: row.userId,
             estado: row.estado,
             descripcion: row.descripcion,
-            // Fill remaining fields as defaults
-            userId: '',
-            fotoUrl: null,
-            categoria: 'CONDICION_INSEGURA',
-            prioridad: 'MEDIA',
-            ubicacion: null,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            fotoUrl: row.fotoUrl,
+            categoria: row.categoria,
+            prioridad: row.prioridad,
+            ubicacion: row.ubicacion,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
           } as Awaited<ReturnType<typeof db.hSEReport.findUnique>>
 
           console.log(`[ERC] Raw SQL found report ${reportId} (estado: ${row.estado})`)
@@ -147,7 +190,6 @@ export async function PATCH(
         const rawMsg = rawUpdateErr instanceof Error ? rawUpdateErr.message : String(rawUpdateErr)
         console.error(`[ERC] Raw SQL update also failed for ${reportId}:`, rawMsg)
 
-        // If it's a constraint error, give a clear message
         if (errMsg.includes('constraint') || errMsg.includes('CHECK') || rawMsg.includes('constraint')) {
           return NextResponse.json({
             error: `No se puede cambiar al estado "${estado}". Restriccion de base de datos.`,
@@ -155,7 +197,6 @@ export async function PATCH(
           }, { status: 422 })
         }
 
-        // Otherwise return a generic 500 with the actual error message
         return NextResponse.json({
           error: 'Error al actualizar el reporte',
           details: rawMsg || errMsg,
@@ -163,7 +204,7 @@ export async function PATCH(
       }
     }
 
-    // Audit log (non-blocking — don't fail the update if audit fails)
+    // Audit log (non-blocking)
     try {
       await createAuditLog({
         companyId: session.companyId,
@@ -190,6 +231,7 @@ export async function PATCH(
 }
 
 // ============ GET: Fetch single HSE report by ID ============
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -200,7 +242,15 @@ export async function GET(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    const { id } = await params
+    // ---- Resolve report ID from URL (reliable) or params (fallback) ----
+    const id = await resolveId(request, params)
+
+    if (!id) {
+      console.error('[ERC] GET report: ID could not be resolved from URL or params', {
+        pathname: request.nextUrl.pathname,
+      })
+      return NextResponse.json({ error: 'ID de reporte no proporcionado' }, { status: 400 })
+    }
 
     // Try Prisma first
     let report = await db.hSEReport.findUnique({
@@ -210,6 +260,9 @@ export async function GET(
           select: { id: true, name: true, email: true },
         },
       },
+    }).catch((err) => {
+      console.error('[ERC] Prisma findUnique GET failed:', err instanceof Error ? err.message : err)
+      return null
     })
 
     // Fallback to raw SQL if Prisma returns null (possible schema mismatch)
