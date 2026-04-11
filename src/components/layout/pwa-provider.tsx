@@ -142,10 +142,10 @@ export function PWAProvider({ children }: PWAProviderProps) {
     }
   }, [])
 
-  // Auto-dismiss sync result after 5s
+  // Auto-dismiss sync result after 3s
   useEffect(() => {
     if (!syncResult) return
-    const timer = setTimeout(() => setSyncResult(null), 5000)
+    const timer = setTimeout(() => setSyncResult(null), 3000)
     return () => clearTimeout(timer)
   }, [syncResult])
 
@@ -175,7 +175,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
     }
   }, [])
 
-  const shouldShowBanner = isOffline || isSyncing || syncResult || pendingCount > 0
+  // Only show banner when truly offline, actively syncing, or just got a sync result
+  // pendingCount alone does NOT trigger the banner (prevents false positives from stuck items)
+  const shouldShowBanner = isOffline || isSyncing || syncResult
 
   // ── DIAGNOSTIC: Log every render to verify banner decision ──
   console.log('[PWA] render — networkOffline:', networkOffline, 'forceOffline:', forceOffline, 'isOffline:', isOffline, 'shouldShowBanner:', shouldShowBanner)

@@ -277,12 +277,17 @@ export default function IncidentMonitor({
       transports: ['websocket', 'polling'],
       forceNew: true,
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 10_000,
+      reconnectionAttempts: 2,
+      reconnectionDelay: 5000,
+      timeout: 5_000,
     })
 
     socketRef.current = socket
+
+    // Suppress connection errors from console (port 3004 may not exist in production)
+    socket.on('connect_error', () => {
+      // Silently fail — polling every 15s is the fallback
+    })
 
     socket.on('connect', () => {
       // Join the company room for real-time alerts
