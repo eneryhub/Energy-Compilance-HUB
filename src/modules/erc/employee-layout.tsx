@@ -258,15 +258,52 @@ export function EmployeeLayout({ user, onLogout }: EmployeeLayoutProps) {
 
   // ============ Photo handler ============
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const compressImage = (file: File, maxWidth = 1024, quality = 0.7): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const img = new Image()
+        img.onload = () => {
+          const canvas = document.createElement('canvas')
+          let width = img.width
+          let height = img.height
+
+          // Scale down if wider than maxWidth
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width)
+            width = maxWidth
+          }
+
+          canvas.width = width
+          canvas.height = height
+
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            reject(new Error('No se pudo crear canvas'))
+            return
+          }
+
+          ctx.drawImage(img, 0, 0, width, height)
+          const dataUrl = canvas.toDataURL('image/jpeg', quality)
+          resolve(dataUrl)
+        }
+        img.onerror = () => reject(new Error('No se pudo cargar la imagen'))
+        img.src = e.target?.result as string
+      }
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
+    // Validate file size (max 10MB raw)
+    if (file.size > 10 * 1024 * 1024) {
       toast({
         title: 'Archivo muy grande',
-        description: 'La foto no debe superar los 5 MB.',
+        description: 'La foto no debe superar los 10 MB.',
         variant: 'destructive',
       })
       return
@@ -274,10 +311,16 @@ export function EmployeeLayout({ user, onLogout }: EmployeeLayoutProps) {
 
     setPhotoFile(file)
 
-    // Create preview
-    const reader = new FileReader()
-    reader.onload = () => setPhotoPreview(reader.result as string)
-    reader.readAsDataURL(file)
+    try {
+      // Compress image for mobile-friendly upload
+      const compressed = await compressImage(file)
+      setPhotoPreview(compressed)
+    } catch {
+      // Fallback: read original file without compression
+      const reader = new FileReader()
+      reader.onload = () => setPhotoPreview(reader.result as string)
+      reader.readAsDataURL(file)
+    }
   }
 
   const removePhoto = () => {
@@ -304,11 +347,9 @@ export function EmployeeLayout({ user, onLogout }: EmployeeLayoutProps) {
       // Build body
       const body: Record<string, unknown> = { ...reportForm }
 
-      // If photo, convert to base64
-      if (photoFile && photoPreview) {
-        // Extract base64 data from data URL
-        const base64Data = photoPreview.split(',')[1]
-        body.fotoUrl = `data:${photoFile.type};base64,${base64Data}`
+      // If photo, use the already-compressed preview (base64 data URL)
+      if (photoPreview) {
+        body.fotoUrl = photoPreview
       }
 
       // Add GPS location if available
@@ -329,10 +370,12 @@ export function EmployeeLayout({ user, onLogout }: EmployeeLayoutProps) {
       setReportForm({ categoria: '', prioridad: '', descripcion: '' })
       setPhotoPreview(null)
       setPhotoFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
       setShowReportForm(false)
       fetchAlerts()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al enviar reporte'
+      console.error('Report submit error:', err)
       toast({ title: 'Error', description: message, variant: 'destructive' })
     } finally {
       setSubmittingReport(false)
