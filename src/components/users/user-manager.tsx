@@ -24,6 +24,11 @@ import {
   ChevronDown,
   Filter,
   Download,
+  Link,
+  Copy,
+  Check,
+  UserCog,
+  Share2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -104,6 +109,7 @@ const ROLES = [
   { value: 'MANAGER', label: 'Gerente', icon: Eye, color: 'bg-blue-100 text-blue-700 border-blue-200' },
   { value: 'TECHNICIAN', label: 'Técnico', icon: HardHat, color: 'bg-slate-100 text-slate-700 border-slate-200' },
   { value: 'VIEWER', label: 'Observador', icon: Eye, color: 'bg-purple-100 text-purple-700 border-purple-200' },
+  { value: 'EMPLOYEE', label: 'Empleado de Campo', icon: UserCog, color: 'bg-orange-100 text-orange-700 border-orange-200' },
 ]
 
 const ROLE_MAP = Object.fromEntries(ROLES.map((r) => [r.value, r]))
@@ -166,7 +172,6 @@ function UserFormDialog({
     confirmPassword: '',
   })
   const [error, setError] = useState('')
-  const [showSalesModal, setShowSalesModal] = useState(false)
 
   const isEditing = !!editingUser
 
@@ -243,9 +248,7 @@ function UserFormDialog({
       onClose()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error del servidor'
-      if (message.includes('SUBSCRIPTION_LIMIT_ENTERPRISE')) {
-        setShowSalesModal(true)
-      } else if (message.includes('SUBSCRIPTION_LIMIT')) {
+      if (message.includes('SUBSCRIPTION_LIMIT')) {
         setError('Límite de usuarios alcanzado. Actualiza tu plan de suscripción.')
       } else if (message.includes('ya existe')) {
         setError('Ya existe un usuario con este email en la empresa.')
@@ -258,7 +261,6 @@ function UserFormDialog({
   }
 
   return (
-    <>
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
@@ -382,47 +384,147 @@ function UserFormDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
 
-    {/* ===== Enterprise Sales Contact Modal ===== */}
-    <Dialog open={showSalesModal} onOpenChange={setShowSalesModal}>
-      <DialogContent className="sm:max-w-[440px]">
+// ============ Invite Employee Dialog ============
+
+function InviteEmployeeDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const currentUser = getUser()
+
+  // The token is the companyId — employees register via ?token=companyId
+  const inviteLink = currentUser?.companyId
+    ? `${window.location.origin}?token=${currentUser.companyId}`
+    : ''
+
+  const handleCopy = async () => {
+    if (!inviteLink) return
+    try {
+      await navigator.clipboard.writeText(inviteLink)
+      setCopied(true)
+      toast.success('Enlace copiado al portapapeles')
+      setTimeout(() => setCopied(false), 3000)
+    } catch {
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea')
+      textArea.value = inviteLink
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+      setCopied(true)
+      toast.success('Enlace copiado al portapapeles')
+      setTimeout(() => setCopied(false), 3000)
+    }
+  }
+
+  const handleShare = async () => {
+    if (!inviteLink) return
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Registro — Energy-Compliance Hub',
+          text: 'Completa tu registro como empleado de campo:',
+          url: inviteLink,
+        })
+      } catch {
+        // User cancelled or share failed — do nothing
+      }
+    } else {
+      handleCopy()
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-amber-600">
-            <AlertTriangle className="w-5 h-5" />
-            Límite de Plan Alcanzado
+          <DialogTitle className="flex items-center gap-2">
+            <Link className="w-5 h-5 text-orange-600" />
+            Invitar Empleado de Campo
           </DialogTitle>
+          <DialogDescription>
+            Genera un enlace de registro para que los empleados de campo se registren con rol Empleado.
+            Comparte este enlace por WhatsApp, email o cualquier otro medio.
+          </DialogDescription>
         </DialogHeader>
+
         <div className="space-y-4 py-2">
-          <div className="p-4 rounded-lg bg-amber-50 border border-amber-200">
-            <p className="text-sm font-semibold text-amber-800">
-              Límite de plan alcanzado (500/500)
-            </p>
-            <p className="text-sm text-amber-700 mt-2">
-              Para ampliar su capacidad de usuarios, contacte con nuestro equipo de ventas en:
-            </p>
-            <a
-              href="mailto:ventas@energycompliancehub.com"
-              className="inline-flex items-center gap-1.5 mt-2 text-sm font-semibold text-amber-800 hover:text-amber-900 underline"
-            >
-              <Mail className="w-4 h-4" />
-              ventas@energycompliancehub.com
-            </a>
+          {/* How it works */}
+          <div className="rounded-lg bg-orange-50 border border-orange-200 p-4 space-y-3">
+            <h4 className="text-sm font-semibold text-orange-800">Cómo funciona</h4>
+            <ol className="text-xs text-orange-700 space-y-1.5 list-decimal list-inside">
+              <li>Copia el enlace de abajo y envíalo al empleado</li>
+              <li>El empleado abre el enlace y completa su nombre, email y contraseña</li>
+              <li>Se registra automáticamente con rol <strong>Empleado de Campo</strong></li>
+              <li>Podrá acceder al botón de emergencia y reportes HSE desde su celular</li>
+            </ol>
           </div>
-          <p className="text-xs text-slate-500">
-            Nuestro equipo comercial le ayudará a encontrar la solución que mejor se adapte a las necesidades de su organización.
+
+          {/* Generated link */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Enlace de registro</Label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600 font-mono truncate">
+                {inviteLink || 'Generando...'}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleCopy}
+                className="shrink-0 gap-1.5"
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-600">Copiado</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    Copiar
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* Share buttons */}
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleShare}
+              className="flex-1 gap-2"
+            >
+              <Share2 className="w-4 h-4" />
+              Compartir
+            </Button>
+          </div>
+
+          {/* Info note */}
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Este enlace es permanente y único para tu empresa. Cualquier persona con el enlace puede
+            registrarse como empleado de campo. Solo los usuarios activos con rol EMPLOYEE tendrán
+            acceso al dashboard de campo (botón de emergencia y reportes HSE).
           </p>
         </div>
+
         <DialogFooter>
-          <Button
-            onClick={() => setShowSalesModal(false)}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            Entendido
+          <Button variant="outline" onClick={onClose}>
+            Cerrar
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    </>
   )
 }
 
@@ -440,6 +542,7 @@ export default function UserManager() {
 
   // Dialogs
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showInviteDialog, setShowInviteDialog] = useState(false)
   const [editingUser, setEditingUser] = useState<UserItem | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UserItem | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -533,6 +636,7 @@ export default function UserManager() {
   const admins = users.filter((u) => u.role === 'ADMIN' && u.isActive).length
   const supervisors = users.filter((u) => u.role === 'SUPERVISOR' && u.isActive).length
   const technicians = users.filter((u) => u.role === 'TECHNICIAN' && u.isActive).length
+  const employees = users.filter((u) => u.role === 'EMPLOYEE' && u.isActive).length
 
   if (loading && users.length === 0) {
     return (
@@ -556,18 +660,28 @@ export default function UserManager() {
           </p>
         </div>
         {currentUser?.role === 'ADMIN' && (
-          <Button
-            onClick={() => setShowCreateDialog(true)}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
-          >
-            <UserPlus className="w-4 h-4" />
-            Nuevo Usuario
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowInviteDialog(true)}
+              className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+            >
+              <Link className="w-4 h-4" />
+              Invitar Empleado
+            </Button>
+            <Button
+              onClick={() => setShowCreateDialog(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+            >
+              <UserPlus className="w-4 h-4" />
+              Nuevo Usuario
+            </Button>
+          </div>
         )}
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Card className="p-3">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center">
@@ -609,6 +723,17 @@ export default function UserManager() {
             <div>
               <p className="text-xl font-bold text-slate-800">{technicians}</p>
               <p className="text-[10px] text-slate-500">Técnicos</p>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center">
+              <UserCog className="w-4 h-4 text-orange-600" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-slate-800">{employees}</p>
+              <p className="text-[10px] text-slate-500">Empleados Campo</p>
             </div>
           </div>
         </Card>
@@ -831,6 +956,12 @@ export default function UserManager() {
           )}
         </CardContent>
       </Card>
+
+      {/* Employee Invitation Dialog */}
+      <InviteEmployeeDialog
+        open={showInviteDialog}
+        onClose={() => setShowInviteDialog(false)}
+      />
 
       {/* Create Dialog */}
       <UserFormDialog
