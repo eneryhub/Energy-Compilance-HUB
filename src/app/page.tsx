@@ -26,12 +26,14 @@ import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
 import LandingPage from '@/components/landing/landing-page'
+import { EmployeeLayout, EmployeeRegisterForm } from '@/modules/erc'
+import IncidentMonitor from '@/modules/erc/incident-monitor'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
 
-type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting'
+type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting' | 'employee-register'
 
 export default function Home() {
   // Always start as 'mounting' to prevent hydration mismatch.
@@ -97,11 +99,19 @@ export default function Home() {
   // Detect token on client-side only (after mount) to prevent SSR hydration mismatch.
   // Server renders login (no localStorage), client detects saved token.
   useEffect(() => {
+    // Check for employee registration token in URL
+    const urlParams = new URLSearchParams(window.location.search)
+    const regToken = urlParams.get('token')
+    if (regToken) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAppState('employee-register')
+      return
+    }
+
     const token = getToken()
     const savedUser = getUser()
 
     if (!token || !savedUser) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- client-side init from localStorage
       setAppState('landing')
       return
     }
@@ -230,6 +240,25 @@ export default function Home() {
       <RegisterForm
         onRegister={() => setAppState('login')}
         onSwitchToLogin={() => setAppState('login')}
+      />
+    )
+  }
+
+  if (appState === 'employee-register') {
+    return (
+      <EmployeeRegisterForm
+        onRegistered={(userData) => handleLogin(userData)}
+        onBackToLogin={() => setAppState('login')}
+      />
+    )
+  }
+
+  // App views — EMPLOYEE gets a simplified experience
+  if (appState === 'app' && user?.role === 'EMPLOYEE') {
+    return (
+      <EmployeeLayout
+        user={{ name: user.name, email: user.email, companyName: user.companyName || '' }}
+        onLogout={handleLogout}
       />
     )
   }
@@ -566,6 +595,15 @@ export default function Home() {
 
           {currentView === 'goc' && user?.role === 'SUPER_ADMIN' && (
             <GlobalOperationsCenter />
+          )}
+
+          {currentView === 'erc-monitor' && user && (
+            <IncidentMonitor
+              companyId={user.companyId}
+              userRole={user.role}
+              userId={user.id}
+              userName={user.name}
+            />
           )}
         </motion.div>
       </AnimatePresence>

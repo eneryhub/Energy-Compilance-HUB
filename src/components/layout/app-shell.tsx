@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   LayoutDashboard,
   FileText,
@@ -28,6 +28,8 @@ import {
   MapPin,
   Flame,
   MessageSquareText,
+  Siren,
+  Bell,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -37,9 +39,9 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { removeToken } from '@/lib/api'
+import { removeToken, getToken } from '@/lib/api'
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor'
 
 interface AppShellProps {
   currentView: ViewType
@@ -101,6 +103,8 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'reports', label: 'Reportes', icon: BarChart3, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'risk-map', label: 'Mapa de Riesgo', icon: Flame, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'paperclip', label: 'Paperclip IA', icon: MessageSquareText, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'GERENTE'] },
+  { id: 'erc', label: 'Seguridad en Campo', icon: Siren, roles: ['EMPLOYEE'] },
+  { id: 'erc-monitor', label: 'Monitor de Incidentes', icon: Bell, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
   { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
@@ -133,9 +137,52 @@ function getRoleBadgeColor(role: string) {
       return 'bg-blue-100 text-blue-700'
     case 'TECHNICIAN':
       return 'bg-slate-100 text-slate-700'
+    case 'EMPLOYEE':
+      return 'bg-orange-100 text-orange-700'
     default:
       return 'bg-slate-100 text-slate-700'
   }
+}
+
+// ── Emergency Alert Indicator (visible for ALL roles in header) ──
+function EmergencyAlertIndicator({ onViewMonitor }: { onViewMonitor: () => void }) {
+  const [activeCount, setActiveCount] = useState(0)
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const token = getToken()
+        if (!token) return
+        const res = await fetch('/api/erc/stats', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setActiveCount(data.activeAlerts ?? 0)
+        }
+      } catch { /* silent */ }
+    }
+    poll()
+    const timer = setInterval(poll, 15000)
+    return () => clearInterval(timer)
+  }, [])
+
+  if (activeCount === 0) return null
+
+  return (
+    <button
+      onClick={onViewMonitor}
+      className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-red-50 border border-red-200 text-xs font-semibold text-red-700 hover:bg-red-100 transition-colors"
+    >
+      <span className="relative flex h-2.5 w-2.5">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+      </span>
+      <Bell className="w-3.5 h-3.5" />
+      <span>{activeCount}</span>
+      <span className="hidden sm:inline">Emergencia{activeCount !== 1 ? 's' : ''}</span>
+    </button>
+  )
 }
 
 function SidebarContent({
@@ -462,6 +509,14 @@ export default function AppShell(props: AppShellProps) {
                 />
                 {props.complianceStatus === 'COMPLIANT' ? 'Cumplimiento OK' : 'Bloqueado'}
               </div>
+
+              {/* Emergency Alert Indicator — visible for ALL roles */}
+              <EmergencyAlertIndicator
+                onViewMonitor={() => {
+                  const targetView = props.user.role === 'EMPLOYEE' ? 'erc' as ViewType : 'erc-monitor' as ViewType
+                  props.onViewChange(targetView)
+                }}
+              />
 
               <Avatar className="w-8 h-8 bg-emerald-600 lg:hidden">
                 <AvatarFallback className="text-white text-xs font-bold">
