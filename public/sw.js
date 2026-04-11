@@ -260,9 +260,19 @@ async function staleWhileRevalidate(request, cacheName) {
       }
       return response;
     })
-    .catch(() => cached);
+    .catch(() => {
+      // Must always return a Response — never undefined
+      if (cached) return cached;
+      return new Response(JSON.stringify({ error: 'offline', offline: true }), {
+        status: 503,
+        statusText: 'Sin Conexion',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
 
-  return cached || fetchPromise;
+  // Return cached if available, otherwise wait for fetch
+  if (cached) return cached;
+  return fetchPromise;
 }
 
 // Simple offline page HTML

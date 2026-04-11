@@ -210,15 +210,27 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
       const data = await apiFetch<ComplianceCheck>('/compliance/check')
       setCompliance(data)
     } catch {
-      setCompliance({
-        isCompliant: false,
-        expiredCritical: [
-          { id: '1', title: 'Certificado Médico', documentType: 'MEDICAL', criticality: 'CRITICAL', expiryDate: '2024-01-15', holderName: 'Carlos Mendoza', daysOverdue: 120 },
-        ],
-        expiringSoon: [],
-        totalDocuments: 24,
-        activeDocuments: 21,
-      })
+      // When offline/network error, don't block the form.
+      // Server will validate compliance when the queued permit syncs.
+      if (!navigator.onLine) {
+        setCompliance({
+          isCompliant: true,
+          expiredCritical: [],
+          expiringSoon: [],
+          totalDocuments: 0,
+          activeDocuments: 0,
+        })
+      } else {
+        setCompliance({
+          isCompliant: false,
+          expiredCritical: [
+            { id: '1', title: 'Certificado Médico', documentType: 'MEDICAL', criticality: 'CRITICAL', expiryDate: '2024-01-15', holderName: 'Carlos Mendoza', daysOverdue: 120 },
+          ],
+          expiringSoon: [],
+          totalDocuments: 24,
+          activeDocuments: 21,
+        })
+      }
     }
   }
 
