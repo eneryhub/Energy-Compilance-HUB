@@ -1,4 +1,4 @@
-// Energy-Compliance Hub — Service Worker v3.2
+// Energy-Compliance Hub — Service Worker v4.0
 // Strategy:
 //   - /api/sensors/simulation   → PASS-THROUGH (no cache, control endpoint)
 //   - /api/subscription/status  → PASS-THROUGH (no cache, volatile state)
@@ -10,7 +10,7 @@
 //   - Images / Fonts            → Cache First (safe to cache long-term)
 //   - HTML pages                → Network First (App Shell)
 
-const CACHE_VERSION = 'ech-v3.2';
+const CACHE_VERSION = 'ech-v4.0';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL_CACHE = `${CACHE_VERSION}-appshell`;
 const SENSOR_CACHE = `${CACHE_VERSION}-sensors`;
@@ -43,16 +43,16 @@ function shouldNeverCache(url) {
 
 // Install — pre-cache App Shell and activate immediately
 self.addEventListener('install', (event) => {
-  console.log('[SW v3.2] Installing Service Worker...');
+  console.log('[SW v4.0] Installing Service Worker...');
 
   // Skip waiting to force new version immediately
   self.skipWaiting();
 
   event.waitUntil(
     caches.open(APP_SHELL_CACHE).then((cache) => {
-      console.log('[SW v3.2] Pre-caching App Shell');
+      console.log('[SW v4.0] Pre-caching App Shell');
       return cache.addAll(APP_SHELL_URLS).catch((err) => {
-        console.warn('[SW v3.2] Some App Shell resources failed to cache:', err);
+        console.warn('[SW v4.0] Some App Shell resources failed to cache:', err);
         return Promise.resolve();
       });
     })
@@ -61,7 +61,7 @@ self.addEventListener('install', (event) => {
 
 // Activate — clean old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW v3.2] Activating Service Worker...');
+  console.log('[SW v4.0] Activating Service Worker...');
 
   // Take control of all clients immediately
   event.waitUntil(
@@ -72,7 +72,7 @@ self.addEventListener('activate', (event) => {
           cacheNames
             .filter((name) => name.startsWith('ech-') && !name.includes(CACHE_VERSION))
             .map((name) => {
-              console.log('[SW v3.1] Deleting old cache:', name);
+              console.log('[SW v4.0] Deleting old cache:', name);
               return caches.delete(name);
             })
         );
@@ -333,14 +333,14 @@ self.addEventListener('message', (event) => {
 
   if (event.data && event.data.type === 'CLEAR_SENSOR_CACHE') {
     caches.delete(SENSOR_CACHE).then(() => {
-      console.log('[SW v3.1] Sensor cache cleared');
+      console.log('[SW v4.0] Sensor cache cleared');
     });
   }
 });
 
 // Background Sync
 self.addEventListener('sync', (event) => {
-  console.log('[SW v3.1] Background sync triggered:', event.tag);
+  console.log('[SW v4.0] Background sync triggered:', event.tag);
 
   if (event.tag === 'sync-offline-data') {
     event.waitUntil(syncOfflineData());
@@ -352,5 +352,5 @@ async function syncOfflineData() {
   clients.forEach((client) => {
     client.postMessage({ type: 'SYNC_STARTED' });
   });
-  console.log('[SW v3.1] Offline data sync initiated');
+  console.log('[SW v4.0] Offline data sync initiated');
 }

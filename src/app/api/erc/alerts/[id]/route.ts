@@ -34,10 +34,10 @@ export async function PATCH(
       )
     }
 
-    // Find the alert
+    // Find the alert (with error tolerance)
     const alert = await db.emergencyAlert.findUnique({
       where: { id },
-    })
+    }).catch(() => null)
 
     if (!alert) {
       return NextResponse.json(
@@ -68,26 +68,44 @@ export async function PATCH(
           select: { id: true, name: true, email: true },
         },
       },
+    }).catch((err) => {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.error('[ERC] Alert update failed:', errMsg)
+      // If it's a constraint error, return clear message
+      if (errMsg.includes('constraint') || errMsg.includes('CHECK') || errMsg.includes('column')) {
+        return null // Will be caught below
+      }
+      throw err
     })
 
-    // Audit log
-    await createAuditLog({
-      companyId: session.companyId,
-      userId: session.userId,
-      action: 'UPDATE_EMERGENCY_ALERT',
-      entityType: 'EMERGENCY_ALERT',
-      entityId: alert.id,
-      details: {
-        previousEstado: alert.estado,
-        newEstado: estado,
-        attendedByName: attendedByName || session.name,
-      },
-    }, request)
+    if (!updatedAlert) {
+      return NextResponse.json({
+        error: 'No se pudo actualizar la alerta. Restriccion de base de datos.',
+      }, { status: 422 })
+    }
+
+    // Audit log (non-blocking)
+    try {
+      await createAuditLog({
+        companyId: session.companyId,
+        userId: session.userId,
+        action: 'UPDATE_EMERGENCY_ALERT',
+        entityType: 'EMERGENCY_ALERT',
+        entityId: alert.id,
+        details: {
+          previousEstado: alert.estado,
+          newEstado: estado,
+          attendedByName: attendedByName || session.name,
+        },
+      }, request)
+    } catch {
+      // Audit log failure is non-critical
+    }
 
     return NextResponse.json(updatedAlert)
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Error del servidor'
-    console.error('Update emergency alert error:', error)
+    console.error('[ERC] Update emergency alert error:', error)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
