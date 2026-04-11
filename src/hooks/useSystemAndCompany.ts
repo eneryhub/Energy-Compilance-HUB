@@ -118,14 +118,12 @@ export function useSystemHealth(): UseSystemHealthReturn {
       if (!isMounted.current) return
       errorCount.current++
       setLoading(false)
-      // Exponential backoff: don't hammer a degraded backend
     }
   }, [])
 
   useEffect(() => {
     isMounted.current = true
     fetchHealth()
-    // Fixed 30s interval for health — it's a derived metric, not alert-speed data
     intervalRef.current = setInterval(fetchHealth, 30_000)
     return () => {
       isMounted.current = false
@@ -145,18 +143,12 @@ interface UseKnowledgeBaseReturn {
   loading: boolean
   notFound: boolean
   creating: boolean
+  createError: string | null
   lookup: (errorCode: string) => Promise<void>
-  create: (payload: KnowledgeCreatePayload) => Promise<boolean>
+  create: (payload: KnowledgeCreatePayload) => Promise<{ success: boolean; error?: string; existingId?: string }>
   clear: () => void
 }
 
-/**
- * In-memory LRU-like cache for knowledge lookups.
- * Rationale: In a GOC context, operators will click the same error codes
- * repeatedly during an incident. Without this cache, each click triggers
- * a round-trip. The cache is module-level (not component-level) so it
- * persists across component remounts during the session.
- */
 const knowledgeCache = new Map<string, KnowledgeEntry>()
 
 export function useKnowledgeBase(): UseKnowledgeBaseReturn {
@@ -164,6 +156,7 @@ export function useKnowledgeBase(): UseKnowledgeBaseReturn {
   const [loading, setLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const isMounted = useRef(true)
 
   useEffect(() => {
@@ -177,7 +170,6 @@ export function useKnowledgeBase(): UseKnowledgeBaseReturn {
       return
     }
 
-    // Cache hit — instant response, no loading state
     if (knowledgeCache.has(errorCode)) {
       setEntry(knowledgeCache.get(errorCode)!)
       setNotFound(false)
@@ -208,22 +200,33 @@ export function useKnowledgeBase(): UseKnowledgeBaseReturn {
     }
   }, [])
 
-  const create = useCallback(async (payload: KnowledgeCreatePayload): Promise<boolean> => {
+  const create = useCallback(async (payload: KnowledgeCreatePayload): Promise<{ success: boolean; error?: string; existingId?: string }> => {
     setCreating(true)
+    setCreateError(null)
     try {
       const created = await apiFetch<KnowledgeEntry>('/admin/goc/knowledge', {
         method: 'POST',
         body: JSON.stringify(payload),
       })
-      if (!isMounted.current) return false
+      if (!isMounted.current) return { success: false, error: 'Componente desmontado' }
 
-      // Populate cache immediately so next lookup is instant
       knowledgeCache.set(payload.errorCode, created)
       setEntry(created)
       setNotFound(false)
-      return true
-    } catch {
-      return false
+      return { success: true }
+    } catch (err: any) {
+      console.error('[KB Create] Error:', err)
+      let errorMsg = 'Error desconocido al guardar'
+      let existingId: string | undefined
+      // Intentar extraer mensaje de error de la respuesta del backend
+      if (err?.response?.status === 409) {
+        errorMsg = err?.response?.data?.error || `Ya existe una entrada con el código "${payload.errorCode}".`
+        existingId = err?.response?.data?.existingId
+      } else if (err?.message) {
+        errorMsg = err.message
+      }
+      setCreateError(errorMsg)
+      return { success: false, error: errorMsg, existingId }
     } finally {
       if (isMounted.current) setCreating(false)
     }
@@ -233,9 +236,10 @@ export function useKnowledgeBase(): UseKnowledgeBaseReturn {
     setEntry(null)
     setNotFound(false)
     setLoading(false)
+    setCreateError(null)
   }, [])
 
-  return { entry, loading, notFound, creating, lookup, create, clear }
+  return { entry, loading, notFound, creating, createError, lookup, create, clear }
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -288,7 +292,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
   const [expandedCompanyId, setExpandedCompanyId] = useState<string | null>(null)
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([])
   const [loadingLogs, setLoadingLogs] = useState(false)
-  // Cache audit logs per company so re-expanding is instant
   const auditCache = useRef<Map<string, AdminAuditLog[]>>(new Map())
   const isMounted = useRef(true)
 
@@ -317,7 +320,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
       if (statsRes.status === 'fulfilled') {
         setDashboardStats(statsRes.value)
       }
-      // Stats failure is non-fatal: derived stats are computed from companies
     } finally {
       if (isMounted.current) setLoading(false)
     }
@@ -325,9 +327,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
 
   useEffect(() => { fetchCompanies() }, [fetchCompanies])
 
-  /* ── Derived stats with fallback ── */
-  // Siempre se calculan a partir de companies para garantizar números,
-  // solo se toma recentActivity del dashboard (si existe)
   const stats = useMemo<DashboardStats>(() => {
     const planDistribution: Record<string, number> = {}
     companies.forEach(c => {
@@ -345,13 +344,11 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
     }
   }, [companies, dashboardStats])
 
-  /* ── Enterprise subset for quota widgets ── */
   const enterpriseCompanies = useMemo(
     () => companies.filter(c => c.subscriptionPlan === 'enterprise'),
     [companies]
   )
 
-  /* ── Filtered & sorted view ── */
   const filteredCompanies = useMemo(() => {
     const q = searchQuery.toLowerCase()
     let result = companies.filter(c => {
@@ -371,11 +368,9 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
         default: return 0
       }
     })
-
     return result
   }, [companies, searchQuery, statusFilter, planFilter, sortBy])
 
-  /* ── Toggle expand with audit log fetch + cache ── */
   const toggleCompanyExpand = useCallback(async (id: string) => {
     if (expandedCompanyId === id) {
       setExpandedCompanyId(null)
@@ -402,7 +397,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
     }
   }, [expandedCompanyId])
 
-  /* ── Company mutations ── */
   const activateEnterprise = useCallback(async (companyId: string) => {
     await apiFetch('/admin/activate-enterprise', {
       method: 'POST',
@@ -415,7 +409,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
     companyId: string,
     updates: { plan?: string; status?: string; maxUsers?: number; maxPermits?: number }
   ) => {
-    // Optimistic update
     setCompanies(prev => prev.map(c =>
       c.id === companyId
         ? {
@@ -433,7 +426,6 @@ export function useCompanyManagement(): UseCompanyManagementReturn {
         body: JSON.stringify(updates),
       })
     } catch (err: unknown) {
-      // Revert on failure
       fetchCompanies()
       throw err
     }

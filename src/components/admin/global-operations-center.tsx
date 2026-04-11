@@ -415,17 +415,21 @@ export default function GlobalOperationsCenter() {
   }, [kb])
 
   const handleKBCreate = useCallback(async (data: Parameters<typeof kb.create>[0]) => {
-    const ok = await kb.create(data)
-    if (ok && selectedAlert) {
-      // If the alert had no errorCode, we just created one; now we can look it up
-      if (!selectedAlert.errorCode && data.errorCode) {
-        // We could update the alert in memory, but for now just look up by new code
-        kb.lookup(data.errorCode)
-      } else if (selectedAlert.errorCode) {
-        kb.lookup(selectedAlert.errorCode)
+    const result = await kb.create(data)
+    if (result.success) {
+      if (selectedAlert) {
+        if (!selectedAlert.errorCode && data.errorCode) {
+          await kb.lookup(data.errorCode)
+        } else if (selectedAlert.errorCode) {
+          await kb.lookup(selectedAlert.errorCode)
+        }
       }
+    } else {
+      // Mostrar error al usuario
+      alert(result.error || 'No se pudo crear la entrada.')
     }
   }, [kb, selectedAlert])
+  
 
   const typeFilters: { value: AlertTypeFilter; label: string }[] = [
     { value: 'ALL', label: 'Todos' }, { value: 'SENSOR', label: 'Sensor' }, { value: 'GEOFENCE', label: 'Geo' },
