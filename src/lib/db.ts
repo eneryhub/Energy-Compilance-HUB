@@ -10,18 +10,50 @@ const globalForPrisma = globalThis as unknown as {
 // The old cached client won't have the new models/fields.
 const PRISMA_SCHEMA_VERSION = 6
 
+/**
+ * Build PrismaClient options optimised for the current runtime.
+ *
+ * On Vercel serverless (or any serverless provider) each function
+ * invocation is an isolated container that holds at most 1-2 concurrent
+ * requests.  The default pool (5 connections, 10 s timeout) leads to
+ * P2024 "Timed out fetching a new connection" because the pool never
+ * shrinks fast enough between cold starts.
+ *
+ * Strategy:
+ *  – connection_limit  = 1   (one connection per lambda)
+ *  – pool_timeout     = 8   (fail fast instead of hanging 10+ s)
+ *
+ * For local dev (SQLite) we keep defaults.
+ */
+function buildPrismaOptions(): { datasource?: { db: { url: string } } } {
+  const url = process.env.DATABASE_URL || ''
+  const pg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
+
+  if (pg) {
+    // PostgreSQL (Vercel / Neon / Supabase / Railway …)
+    const sep = url.includes('?') ? '&' : '?'
+    const poolUrl = `${url}${sep}connection_limit=1&pool_timeout=8`
+    return { datasource: { db: { url: poolUrl } } }
+  }
+
+  // SQLite local dev — keep defaults
+  return {}
+}
+
+const _prismaOpts = buildPrismaOptions()
+
 let _db: PrismaClient
 
 if (process.env.NODE_ENV === 'production') {
   // In production, create once and reuse
-  _db = globalForPrisma.prisma ?? new PrismaClient()
+  _db = globalForPrisma.prisma ?? new PrismaClient(_prismaOpts)
   if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
 } else {
   // In development, check schema version to detect model changes
   if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
     _db = globalForPrisma.prisma
   } else {
-    _db = new PrismaClient()
+    _db = new PrismaClient(_prismaOpts)
     globalForPrisma.prisma = _db
     globalForPrisma.prismaSchemaVersion = PRISMA_SCHEMA_VERSION
   }
@@ -49,7 +81,7 @@ async function tableExists(tableName: string): Promise<boolean> {
   if (pg) {
     const result = await _db.$queryRaw<Array<{ exists: boolean }>>`
       SELECT EXISTS (
-        SELECT FROM information_schema.tables 
+        SELECT FROM information_schema.tables
         WHERE table_name = ${tableName}
       )
     `
@@ -126,7 +158,7 @@ async function ensureColumn(
     console.log(`[DB] Auto-sync: column "${tableName}.${columnName}" added`)
     return true
   } catch (err) {
-    console.warn(`[DB] Auto-sync: failed to add column "${tableName}.${columnName}":`, 
+    console.warn(`[DB] Auto-sync: failed to add column "${tableName}.${columnName}":`,
       err instanceof Error ? err.message : err)
     return false
   }
@@ -316,7 +348,7 @@ export async function ensureSchemaColumns(): Promise<void> {
     await ensureColumn('Sensor', 'isActive', 'BOOLEAN NOT NULL DEFAULT true', 'BOOLEAN NOT NULL DEFAULT 1')
 
     // ============ Ensure SensorReading table ============
-    await ensureColumn('SensorReading', 'status', 
+    await ensureColumn('SensorReading', 'status',
       "TEXT NOT NULL DEFAULT 'NORMAL'",
       "TEXT NOT NULL DEFAULT 'NORMAL'"
     )

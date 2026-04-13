@@ -143,6 +143,11 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
   const audioElRef = useRef<HTMLAudioElement | null>(null)
   const abortCtrlRef = useRef<AbortController | null>(null)
 
+  // Retry guard — max 1 attempt per module change (no retry loop)
+  const retryCountRef = useRef(0)
+  const MAX_RETRIES = 1
+  const lastViewRef = useRef<ViewType>(currentView)
+
   const description = MODULE_DESCRIPTIONS[currentView] || ''
 
   // Persist mute preference
@@ -155,7 +160,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
     _setGlobalSpeaking(speaking)
   }, [speaking])
 
-  // Play TTS for given text
+  // Play TTS for given text (with retry guard — max 1 attempt per module change)
   const playDescription = useCallback(async (text: string) => {
     if (!text || muted) return
 
@@ -195,7 +200,16 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
           signal: abortCtrlRef.current.signal,
         })
 
-        if (!res.ok) throw new Error('TTS request failed')
+        if (!res.ok) {
+          // Read server error body for diagnostics
+          let serverMsg = 'Error desconocido'
+          try {
+            const errBody = await res.json()
+            serverMsg = errBody.error || errBody.message || JSON.stringify(errBody)
+          } catch { /* response not JSON */ }
+          console.error('[AI Assistant] TTS server error:', res.status, serverMsg)
+          throw new Error(serverMsg)
+        }
 
         const blob = await res.blob()
         blobUrl = URL.createObjectURL(blob)
@@ -211,6 +225,9 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
           }
         }
       }
+
+      // Success — reset retry counter
+      retryCountRef.current = 0
 
       // Create and play audio element
       const audio = new Audio(blobUrl)
@@ -231,16 +248,31 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
       }
 
       await audio.play()
-    } catch {
-      // Aborted or network error — silent fail
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        // User-triggered abort — silent
+      } else {
+        retryCountRef.current += 1
+        if (retryCountRef.current <= MAX_RETRIES) {
+          console.warn('[AI Assistant] TTS failed, retry', retryCountRef.current, '/', MAX_RETRIES, ':', err)
+          // Exponential backoff: 2s, 4s
+          const delay = Math.pow(2, retryCountRef.current) * 1000
+          setTimeout(() => playDescription(text), delay)
+        } else {
+          console.error('[AI Assistant] TTS failed after', MAX_RETRIES, 'retries. Giving up for this module.')
+        }
+      }
       setLoading(false)
       setSpeaking(false)
     }
   }, [currentView, muted])
 
-  // Auto-play when module changes
+  // Auto-play when module changes — reset retry counter for new view
   useEffect(() => {
     if (!muted && description && currentView) {
+      // New view: reset retry counter
+      retryCountRef.current = 0
+      lastViewRef.current = currentView
       const timer = setTimeout(() => {
         playDescription(description)
       }, 800)
