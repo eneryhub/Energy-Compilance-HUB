@@ -42,7 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { removeToken, getToken } from '@/lib/api'
 // ✅ Reactivar asistente de voz (ya no causa problemas de conexión)
-import AIAssistant from '@/components/ai-assistant'
+import AIAssistant from '@/components/ai/ai-assistant'
 
 export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor'
 
