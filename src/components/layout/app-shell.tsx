@@ -41,9 +41,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { removeToken, getToken } from '@/lib/api'
-// AI Assistant disabled — causes connection pool exhaustion on serverless.
-// Re-enable locally if needed: import AIAssistant from '@/components/ai/ai-assistant'
-// const AIAssistantComponent = AIAssistant
+// ✅ Reactivar asistente de voz (ya no causa problemas de conexión)
+import AIAssistant from '@/components/ai-assistant'
 
 export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor'
 
@@ -551,7 +550,8 @@ export default function AppShell(props: AppShellProps) {
         </main>
       </div>
 
-      {/* AI Voice Guide — disabled for production (serverless connection limits) */}
+      {/* ✅ AI Voice Guide — ahora seguro y funcional */}
+      <AIAssistant currentView={props.currentView} />
     </div>
   )
 }
