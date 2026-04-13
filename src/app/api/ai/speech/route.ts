@@ -57,7 +57,7 @@ function hashText(text: string): string {
   return `${hash}`
 }
 
-// Singleton ZAI instance (avoid re-creating per request)
+// SDK singleton (safe in serverless — recreates on error)
 let zaiInstance: Awaited<ReturnType<typeof import('z-ai-web-dev-sdk').default.create>> | null = null
 
 async function getZAI() {
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
         status: 200,
         headers: {
           'Content-Type': 'audio/wav',
-          'Content-Length': cached.buffer.length.toString(),
+          'Content-Length': String(cached.buffer.length),
           'X-Cache': 'HIT',
         },
       })
@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
         input: text,
         voice,
         speed: clampedSpeed,
-        response_format: 'mp3',
+        response_format: 'wav',
         stream: false,
       })
       const arrayBuffer = await response.arrayBuffer()
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
           input: chunk,
           voice,
           speed: clampedSpeed,
-          response_format: 'mp3',
+          response_format: 'wav',
           stream: false,
         })
         const arrayBuffer = await response.arrayBuffer()
@@ -159,15 +159,18 @@ export async function POST(req: NextRequest) {
     return new NextResponse(audioBuffer, {
       status: 200,
       headers: {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': 'audio/wav',
         'Content-Length': audioBuffer.length.toString(),
         'X-Cache': 'MISS',
       },
     })
   } catch (error) {
-    console.error('[TTS API Error]', error)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error('[TTS API Error]', msg, error)
+    // Reset singleton on failure (could be stale in serverless)
+    zaiInstance = null
     return NextResponse.json(
-      { error: 'Error al generar el audio. Intenta de nuevo.' },
+      { error: `Error al generar el audio: ${msg}` },
       { status: 500 }
     )
   }
