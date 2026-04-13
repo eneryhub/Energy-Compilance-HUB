@@ -41,6 +41,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { removeToken, getToken } from '@/lib/api'
+import AIAssistant from '@/components/ai/ai-assistant'
 
 export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor'
 
@@ -547,6 +548,9 @@ export default function AppShell(props: AppShellProps) {
           {props.children}
         </main>
       </div>
+
+      {/* AI Voice Guide — Zero-risk UI add-on, isolated component */}
+      <AIAssistant currentView={props.currentView} />
     </div>
   )
 }
