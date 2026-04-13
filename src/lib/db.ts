@@ -18,7 +18,7 @@ const PRISMA_SCHEMA_VERSION = 6
  * causes P2024 "Timed out fetching a new connection" because the pool never
  * shrinks fast enough between cold starts.
  *
- * We inject connection_limit=1 & pool_timeout=8 directly into the env var
+ * We inject connection_limit=10 & pool_timeout=15 directly into the env var
  * BEFORE Prisma reads it — no constructor overrides needed.
  * For local dev (SQLite file://) we skip entirely.
  */
@@ -27,7 +27,7 @@ const PRISMA_SCHEMA_VERSION = 6
   const pg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
   if (pg && !url.includes('connection_limit')) {
     const sep = url.includes('?') ? '&' : '?'
-    process.env.DATABASE_URL = `${url}${sep}connection_limit=1&pool_timeout=8`
+    process.env.DATABASE_URL = `${url}${sep}connection_limit=10&pool_timeout=15`
   }
 })()
 
