@@ -30,6 +30,7 @@ import {
   MessageSquareText,
   Siren,
   Bell,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -197,9 +198,9 @@ function SidebarContent({
   const userPlan = user.subscriptionPlan || 'starter'
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
-      {/* Logo */}
-      <div className="p-4 flex items-center gap-3">
+    <div className="flex flex-col h-full bg-slate-900 overflow-hidden">
+      {/* Logo + Mobile Close Button */}
+      <div className="flex-shrink-0 p-4 flex items-center gap-3">
         <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-emerald-500/20 overflow-hidden">
           <img src="/logo.jpeg" alt="ECH Logo" className="w-7 h-7 object-cover rounded" />
         </div>
@@ -207,12 +208,23 @@ function SidebarContent({
           <h2 className="text-sm font-bold text-white truncate">Energy-Compliance</h2>
           <p className="text-[10px] text-slate-500 uppercase tracking-wider">Hub</p>
         </div>
+        {/* Mobile-only close button for better UX on dark background */}
+        <button
+          onClick={onNavigate}
+          className="lg:hidden flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label="Cerrar menú"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
-      <Separator className="bg-slate-800" />
+      <Separator className="flex-shrink-0 bg-slate-800" />
 
-      {/* Navigation */}
-      <nav className="flex-1 p-3 space-y-1">
+      {/* Navigation — scrollable area */}
+      <nav
+        className="flex-1 p-3 space-y-1 overflow-y-auto overscroll-contain min-h-0"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
         <p className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold px-3 mb-2">
           Navegación
         </p>
@@ -305,8 +317,8 @@ function SidebarContent({
         )}
       </nav>
 
-      {/* Compliance Status */}
-      <div className="p-3">
+      {/* Compliance Status — pinned at bottom */}
+      <div className="flex-shrink-0 p-3">
         <div
           className={cn(
             'p-3 rounded-lg text-xs',
@@ -334,10 +346,10 @@ function SidebarContent({
         </div>
       </div>
 
-      <Separator className="bg-slate-800" />
+      <Separator className="flex-shrink-0 bg-slate-800" />
 
-      {/* User info */}
-      <div className="p-3">
+      {/* User info + Logout — pinned at bottom */}
+      <div className="flex-shrink-0 p-3">
         <div className="flex items-center gap-3 p-2 rounded-lg bg-slate-800/50">
           <Avatar className="w-9 h-9 bg-emerald-600">
             <AvatarFallback className="text-white text-xs font-bold">
@@ -395,7 +407,7 @@ export default function AppShell(props: AppShellProps) {
               </button>
             </div>
             <Separator className="bg-slate-800" />
-            <nav className="flex-1 p-2 space-y-1 flex flex-col items-center">
+            <nav className="flex-1 p-2 space-y-1 flex flex-col items-center overflow-y-auto overscroll-contain min-h-0">
               {navItems.filter((item) => !item.roles || item.roles.includes(props.user.role)).map((item) => {
                 const Icon = item.icon
                 const isActive = props.currentView === item.id
@@ -447,7 +459,7 @@ export default function AppShell(props: AppShellProps) {
         ) : (
           <>
             <SidebarContent {...props} />
-            <div className="p-2">
+            <div className="p-2 flex-shrink-0">
               <button
                 onClick={() => setCollapsed(true)}
                 className="w-full flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-all text-xs"
@@ -460,9 +472,12 @@ export default function AppShell(props: AppShellProps) {
         )}
       </aside>
 
-      {/* Mobile Sidebar */}
+      {/* Mobile Sidebar — Sheet with scrollable content */}
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="p-0 w-72 bg-slate-900 border-slate-800">
+        <SheetContent
+          side="left"
+          className="p-0 w-72 bg-slate-900 border-slate-800 [&>button]:text-slate-400 [&>button]:hover:text-white"
+        >
           <SheetTitle className="sr-only">Navegación</SheetTitle>
           <SidebarContent {...props} onNavigate={() => setSidebarOpen(false)} />
         </SheetContent>
