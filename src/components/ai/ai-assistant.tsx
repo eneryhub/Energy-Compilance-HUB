@@ -80,25 +80,23 @@ const MODULE_DESCRIPTIONS: Record<ViewType, string> = {
     'Centro de Mando es el panel exclusivo del Super Administrador. Aquí gestionas todas las empresas del sistema, revisas auditorías globales y configuras parámetros de la plataforma.',
 }
 
-// ── Shared global state: isSpeaking flag ──
-// Uses a simple global variable + custom event so AppShell or other
-// components can read the speaking state without prop drilling.
-let _isSpeaking = false
-const _listeners = new Set<() => void>()
+// ── Shared global state for cross-component speaking status ──
+let _globalIsSpeaking = false
+const _globalListeners = new Set<() => void>()
 
-function setIsSpeaking(val: boolean) {
-  _isSpeaking = val
-  _listeners.forEach((fn) => fn())
+function _setGlobalSpeaking(val: boolean) {
+  _globalIsSpeaking = val
+  _globalListeners.forEach((fn) => fn())
 }
 
 export function useIsSpeaking() {
   const [, forceUpdate] = useState(0)
   useEffect(() => {
     const fn = () => forceUpdate((n) => n + 1)
-    _listeners.add(fn)
-    return () => { _listeners.delete(fn) }
+    _globalListeners.add(fn)
+    return () => { _globalListeners.delete(fn) }
   }, [])
-  return _isSpeaking
+  return _globalIsSpeaking
 }
 
 // ── Props ──
@@ -107,164 +105,180 @@ interface AIAssistantProps {
 }
 
 // ── Audio cache on client (blob URLs) ──
-const clientAudioCache = new Map<string, string>()
+const _audioBlobCache = new Map<string, string>()
 
-// ── Component ──
+// ── cn helper (inline to avoid circular imports) ──
+function clsx(...classes: (string | false | null | undefined)[]) {
+  return classes.filter(Boolean).join(' ')
+}
+
+// ── Voice Waves Mini Component ──
+function VoiceWaves() {
+  return (
+    <span className="inline-flex items-center gap-[2px] h-3">
+      {[0, 1, 2, 3].map((i) => (
+        <span
+          key={i}
+          className="w-[2px] bg-emerald-500 rounded-full animate-[voice-bar_0.8s_ease-in-out_infinite]"
+          style={{
+            height: '8px',
+            animationDelay: `${i * 0.15}s`,
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
+// ── Main Component ──
 export default function AIAssistant({ currentView }: AIAssistantProps) {
-  const [isOpen, setIsOpen] = useState(false)
-  const [isMuted, setIsMuted] = useState(() => {
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [muted, setMuted] = useState(() => {
     if (typeof window === 'undefined') return false
     return localStorage.getItem('ech-ai-muted') === 'true'
   })
-  const [isSpeaking, setIsSpeakingLocal] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const [displayText, setDisplayText] = useState('')
-  const [hasPlayed, setHasPlayed] = useState(false)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
+  const [speaking, setSpeaking] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [guideText, setGuideText] = useState('')
+  const audioElRef = useRef<HTMLAudioElement | null>(null)
+  const abortCtrlRef = useRef<AbortController | null>(null)
 
   const description = MODULE_DESCRIPTIONS[currentView] || ''
 
   // Persist mute preference
   useEffect(() => {
-    localStorage.setItem('ech-ai-muted', String(isMuted))
-  }, [isMuted])
+    localStorage.setItem('ech-ai-muted', String(muted))
+  }, [muted])
 
-  // Sync local speaking state with global
+  // Sync local speaking → global
   useEffect(() => {
-    setIsSpeaking(isSpeakingLocal)
-  }, [isSpeakingLocal])
+    _setGlobalSpeaking(speaking)
+  }, [speaking])
 
-  // Play TTS for current module description
-  const speak = useCallback(async (text: string) => {
-    if (!text || isMuted) return
+  // Play TTS for given text
+  const playDescription = useCallback(async (text: string) => {
+    if (!text || muted) return
 
     // Stop any currently playing audio
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+    if (audioElRef.current) {
+      audioElRef.current.pause()
+      audioElRef.current = null
     }
-    if (abortRef.current) {
-      abortRef.current.abort()
+    if (abortCtrlRef.current) {
+      abortCtrlRef.current.abort()
     }
 
-    setIsLoading(true)
-    setIsSpeakingLocal(false)
-    setDisplayText(text)
+    setLoading(true)
+    setSpeaking(false)
+    setGuideText(text)
 
     const cacheKey = `${currentView}_${text.slice(0, 50)}`
 
     try {
       let blobUrl: string | null = null
 
-      // Check client cache
-      const cached = clientAudioCache.get(cacheKey)
-      if (cached) {
-        blobUrl = cached
+      // Check client cache first
+      const cachedUrl = _audioBlobCache.get(cacheKey)
+      if (cachedUrl) {
+        blobUrl = cachedUrl
       } else {
         // Fetch audio from backend proxy
-        abortRef.current = new AbortController()
+        abortCtrlRef.current = new AbortController()
         const res = await fetch('/api/ai/speech', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            text: text.slice(0, 1024), // API limit
+            text: text.slice(0, 1024),
             voice: 'kazi',
             speed: 1.0,
           }),
-          signal: abortRef.current.signal,
+          signal: abortCtrlRef.current.signal,
         })
 
-        if (!res.ok) throw new Error('TTS failed')
+        if (!res.ok) throw new Error('TTS request failed')
 
         const blob = await res.blob()
         blobUrl = URL.createObjectURL(blob)
-        clientAudioCache.set(cacheKey, blobUrl)
+        _audioBlobCache.set(cacheKey, blobUrl)
 
-        // Limit cache size
-        if (clientAudioCache.size > 30) {
-          const firstKey = clientAudioCache.keys().next().value
-          if (firstKey) {
-            const oldUrl = clientAudioCache.get(firstKey)
+        // Limit cache size to prevent memory leak
+        if (_audioBlobCache.size > 30) {
+          const oldestKey = _audioBlobCache.keys().next().value
+          if (oldestKey) {
+            const oldUrl = _audioBlobCache.get(oldestKey)
             if (oldUrl) URL.revokeObjectURL(oldUrl)
-            clientAudioCache.delete(firstKey)
+            _audioBlobCache.delete(oldestKey)
           }
         }
       }
 
-      // Play audio
+      // Create and play audio element
       const audio = new Audio(blobUrl)
-      audioRef.current = audio
+      audioElRef.current = audio
 
       audio.onplay = () => {
-        setIsSpeakingLocal(true)
-        setIsLoading(false)
+        setSpeaking(true)
+        setLoading(false)
       }
       audio.onended = () => {
-        setIsSpeakingLocal(false)
-        audioRef.current = null
+        setSpeaking(false)
+        audioElRef.current = null
       }
       audio.onerror = () => {
-        setIsSpeakingLocal(false)
-        setIsLoading(false)
-        audioRef.current = null
+        setSpeaking(false)
+        setLoading(false)
+        audioElRef.current = null
       }
 
       await audio.play()
-      setHasPlayed(true)
     } catch {
       // Aborted or network error — silent fail
-      setIsLoading(false)
-      setIsSpeakingLocal(false)
+      setLoading(false)
+      setSpeaking(false)
     }
-  }, [currentView, isMuted])
+  }, [currentView, muted])
 
-  // Auto-play when module changes (only if not muted and not already speaking)
+  // Auto-play when module changes
   useEffect(() => {
-    if (!isMuted && description && currentView) {
-      setHasPlayed(false)
+    if (!muted && description && currentView) {
       const timer = setTimeout(() => {
-        speak(description)
-      }, 800) // Small delay for page transition to complete
+        playDescription(description)
+      }, 800)
       return () => clearTimeout(timer)
     }
-  }, [currentView]) // intentionally only trigger on currentView
+  }, [currentView]) // intentionally only trigger on currentView change
 
-  // Stop audio on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause()
+      if (audioElRef.current) {
+        audioElRef.current.pause()
       }
-      if (abortRef.current) {
-        abortRef.current.abort()
+      if (abortCtrlRef.current) {
+        abortCtrlRef.current.abort()
       }
     }
   }, [])
 
-  const toggleMute = () => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+  const handleToggleMute = () => {
+    if (audioElRef.current) {
+      audioElRef.current.pause()
+      audioElRef.current = null
     }
-    setIsMutedLocal(!isMuted)
-  }
-
-  // Rename to avoid confusion with state setter
-  const setIsMutedLocal = (val: boolean) => {
-    setIsMuted(val)
+    setSpeaking(false)
+    setMuted((prev) => !prev)
   }
 
   const handleReplay = () => {
-    speak(description)
+    playDescription(description)
   }
 
   const handleStop = () => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+    if (audioElRef.current) {
+      audioElRef.current.pause()
+      audioElRef.current = null
     }
-    setIsSpeakingLocal(false)
+    setSpeaking(false)
   }
 
   // Don't render during SSR or if no description
@@ -281,7 +295,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
       >
         {/* Speech Card (tooltip) */}
         <AnimatePresence>
-          {isOpen && (
+          {panelOpen && (
             <motion.div
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -291,7 +305,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
             >
               {/* Close button */}
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={() => setPanelOpen(false)}
                 className="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
                 aria-label="Cerrar guía"
               >
@@ -306,7 +320,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                   Guía IA
                 </span>
-                {isSpeaking && (
+                {speaking && (
                   <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
                     <VoiceWaves />
                     Hablando...
@@ -316,12 +330,12 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
 
               {/* Description text */}
               <p className="text-sm text-slate-700 leading-relaxed pr-4 max-h-[140px] overflow-y-auto">
-                {displayText || description}
+                {guideText || description}
               </p>
 
               {/* Action buttons */}
               <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100">
-                {isSpeaking ? (
+                {speaking ? (
                   <button
                     onClick={handleStop}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
@@ -332,37 +346,28 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
                 ) : (
                   <button
                     onClick={handleReplay}
-                    disabled={isLoading}
+                    disabled={loading}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition-colors disabled:opacity-50"
                   >
-                    {isLoading ? (
+                    {loading ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <Volume2 className="w-3.5 h-3.5" />
                     )}
-                    {isLoading ? 'Generando...' : 'Reproducir'}
+                    {loading ? 'Generando...' : 'Reproducir'}
                   </button>
                 )}
                 <button
-                  onClick={toggleMute}
-                  className={cn(
+                  onClick={handleToggleMute}
+                  className={clsx(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-                    isMuted
+                    muted
                       ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                       : 'bg-amber-50 text-amber-600 hover:bg-amber-100'
                   )}
                 >
-                  {isMuted ? (
-                    <>
-                      <VolumeX className="w-3.5 h-3.5" />
-                      Silenciado
-                    </>
-                  ) : (
-                    <>
-                      <VolumeX className="w-3.5 h-3.5" />
-                      Silenciar
-                    </>
-                  )}
+                  <VolumeX className="w-3.5 h-3.5" />
+                  {muted ? 'Silenciado' : 'Silenciar'}
                 </button>
               </div>
             </motion.div>
@@ -371,28 +376,27 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
 
         {/* Main FAB (Floating Action Button) */}
         <button
-          onClick={() => setIsOpen(!isOpen)}
-          className={cn(
+          onClick={() => setPanelOpen(!panelOpen)}
+          className={clsx(
             'relative w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2',
-            isOpen
+            panelOpen
               ? 'bg-slate-700 text-white focus:ring-slate-400'
-              : isSpeaking
+              : speaking
                 ? 'bg-emerald-500 text-white focus:ring-emerald-300 shadow-emerald-500/25 shadow-lg'
-                : isMuted
+                : muted
                   ? 'bg-slate-400 text-white focus:ring-slate-300'
                   : 'bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-300'
           )}
-          aria-label={isOpen ? 'Cerrar guía' : 'Abrir guía de voz'}
+          aria-label={panelOpen ? 'Cerrar guía' : 'Abrir guía de voz'}
         >
-          {isOpen ? (
+          {panelOpen ? (
             <X className="w-6 h-6" />
-          ) : isLoading ? (
+          ) : loading ? (
             <Loader2 className="w-6 h-6 animate-spin" />
           ) : (
             <>
               <MessageCircle className="w-6 h-6" />
-              {/* Voice wave rings when speaking */}
-              {isSpeaking && (
+              {speaking && (
                 <>
                   <span className="absolute inset-0 rounded-full bg-emerald-400/30 animate-ping" />
                   <span className="absolute inset-0 rounded-full border-2 border-emerald-400/40 animate-[voice-ring_1.5s_ease-out_infinite]" />
@@ -403,7 +407,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
         </button>
 
         {/* Mute indicator badge */}
-        {isMuted && !isOpen && (
+        {muted && !panelOpen && (
           <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center">
             <VolumeX className="w-2.5 h-2.5 text-white" />
           </span>
@@ -422,26 +426,6 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
             opacity: 0;
           }
         }
-      `}</style>
-    </>
-  )
-}
-
-// ── Voice Waves Mini Component ──
-function VoiceWaves() {
-  return (
-    <span className="inline-flex items-center gap-[2px] h-3">
-      {[0, 1, 2, 3].map((i) => (
-        <span
-          key={i}
-          className="w-[2px] bg-emerald-500 rounded-full animate-[voice-bar_0.8s_ease-in-out_infinite]"
-          style={{
-            height: '8px',
-            animationDelay: `${i * 0.15}s`,
-          }}
-        />
-      ))}
-      <style jsx>{`
         @keyframes voice-bar {
           0%,
           100% {
@@ -452,11 +436,6 @@ function VoiceWaves() {
           }
         }
       `}</style>
-    </span>
+    </>
   )
-}
-
-// ── cn helper (inline to avoid import dependency) ──
-function cn(...classes: (string | false | null | undefined)[]) {
-  return classes.filter(Boolean).join(' ')
 }
