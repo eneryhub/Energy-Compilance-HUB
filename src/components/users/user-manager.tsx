@@ -387,7 +387,7 @@ function UserFormDialog({
   )
 }
 
-// ============ Invite Employee Dialog ============
+// ============ Invite Employee Dialog (MEJORADO) ============
 
 function InviteEmployeeDialog({
   open,
@@ -444,82 +444,95 @@ function InviteEmployeeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Link className="w-5 h-5 text-orange-600" />
-            Invitar Empleado de Campo
-          </DialogTitle>
-          <DialogDescription>
-            Genera un enlace de registro para que los empleados de campo se registren con rol Empleado.
-            Comparte este enlace por WhatsApp, email o cualquier otro medio.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-[520px] p-0 overflow-hidden">
+        {/* Cabecera con fondo decorativo */}
+        <div className="bg-gradient-to-r from-orange-50 to-amber-50 px-6 pt-6 pb-4 border-b border-orange-100">
+          <DialogHeader className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center">
+                <Link className="w-5 h-5 text-orange-600" />
+              </div>
+              <DialogTitle className="text-xl font-semibold text-slate-800">
+                Invitar Empleado de Campo
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-slate-600 text-sm leading-relaxed">
+              Genera un enlace de registro para que los empleados de campo puedan acceder al módulo
+              de Seguridad en Campo. Comparte este enlace por WhatsApp, email u otro medio.
+            </DialogDescription>
+          </DialogHeader>
+        </div>
 
-        <div className="space-y-4 py-2">
-          {/* How it works */}
-          <div className="rounded-lg bg-orange-50 border border-orange-200 p-4 space-y-3">
-            <h4 className="text-sm font-semibold text-orange-800">Cómo funciona</h4>
-            <ol className="text-xs text-orange-700 space-y-1.5 list-decimal list-inside">
-              <li>Copia el enlace de abajo y envíalo al empleado</li>
-              <li>El empleado abre el enlace y completa su nombre, email y contraseña</li>
-              <li>Se registra automáticamente con rol <strong>Empleado de Campo</strong></li>
-              <li>Podrá acceder al botón de emergencia y reportes HSE desde su celular</li>
-            </ol>
+        <div className="px-6 py-5 space-y-5">
+          {/* Instrucciones en formato tarjeta */}
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3">
+            <h4 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-xs font-bold">1</span>
+              Cómo funciona
+            </h4>
+            <ul className="space-y-2 text-xs text-slate-600 pl-7 list-disc">
+              <li>Copia el enlace exclusivo de tu empresa y envíalo al empleado.</li>
+              <li>El empleado abre el enlace, completa sus datos y elige una contraseña.</li>
+              <li>Se registra automáticamente con el rol <strong className="text-orange-700">Empleado de Campo</strong>.</li>
+              <li>Podrá usar el botón de emergencia y reportar incidentes desde su celular.</li>
+            </ul>
           </div>
 
-          {/* Generated link */}
+          {/* Enlace generado */}
           <div className="space-y-2">
-            <Label className="text-sm font-medium">Enlace de registro</Label>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600 font-mono truncate">
-                {inviteLink || 'Generando...'}
+            <Label className="text-sm font-medium text-slate-700">Enlace de registro</Label>
+            <div className="flex items-center gap-2 bg-white rounded-lg border border-slate-200 focus-within:ring-2 focus-within:ring-orange-200 focus-within:border-orange-300 transition-all">
+              <div className="flex-1 min-w-0 px-3 py-2.5">
+                <code className="text-xs text-slate-600 font-mono break-all">
+                  {inviteLink || 'Generando...'}
+                </code>
               </div>
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 onClick={handleCopy}
-                className="shrink-0 gap-1.5"
+                className="shrink-0 gap-1.5 mr-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50"
               >
                 {copied ? (
                   <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span className="text-emerald-600">Copiado</span>
+                    <Check className="w-4 h-4 text-emerald-600" />
+                    <span className="text-emerald-600 text-xs">Copiado</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5" />
-                    Copiar
+                    <Copy className="w-4 h-4" />
+                    <span className="text-xs">Copiar</span>
                   </>
                 )}
               </Button>
             </div>
           </div>
 
-          {/* Share buttons */}
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleShare}
-              className="flex-1 gap-2"
-            >
-              <Share2 className="w-4 h-4" />
-              Compartir
-            </Button>
-          </div>
+          {/* Botón compartir */}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleShare}
+            className="w-full gap-2 border-orange-200 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+          >
+            <Share2 className="w-4 h-4" />
+            Compartir enlace
+          </Button>
 
-          {/* Info note */}
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            Este enlace es permanente y único para tu empresa. Cualquier persona con el enlace puede
-            registrarse como empleado de campo. Solo los usuarios activos con rol EMPLOYEE tendrán
-            acceso al dashboard de campo (botón de emergencia y reportes HSE).
-          </p>
+          {/* Nota informativa */}
+          <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+            <p className="text-[11px] text-amber-700 leading-relaxed flex items-start gap-2">
+              <span className="shrink-0">ℹ️</span>
+              Este enlace es permanente y único para tu empresa. Solo los usuarios que se registren
+              con este enlace obtendrán el rol de Empleado de Campo y accederán al dashboard de
+              Seguridad en Campo.
+            </p>
+          </div>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
+        <DialogFooter className="border-t border-slate-100 px-6 py-4 bg-slate-50/50">
+          <Button variant="outline" onClick={onClose} className="w-full sm:w-auto">
             Cerrar
           </Button>
         </DialogFooter>
