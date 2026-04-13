@@ -7,36 +7,27 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 // Increment this when the Prisma schema changes to force client regeneration in dev.
-// The old cached client won't have the new models/fields.
 const PRISMA_SCHEMA_VERSION = 6
 
 /**
- * Patch DATABASE_URL connection pool for serverless (Vercel).
- *
- * The full ensureSchemaColumns() (~40 sequential queries) exhausts the
- * default pool on cold starts.  We inject conservative pool params
- * directly into the env var BEFORE Prisma reads it.
- *
- * – connection_limit=5  (room for ensureSchema + user requests)
- * – pool_timeout=30     (30 s instead of default 10-15 s)
- *
- * For local dev (SQLite file://) we skip entirely.
+ * Patch DATABASE_URL for serverless environments (Vercel, Netlify, etc.).
+ * Ajustamos pool_timeout a 30s (mayor tolerancia) y connection_limit a 5.
  */
-const _dbUrl = process.env.DATABASE_URL || ''
-const _isPg = _dbUrl.startsWith('postgres://') || _dbUrl.startsWith('postgresql://') || _dbUrl.includes('@') || !_dbUrl.startsWith('file:')
-if (_isPg && !_dbUrl.includes('connection_limit')) {
-  const _sep = _dbUrl.includes('?') ? '&' : '?'
-  process.env.DATABASE_URL = `${_dbUrl}${_sep}connection_limit=5&pool_timeout=30`
-}
+;(function patchConnectionPool() {
+  const url = process.env.DATABASE_URL || ''
+  const pg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
+  if (pg && !url.includes('connection_limit')) {
+    const sep = url.includes('?') ? '&' : '?'
+    process.env.DATABASE_URL = `${url}${sep}connection_limit=5&pool_timeout=30`
+  }
+})()
 
 let _db: PrismaClient
 
 if (process.env.NODE_ENV === 'production') {
-  // In production, create once and reuse
   _db = globalForPrisma.prisma ?? new PrismaClient()
   if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
 } else {
-  // In development, check schema version to detect model changes
   if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
     _db = globalForPrisma.prisma
   } else {
@@ -48,10 +39,6 @@ if (process.env.NODE_ENV === 'production') {
 
 export const db = _db
 
-/**
- * Detect if the database is PostgreSQL (Vercel/Supabase) or SQLite (local dev).
- * Now defaults to PostgreSQL since schema uses "postgresql" provider.
- */
 function isPostgreSQL(): boolean {
   const url = process.env.DATABASE_URL || ''
   return url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
@@ -60,9 +47,6 @@ function isPostgreSQL(): boolean {
 let _syncRunning = false
 let _syncDone = false
 
-/**
- * Check if a table exists in the database
- */
 async function tableExists(tableName: string): Promise<boolean> {
   const pg = isPostgreSQL()
   if (pg) {
@@ -81,9 +65,6 @@ async function tableExists(tableName: string): Promise<boolean> {
   }
 }
 
-/**
- * Ensure a table exists — creates it with the provided SQL if missing.
- */
 async function ensureTableExists(tableName: string, _sqliteSql: string, pgSql: string): Promise<void> {
   const exists = await tableExists(tableName)
   if (exists) return
@@ -109,10 +90,6 @@ async function ensureTableExists(tableName: string, _sqliteSql: string, pgSql: s
   console.log(`[DB] Auto-sync: table "${tableName}" created successfully`)
 }
 
-/**
- * Ensure a column exists in a table. Adds it if missing.
- * Works for both SQLite and PostgreSQL.
- */
 async function ensureColumn(
   tableName: string,
   columnName: string,
@@ -151,12 +128,7 @@ async function ensureColumn(
   }
 }
 
-/**
- * Comprehensive schema sync — ensures all tables and columns exist.
- * Safe to call multiple times (idempotent).
- * Handles both SQLite (local) and PostgreSQL (Supabase production).
- */
-export async function ensureSchemaColumns(): Promise<void> {
+export async function ensureSchemaColumns(retries = 2): Promise<void> {
   if (_syncDone || _syncRunning) return
   _syncRunning = true
 
@@ -257,7 +229,6 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "EmergencyAlert_createdAt_idx" ON "EmergencyAlert"("createdAt");
     `)
 
-    // EmergencyAlert: ensure all columns exist (in case table was created with older schema)
     await ensureColumn('EmergencyAlert', 'attendedById', 'TEXT', 'TEXT')
     await ensureColumn('EmergencyAlert', 'attendedByName', 'TEXT', 'TEXT')
     await ensureColumn('EmergencyAlert', 'attendedAt', 'TIMESTAMPTZ', 'DATETIME')
@@ -303,15 +274,11 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "HSEReport_createdAt_idx" ON "HSEReport"("createdAt");
     `)
 
-    // HSEReport: ensure ALL columns exist (critical for Supabase sync)
     await ensureColumn('HSEReport', 'descripcion',
       'TEXT NOT NULL DEFAULT \'\'',
       'TEXT NOT NULL DEFAULT \'\''
     )
-    await ensureColumn('HSEReport', 'fotoUrl',
-      'TEXT',
-      'TEXT'
-    )
+    await ensureColumn('HSEReport', 'fotoUrl', 'TEXT', 'TEXT')
     await ensureColumn('HSEReport', 'categoria',
       "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'",
       "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'"
@@ -324,27 +291,21 @@ export async function ensureSchemaColumns(): Promise<void> {
       "TEXT NOT NULL DEFAULT 'ABIERTO'",
       "TEXT NOT NULL DEFAULT 'ABIERTO'"
     )
-    await ensureColumn('HSEReport', 'ubicacion',
-      'TEXT',
-      'TEXT'
-    )
+    await ensureColumn('HSEReport', 'ubicacion', 'TEXT', 'TEXT')
 
     // ============ Ensure Sensor table + columns ============
     await ensureColumn('Sensor', 'locationId', 'TEXT', 'TEXT')
     await ensureColumn('Sensor', 'isSimulated', 'BOOLEAN NOT NULL DEFAULT true', 'BOOLEAN NOT NULL DEFAULT 1')
     await ensureColumn('Sensor', 'isActive', 'BOOLEAN NOT NULL DEFAULT true', 'BOOLEAN NOT NULL DEFAULT 1')
-
-    // ============ Ensure SensorReading table ============
     await ensureColumn('SensorReading', 'status',
       "TEXT NOT NULL DEFAULT 'NORMAL'",
       "TEXT NOT NULL DEFAULT 'NORMAL'"
     )
 
-    // ============ Ensure SubscriptionInvoice table + columns ============
+    // ============ Rest of columns (Permit, WorkLocation, etc.) ============
     await ensureColumn('SubscriptionInvoice', 'amount', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('SubscriptionInvoice', 'invoicePdfUrl', 'TEXT', 'TEXT')
 
-    // ============ Ensure Permit columns (GPS/geofence) ============
     await ensureColumn('Permit', 'workLatitude', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('Permit', 'workLongitude', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('Permit', 'workRadius', 'INTEGER NOT NULL DEFAULT 100', 'INTEGER NOT NULL DEFAULT 100')
@@ -357,7 +318,6 @@ export async function ensureSchemaColumns(): Promise<void> {
     await ensureColumn('Permit', 'photosCount', 'INTEGER NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0')
     await ensureColumn('Permit', 'checklistNotes', 'TEXT', 'TEXT')
 
-    // ============ Ensure WorkLocation columns (QR/Beacon) ============
     await ensureColumn('WorkLocation', 'qrCodeSecret', 'TEXT', 'TEXT')
     await ensureColumn('WorkLocation', 'qrCodeData', 'TEXT', 'TEXT')
     await ensureColumn('WorkLocation', 'beaconUuid', 'TEXT', 'TEXT')
@@ -365,27 +325,26 @@ export async function ensureSchemaColumns(): Promise<void> {
     await ensureColumn('WorkLocation', 'beaconMinor', 'INTEGER', 'INTEGER')
     await ensureColumn('WorkLocation', 'beaconRssi', 'INTEGER NOT NULL DEFAULT -70', 'INTEGER NOT NULL DEFAULT -70')
 
-    // ============ Ensure HseDocument columns (AI extraction) ============
     await ensureColumn('HseDocument', 'aiExtractedData', 'TEXT', 'TEXT')
     await ensureColumn('HseDocument', 'aiConfidence', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('HseDocument', 'tags', 'TEXT', 'TEXT')
-
-    // ============ Ensure AuditLog columns ============
     await ensureColumn('AuditLog', 'userAgent', 'TEXT', 'TEXT')
 
     _syncDone = true
     console.log('[DB] Auto-sync completed successfully')
   } catch (error) {
     console.error('[DB] Auto-sync error:', error instanceof Error ? error.message : error)
-    // Don't set _syncDone so it can retry
+    if (retries > 0) {
+      console.log(`[DB] Retrying auto-sync (${retries} attempts left)...`)
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      _syncRunning = false
+      return ensureSchemaColumns(retries - 1)
+    }
   } finally {
     _syncRunning = false
   }
 }
 
-/**
- * Helper to format dates in SQL queries — works for both SQLite and PostgreSQL.
- */
 export function sqlDateFormat(column: string, format: 'year-month' | 'year'): string {
   const pg = isPostgreSQL()
   if (format === 'year-month') {
@@ -394,10 +353,7 @@ export function sqlDateFormat(column: string, format: 'year-month' | 'year'): st
   return pg ? `TO_CHAR("${column}", 'YYYY')` : `strftime('%Y', "${column}")`
 }
 
-/**
- * Exported isPostgreSQL for use in route handlers that need DB-agnostic raw queries.
- */
 export { isPostgreSQL }
 
-// Auto-sync on module load (non-blocking, won't block server startup)
+// Auto-sync on module load (non-blocking, con reintentos)
 ensureSchemaColumns().catch(() => { /* non-fatal */ })
