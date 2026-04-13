@@ -12,22 +12,24 @@ import { join } from 'path'
 const MAX_TTS_LENGTH = 1024
 
 // ── Ensure .z-ai-config exists at runtime ──
-// The SDK reads this file to find baseUrl / apiKey. On Vercel the file
-// isn't deployed (it's in .gitignore), so we create it from the same
-// values the local dev environment uses.
+// The SDK reads this file to find baseUrl / apiKey. On Vercel:
+//   - /var/task (process.cwd()) is READ-ONLY → write fails silently
+//   - /etc is also read-only
+//   - /tmp IS writable → write there and point HOME to /tmp
+// The SDK checks os.homedir() which uses the HOME env var.
 let _configEnsured = false
 
 function ensureZaiConfig(): void {
   if (_configEnsured) return
 
-  const configPaths = [
+  // First: check if already exists in standard locations
+  const checkPaths = [
     join(process.cwd(), '.z-ai-config'),
     '/etc/.z-ai-config',
+    join(process.env.HOME || '', '.z-ai-config'),
   ]
-
-  // Check if config already exists anywhere the SDK would look
-  for (const p of configPaths) {
-    if (existsSync(p)) {
+  for (const p of checkPaths) {
+    if (p && existsSync(p)) {
       _configEnsured = true
       console.log(`[TTS] .z-ai-config found at ${p}`)
       return
@@ -43,14 +45,30 @@ function ensureZaiConfig(): void {
     userId: process.env.ZAI_USER_ID || 'ccad1f7b-7419-48c6-a042-51a8dd0808f1',
   })
 
-  try {
-    // Write to project root (where the SDK looks first)
-    writeFileSync(join(process.cwd(), '.z-ai-config'), config, 'utf-8')
-    console.log('[TTS] .z-ai-config written to project root')
-  } catch (err) {
-    console.error('[TTS] Failed to write .z-ai-config:', err)
+  // Try multiple writable locations (Vercel → /tmp, local dev → cwd)
+  const writeAttempts = [
+    { path: join(process.cwd(), '.z-ai-config'), label: 'project root' },
+    { path: '/tmp/.z-ai-config', label: '/tmp' },
+  ]
+
+  for (const attempt of writeAttempts) {
+    try {
+      writeFileSync(attempt.path, config, 'utf-8')
+      console.log(`[TTS] .z-ai-config written to ${attempt.label}: ${attempt.path}`)
+
+      // If we wrote to /tmp, point HOME there so the SDK finds it
+      if (attempt.path.startsWith('/tmp')) {
+        process.env.HOME = '/tmp'
+        console.log('[TTS] Set HOME=/tmp for SDK config lookup')
+      }
+      _configEnsured = true
+      return
+    } catch {
+      // Try next location
+    }
   }
 
+  console.error('[TTS] Failed to write .z-ai-config to any location')
   _configEnsured = true
 }
 

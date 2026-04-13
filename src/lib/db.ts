@@ -11,25 +11,23 @@ const globalForPrisma = globalThis as unknown as {
 const PRISMA_SCHEMA_VERSION = 6
 
 /**
- * Patch DATABASE_URL for serverless environments (Vercel, Netlify, etc.).
+ * Patch DATABASE_URL connection pool for serverless (Vercel).
  *
- * Each serverless function is an isolated container that holds at most 1-2
- * concurrent requests. The default Prisma pool (5 connections, 10 s timeout)
- * causes P2024 "Timed out fetching a new connection" because the pool never
- * shrinks fast enough between cold starts.
+ * The full ensureSchemaColumns() (~40 sequential queries) exhausts the
+ * default pool on cold starts.  We inject conservative pool params
+ * directly into the env var BEFORE Prisma reads it.
  *
- * We inject connection_limit=10 & pool_timeout=15 directly into the env var
- * BEFORE Prisma reads it — no constructor overrides needed.
+ * – connection_limit=5  (room for ensureSchema + user requests)
+ * – pool_timeout=30     (30 s instead of default 10-15 s)
+ *
  * For local dev (SQLite file://) we skip entirely.
  */
-;(function patchConnectionPool() {
-  const url = process.env.DATABASE_URL || ''
-  const pg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
-  if (pg && !url.includes('connection_limit')) {
-    const sep = url.includes('?') ? '&' : '?'
-    process.env.DATABASE_URL = `${url}${sep}connection_limit=10&pool_timeout=15`
-  }
-})()
+const _dbUrl = process.env.DATABASE_URL || ''
+const _isPg = _dbUrl.startsWith('postgres://') || _dbUrl.startsWith('postgresql://') || _dbUrl.includes('@') || !_dbUrl.startsWith('file:')
+if (_isPg && !_dbUrl.includes('connection_limit')) {
+  const _sep = _dbUrl.includes('?') ? '&' : '?'
+  process.env.DATABASE_URL = `${_dbUrl}${_sep}connection_limit=5&pool_timeout=30`
+}
 
 let _db: PrismaClient
 
