@@ -25,7 +25,7 @@ const PRISMA_SCHEMA_VERSION = 6
  *
  * For local dev (SQLite) we keep defaults.
  */
-function buildPrismaOptions(): { datasource?: { db: { url: string } } } {
+function buildPrismaOptions(): { datasources?: { db: { url: string } } } {
   const url = process.env.DATABASE_URL || ''
   const pg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
 
@@ -33,7 +33,7 @@ function buildPrismaOptions(): { datasource?: { db: { url: string } } } {
     // PostgreSQL (Vercel / Neon / Supabase / Railway …)
     const sep = url.includes('?') ? '&' : '?'
     const poolUrl = `${url}${sep}connection_limit=1&pool_timeout=8`
-    return { datasource: { db: { url: poolUrl } } }
+    return { datasources: { db: { url: poolUrl } } }
   }
 
   // SQLite local dev — keep defaults
