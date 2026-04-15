@@ -41,8 +41,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { removeToken, getToken } from '@/lib/api'
-// ✅ Reactivar asistente de voz (ya no causa problemas de conexión)
-import AIAssistant from '@/components/ai/ai-assistant'
+// AI Assistant disabled — causes connection pool exhaustion on serverless.
+// Re-enable locally if needed: import AIAssistant from '@/components/ai/ai-assistant'
+// const AIAssistantComponent = AIAssistant
 
 export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor'
 
@@ -95,9 +96,9 @@ function isModuleAccessible(moduleId: string, plan: string): boolean {
 }
 
 const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; roles?: string[] }[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'permits', label: 'Permisos', icon: FileText },
-  { id: 'documents', label: 'Documentos HSE', icon: FolderOpen },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN', 'GERENTE'] },
+  { id: 'permits', label: 'Permisos', icon: FileText, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN', 'GERENTE'] },
+  { id: 'documents', label: 'Documentos HSE', icon: FolderOpen, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN', 'GERENTE'] },
   { id: 'approval', label: 'Aprobaciones', icon: CheckCircle, roles: ['ADMIN', 'SUPERVISOR', 'GERENTE', 'MANAGER'] },
   { id: 'risk-types', label: 'Riesgos', icon: AlertTriangle, roles: ['ADMIN', 'SUPERVISOR'] },
   { id: 'locations', label: 'Ubicaciones', icon: MapPin, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
@@ -113,7 +114,7 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
   { id: 'system', label: 'Plataforma', icon: Layers, roles: ['ADMIN'] },
   // Hidden: only SUPER_ADMIN sees this (not in the visible nav, accessed via URL)
-  { id: 'user-manual', label: 'Manual de Usuario', icon: BookOpen },
+  { id: 'user-manual', label: 'Manual de Usuario', icon: BookOpen, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN', 'GERENTE'] },
   { id: 'technical-manual', label: 'Manual Técnico', icon: Wrench, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   { id: 'diagnostics', label: 'Diagnóstico', icon: Stethoscope, roles: ['ADMIN', 'SUPER_ADMIN'] },
   { id: 'goc', label: 'GOC', icon: Radar, roles: ['SUPER_ADMIN'] },
@@ -550,8 +551,7 @@ export default function AppShell(props: AppShellProps) {
         </main>
       </div>
 
-      {/* ✅ AI Voice Guide — ahora seguro y funcional */}
-      <AIAssistant currentView={props.currentView} />
+      {/* AI Voice Guide — disabled for production (serverless connection limits) */}
     </div>
   )
 }
