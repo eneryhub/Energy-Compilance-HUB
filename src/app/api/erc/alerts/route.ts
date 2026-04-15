@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { getSession } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit'
 
-// ============ POST: Create emergency alert ============
+// POST /api/erc/alerts - Create a new emergency/panic alert
 export async function POST(request: NextRequest) {
   try {
     const session = await getSession(request)
@@ -11,23 +11,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    const body = await request.json()
-    const { tipo, ubicacion, descripcion, photoUrl, prioridad } = body
+    let body: Record<string, unknown>
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Body de la petición inválido (JSON malformado)' }, { status: 400 })
+    }
 
-    if (!tipo || !ubicacion) {
+    const tipo = typeof body.tipo === 'string' ? body.tipo : 'PANICO'
+    const descripcion = typeof body.descripcion === 'string' ? body.descripcion : ''
+    const prioridad = typeof body.prioridad === 'string' ? body.prioridad : 'ALTA'
+    const photoUrl = typeof body.photoUrl === 'string' ? body.photoUrl : null
+
+    // Handle ubicacion: can be string, object, null, or missing
+    let ubicacionRaw = body.ubicacion
+    let ubicacionStr = '{}'
+    if (ubicacionRaw !== null && ubicacionRaw !== undefined) {
+      ubicacionStr = typeof ubicacionRaw === 'string' ? ubicacionRaw : JSON.stringify(ubicacionRaw)
+    }
+
+    // Validate prioridad
+    const validPrioridades = ['BAJA', 'MEDIA', 'ALTA', 'CRITICA']
+    if (!validPrioridades.includes(prioridad)) {
       return NextResponse.json(
-        { error: 'tipo y ubicacion son requeridos' },
+        { error: `Prioridad inválida: "${prioridad}". Valores: ${validPrioridades.join(', ')}` },
         { status: 400 }
       )
     }
 
-    // Validate ubicacion is a valid JSON string
-    let parsedUbicacion: unknown
-    try {
-      parsedUbicacion = typeof ubicacion === 'string' ? JSON.parse(ubicacion) : ubicacion
-    } catch {
+    // Validate tipo
+    const validTipos = ['PANICO', 'INCENDIO', 'DERRAME', 'EVACUACION', 'LESION', 'OTRO']
+    if (!validTipos.includes(tipo)) {
       return NextResponse.json(
-        { error: 'ubicacion debe ser un JSON válido' },
+        { error: `Tipo de alerta inválido: "${tipo}". Valores: ${validTipos.join(', ')}` },
         { status: 400 }
       )
     }
@@ -37,10 +53,10 @@ export async function POST(request: NextRequest) {
         companyId: session.companyId,
         userId: session.userId,
         tipo,
-        ubicacion: JSON.stringify(parsedUbicacion),
+        ubicacion: ubicacionStr,
         descripcion: descripcion || null,
         photoUrl: photoUrl || null,
-        prioridad: prioridad || 'ALTA',
+        prioridad,
       },
       include: {
         user: {
@@ -49,25 +65,34 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Audit log
-    await createAuditLog({
-      companyId: session.companyId,
-      userId: session.userId,
-      action: 'CREATE_EMERGENCY_ALERT',
-      entityType: 'EMERGENCY_ALERT',
-      entityId: alert.id,
-      details: { tipo, prioridad: prioridad || 'ALTA' },
-    }, request)
+    // Audit log — non-blocking: don't fail the alert if audit log fails
+    try {
+      await createAuditLog({
+        companyId: session.companyId,
+        userId: session.userId,
+        action: 'ERC_ALERT_CREATED',
+        entityType: 'EmergencyAlert',
+        entityId: alert.id,
+        details: {
+          tipo,
+          prioridad,
+          descripcion: descripcion || null,
+          createdBy: session.name,
+        },
+      }, request)
+    } catch (auditError) {
+      console.error('[ERC Alerts] Audit log failed (non-blocking):', auditError)
+    }
 
-    return NextResponse.json(alert, { status: 201 })
+    return NextResponse.json({ alert }, { status: 201 })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Error del servidor'
-    console.error('Create emergency alert error:', error)
+    console.error('[ERC Alerts] Error creating emergency alert:', error)
+    const message = error instanceof Error ? error.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
 
-// ============ GET: List emergency alerts ============
+// GET /api/erc/alerts - List emergency alerts for the user's company
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession(request)
@@ -78,18 +103,14 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const estado = searchParams.get('estado') || undefined
     const prioridad = searchParams.get('prioridad') || undefined
-    const limit = Math.min(Number(searchParams.get('limit')) || 50, 200)
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200)
 
     const where: Record<string, unknown> = {
       companyId: session.companyId,
     }
 
-    if (estado) {
-      where.estado = estado
-    }
-    if (prioridad) {
-      where.prioridad = prioridad
-    }
+    if (estado) where.estado = estado
+    if (prioridad) where.prioridad = prioridad
 
     const alerts = await db.emergencyAlert.findMany({
       where,
@@ -102,10 +123,10 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    return NextResponse.json(alerts)
+    return NextResponse.json({ alerts })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Error del servidor'
-    console.error('Get emergency alerts error:', error)
+    console.error('[ERC Alerts] Error listing emergency alerts:', error)
+    const message = error instanceof Error ? error.message : 'Error interno del servidor'
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

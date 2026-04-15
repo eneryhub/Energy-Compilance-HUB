@@ -313,13 +313,14 @@ export default function PanicButton() {
   const handlePanicSubmit = async () => {
     setSubmitting(true)
     try {
-      const ubicacion = gpsLocation
+      // Send ubicacion as JSON string (empty object if no GPS captured)
+      const ubicacionStr = gpsLocation
         ? JSON.stringify({ lat: gpsLocation.lat, lng: gpsLocation.lng, accuracy: gpsLocation.accuracy })
-        : null
+        : '{}'
 
       await apiFetch('/erc/alerts', {
         method: 'POST',
-        body: JSON.stringify({ tipo, descripcion, ubicacion, photoUrl: photoBase64, prioridad }),
+        body: JSON.stringify({ tipo, descripcion, ubicacion: ubicacionStr, photoUrl: photoBase64, prioridad }),
       })
 
       setAlertSent(true)

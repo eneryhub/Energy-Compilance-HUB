@@ -111,6 +111,10 @@ export default function Home() {
     // Restore session immediately, then verify in background
     const restoreSession = async () => {
       setUserState(savedUser)
+      // Employee starts on the ERC (field safety) view, not dashboard
+      if (savedUser.role === 'EMPLOYEE') {
+        setCurrentView('erc')
+      }
       setAppState('app')
 
       try {
@@ -183,6 +187,10 @@ export default function Home() {
   const handleLogin = (userData: LoginResponse['user']) => {
     setUserState(userData)
     setUser(userData)
+    // Employee starts on the ERC (field safety) view, not dashboard
+    if (userData.role === 'EMPLOYEE') {
+      setCurrentView('erc')
+    }
     setAppState('app')
     setSubscriptionBlocked(false)
     setSubscriptionMessage('')
