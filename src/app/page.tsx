@@ -26,14 +26,14 @@ import UserManual from '@/components/manuals/user-manual'
 import TechnicalManual from '@/components/manuals/technical-manual'
 import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
 import LandingPage from '@/components/landing/landing-page'
-import { EmployeeLayout, EmployeeRegisterForm } from '@/modules/erc'
-import IncidentMonitor from '@/modules/erc/incident-monitor'
+import PanicButton from '@/components/erc/panic-button'
+import ERCMonitor from '@/components/erc/erc-monitor'
 import { Button } from '@/components/ui/button'
-import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert } from 'lucide-react'
+import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert, Siren } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
 
-type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting' | 'employee-register'
+type AppState = 'landing' | 'login' | 'register' | 'app' | 'mounting'
 
 export default function Home() {
   // Always start as 'mounting' to prevent hydration mismatch.
@@ -99,19 +99,11 @@ export default function Home() {
   // Detect token on client-side only (after mount) to prevent SSR hydration mismatch.
   // Server renders login (no localStorage), client detects saved token.
   useEffect(() => {
-    // Check for employee registration token in URL
-    const urlParams = new URLSearchParams(window.location.search)
-    const regToken = urlParams.get('token')
-    if (regToken) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAppState('employee-register')
-      return
-    }
-
     const token = getToken()
     const savedUser = getUser()
 
     if (!token || !savedUser) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- client-side init from localStorage
       setAppState('landing')
       return
     }
@@ -231,6 +223,7 @@ export default function Home() {
       <LoginForm
         onLogin={handleLogin}
         onSwitchToRegister={() => setAppState('register')}
+        onBackToLanding={() => setAppState('landing')}
       />
     )
   }
@@ -240,25 +233,7 @@ export default function Home() {
       <RegisterForm
         onRegister={() => setAppState('login')}
         onSwitchToLogin={() => setAppState('login')}
-      />
-    )
-  }
-
-  if (appState === 'employee-register') {
-    return (
-      <EmployeeRegisterForm
-        onRegistered={(userData) => handleLogin(userData)}
-        onBackToLogin={() => setAppState('login')}
-      />
-    )
-  }
-
-  // App views — EMPLOYEE gets a simplified experience
-  if (appState === 'app' && user?.role === 'EMPLOYEE') {
-    return (
-      <EmployeeLayout
-        user={{ name: user.name, email: user.email, companyName: user.companyName || '' }}
-        onLogout={handleLogout}
+        onBackToLanding={() => setAppState('landing')}
       />
     )
   }
@@ -597,13 +572,17 @@ export default function Home() {
             <GlobalOperationsCenter />
           )}
 
-          {currentView === 'erc-monitor' && user && (
-            <IncidentMonitor
-              companyId={user.companyId}
-              userRole={user.role}
-              userId={user.id}
-              userName={user.name}
-            />
+          {currentView === 'erc' && <PanicButton />}
+
+          {currentView === 'erc-monitor' && (
+            (user?.role === 'ADMIN' || user?.role === 'SUPERVISOR' || user?.role === 'MANAGER' || user?.role === 'TECHNICIAN') ? (
+              <ERCMonitor />
+            ) : (
+              <div className="py-20 text-center text-slate-400">
+                <Siren className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Acceso restringido</p>
+              </div>
+            )
           )}
         </motion.div>
       </AnimatePresence>

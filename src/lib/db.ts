@@ -7,33 +7,38 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 // Increment this when the Prisma schema changes to force client regeneration in dev.
-const PRISMA_SCHEMA_VERSION = 6
+// The old cached client won't have the new models/fields.
+const PRISMA_SCHEMA_VERSION = 8
 
-/**
- * PATCH para serverless (Vercel, Netlify, etc.)
- * Ajusta los parámetros del pool de conexiones PostgreSQL ANTES de que Prisma los lea.
- * - connection_limit: 5 (evita saturar Supabase, suficiente para 1-2 requests concurrentes)
- * - pool_timeout: 30 segundos (tiempo máximo de espera para obtener una conexión)
- */
-;(function patchConnectionPool() {
-  const url = process.env.DATABASE_URL || ''
-  // Detectar si es PostgreSQL (no SQLite)
-  const isPg = url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@')
-  if (isPg && !url.includes('connection_limit') && process.env.NODE_ENV === 'production') {
-    const separator = url.includes('?') ? '&' : '?'
-    process.env.DATABASE_URL = `${url}${separator}connection_limit=5&pool_timeout=30`
-    console.log('[DB] Pool patched: connection_limit=5, pool_timeout=30')
+// ─────────────────────────────────────────────────────────────────
+// PRODUCTION CONNECTION POOL LIMITER
+// On Vercel serverless, each function instance creates a PrismaClient.
+// Without limits, Prisma uses num_cpus*2+1 connections per instance.
+// Supabase PgBouncer (free tier) has ~20 total connections.
+// 3 concurrent requests per function prevents pool exhaustion.
+// ─────────────────────────────────────────────────────────────────
+if (
+  process.env.NODE_ENV === 'production' &&
+  process.env.DATABASE_URL &&
+  (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://'))
+) {
+  const url = process.env.DATABASE_URL
+  // Only inject if not already present
+  if (!url.includes('connection_limit=')) {
+    const sep = url.includes('?') ? '&' : '?'
+    process.env.DATABASE_URL = `${url}${sep}connection_limit=3&pool_timeout=20&connect_timeout=30`
+    console.log('[DB] Production: injected pool limits (connection_limit=3, pool_timeout=20, connect_timeout=30)')
   }
-})()
+}
 
 let _db: PrismaClient
 
 if (process.env.NODE_ENV === 'production') {
-  // En producción: reutilizar la instancia global
+  // In production, create once and reuse
   _db = globalForPrisma.prisma ?? new PrismaClient()
   if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
 } else {
-  // En desarrollo: validar versión del esquema
+  // In development, check schema version to detect model changes
   if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
     _db = globalForPrisma.prisma
   } else {
@@ -46,19 +51,20 @@ if (process.env.NODE_ENV === 'production') {
 export const db = _db
 
 /**
- * Detecta si la base de datos es PostgreSQL (producción) o SQLite (local)
+ * Detect if the database is PostgreSQL (Vercel/Supabase) or SQLite (local dev).
+ * Now defaults to PostgreSQL since schema uses "postgresql" provider.
  */
 function isPostgreSQL(): boolean {
   const url = process.env.DATABASE_URL || ''
-  return url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@')
+  return url.startsWith('postgres://') || url.startsWith('postgresql://') || url.includes('@') || !url.startsWith('file:')
 }
 
 let _syncRunning = false
 let _syncDone = false
 
-// --------------------------------------------------------------
-// Funciones auxiliares para auto-sync (SOLO en desarrollo)
-// --------------------------------------------------------------
+/**
+ * Check if a table exists in the database
+ */
 async function tableExists(tableName: string): Promise<boolean> {
   const pg = isPostgreSQL()
   if (pg) {
@@ -77,6 +83,9 @@ async function tableExists(tableName: string): Promise<boolean> {
   }
 }
 
+/**
+ * Ensure a table exists — creates it with the provided SQL if missing.
+ */
 async function ensureTableExists(tableName: string, _sqliteSql: string, pgSql: string): Promise<void> {
   const exists = await tableExists(tableName)
   if (exists) return
@@ -102,6 +111,10 @@ async function ensureTableExists(tableName: string, _sqliteSql: string, pgSql: s
   console.log(`[DB] Auto-sync: table "${tableName}" created successfully`)
 }
 
+/**
+ * Ensure a column exists in a table. Adds it if missing.
+ * Works for both SQLite and PostgreSQL.
+ */
 async function ensureColumn(
   tableName: string,
   columnName: string,
@@ -141,8 +154,9 @@ async function ensureColumn(
 }
 
 /**
- * Sincronización completa del esquema (SOLO para desarrollo local con SQLite)
- * En producción (Supabase) el esquema ya está en las migraciones.
+ * Comprehensive schema sync — ensures all tables and columns exist.
+ * Safe to call multiple times (idempotent).
+ * Handles both SQLite (local) and PostgreSQL (Supabase production).
  */
 export async function ensureSchemaColumns(): Promise<void> {
   if (_syncDone || _syncRunning) return
@@ -158,7 +172,7 @@ export async function ensureSchemaColumns(): Promise<void> {
       'BOOLEAN NOT NULL DEFAULT 1'
     )
 
-    // ============ ApiKey table ============
+    // ============ Ensure ApiKey table ============
     await ensureTableExists('ApiKey', `
       CREATE TABLE IF NOT EXISTS "ApiKey" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -198,7 +212,7 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "ApiKey_isActive_idx" ON "ApiKey"("isActive");
     `)
 
-    // ============ EmergencyAlert ============
+    // ============ Ensure EmergencyAlert table + columns ============
     await ensureTableExists('EmergencyAlert', `
       CREATE TABLE IF NOT EXISTS "EmergencyAlert" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -245,11 +259,12 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "EmergencyAlert_createdAt_idx" ON "EmergencyAlert"("createdAt");
     `)
 
+    // EmergencyAlert: ensure all columns exist (in case table was created with older schema)
     await ensureColumn('EmergencyAlert', 'attendedById', 'TEXT', 'TEXT')
     await ensureColumn('EmergencyAlert', 'attendedByName', 'TEXT', 'TEXT')
     await ensureColumn('EmergencyAlert', 'attendedAt', 'TIMESTAMPTZ', 'DATETIME')
 
-    // ============ HSEReport ============
+    // ============ Ensure HSEReport table + columns ============
     await ensureTableExists('HSEReport', `
       CREATE TABLE IF NOT EXISTS "HSEReport" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -290,24 +305,48 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "HSEReport_createdAt_idx" ON "HSEReport"("createdAt");
     `)
 
-    await ensureColumn('HSEReport', 'descripcion', "TEXT NOT NULL DEFAULT ''", "TEXT NOT NULL DEFAULT ''")
-    await ensureColumn('HSEReport', 'fotoUrl', 'TEXT', 'TEXT')
-    await ensureColumn('HSEReport', 'categoria', "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'", "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'")
-    await ensureColumn('HSEReport', 'prioridad', "TEXT NOT NULL DEFAULT 'MEDIA'", "TEXT NOT NULL DEFAULT 'MEDIA'")
-    await ensureColumn('HSEReport', 'estado', "TEXT NOT NULL DEFAULT 'ABIERTO'", "TEXT NOT NULL DEFAULT 'ABIERTO'")
-    await ensureColumn('HSEReport', 'ubicacion', 'TEXT', 'TEXT')
+    // HSEReport: ensure ALL columns exist (critical for Supabase sync)
+    await ensureColumn('HSEReport', 'descripcion',
+      'TEXT NOT NULL DEFAULT \'\'',
+      'TEXT NOT NULL DEFAULT \'\''
+    )
+    await ensureColumn('HSEReport', 'fotoUrl',
+      'TEXT',
+      'TEXT'
+    )
+    await ensureColumn('HSEReport', 'categoria',
+      "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'",
+      "TEXT NOT NULL DEFAULT 'CONDICION_INSEGURA'"
+    )
+    await ensureColumn('HSEReport', 'prioridad',
+      "TEXT NOT NULL DEFAULT 'MEDIA'",
+      "TEXT NOT NULL DEFAULT 'MEDIA'"
+    )
+    await ensureColumn('HSEReport', 'estado',
+      "TEXT NOT NULL DEFAULT 'ABIERTO'",
+      "TEXT NOT NULL DEFAULT 'ABIERTO'"
+    )
+    await ensureColumn('HSEReport', 'ubicacion',
+      'TEXT',
+      'TEXT'
+    )
 
-    // ============ Sensor ============
+    // ============ Ensure Sensor table + columns ============
     await ensureColumn('Sensor', 'locationId', 'TEXT', 'TEXT')
     await ensureColumn('Sensor', 'isSimulated', 'BOOLEAN NOT NULL DEFAULT true', 'BOOLEAN NOT NULL DEFAULT 1')
     await ensureColumn('Sensor', 'isActive', 'BOOLEAN NOT NULL DEFAULT true', 'BOOLEAN NOT NULL DEFAULT 1')
-    await ensureColumn('SensorReading', 'status', "TEXT NOT NULL DEFAULT 'NORMAL'", "TEXT NOT NULL DEFAULT 'NORMAL'")
 
-    // ============ SubscriptionInvoice ============
+    // ============ Ensure SensorReading table ============
+    await ensureColumn('SensorReading', 'status',
+      "TEXT NOT NULL DEFAULT 'NORMAL'",
+      "TEXT NOT NULL DEFAULT 'NORMAL'"
+    )
+
+    // ============ Ensure SubscriptionInvoice table + columns ============
     await ensureColumn('SubscriptionInvoice', 'amount', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('SubscriptionInvoice', 'invoicePdfUrl', 'TEXT', 'TEXT')
 
-    // ============ Permit ============
+    // ============ Ensure Permit columns (GPS/geofence) ============
     await ensureColumn('Permit', 'workLatitude', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('Permit', 'workLongitude', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('Permit', 'workRadius', 'INTEGER NOT NULL DEFAULT 100', 'INTEGER NOT NULL DEFAULT 100')
@@ -320,7 +359,7 @@ export async function ensureSchemaColumns(): Promise<void> {
     await ensureColumn('Permit', 'photosCount', 'INTEGER NOT NULL DEFAULT 0', 'INTEGER NOT NULL DEFAULT 0')
     await ensureColumn('Permit', 'checklistNotes', 'TEXT', 'TEXT')
 
-    // ============ WorkLocation ============
+    // ============ Ensure WorkLocation columns (QR/Beacon) ============
     await ensureColumn('WorkLocation', 'qrCodeSecret', 'TEXT', 'TEXT')
     await ensureColumn('WorkLocation', 'qrCodeData', 'TEXT', 'TEXT')
     await ensureColumn('WorkLocation', 'beaconUuid', 'TEXT', 'TEXT')
@@ -328,25 +367,103 @@ export async function ensureSchemaColumns(): Promise<void> {
     await ensureColumn('WorkLocation', 'beaconMinor', 'INTEGER', 'INTEGER')
     await ensureColumn('WorkLocation', 'beaconRssi', 'INTEGER NOT NULL DEFAULT -70', 'INTEGER NOT NULL DEFAULT -70')
 
-    // ============ HseDocument ============
+    // ============ Ensure HseDocument columns (AI extraction) ============
     await ensureColumn('HseDocument', 'aiExtractedData', 'TEXT', 'TEXT')
     await ensureColumn('HseDocument', 'aiConfidence', 'DOUBLE PRECISION', 'REAL')
     await ensureColumn('HseDocument', 'tags', 'TEXT', 'TEXT')
 
-    // ============ AuditLog ============
+    // ============ Ensure AuditLog columns ============
     await ensureColumn('AuditLog', 'userAgent', 'TEXT', 'TEXT')
+
+    // ============ Ensure SystemAlert table (GOC) ============
+    await ensureTableExists('SystemAlert', `
+      CREATE TABLE IF NOT EXISTS "SystemAlert" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "severity" TEXT NOT NULL DEFAULT 'MEDIUM',
+        "title" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "metadata" TEXT,
+        "isAcknowledged" BOOLEAN NOT NULL DEFAULT 0,
+        "acknowledgedById" TEXT,
+        "acknowledgedAt" DATETIME,
+        "relatedEntityId" TEXT,
+        "relatedEntityType" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "SystemAlert_companyId_idx" ON "SystemAlert"("companyId");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_isAcknowledged_idx" ON "SystemAlert"("isAcknowledged");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_type_idx" ON "SystemAlert"("type");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_severity_idx" ON "SystemAlert"("severity");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_createdAt_idx" ON "SystemAlert"("createdAt");
+    `, `
+      CREATE TABLE IF NOT EXISTS "SystemAlert" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "severity" TEXT NOT NULL DEFAULT 'MEDIUM',
+        "title" TEXT NOT NULL,
+        "message" TEXT NOT NULL,
+        "metadata" TEXT,
+        "isAcknowledged" BOOLEAN NOT NULL DEFAULT false,
+        "acknowledgedById" TEXT,
+        "acknowledgedAt" TIMESTAMPTZ,
+        "relatedEntityId" TEXT,
+        "relatedEntityType" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "SystemAlert_companyId_idx" ON "SystemAlert"("companyId");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_isAcknowledged_idx" ON "SystemAlert"("isAcknowledged");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_type_idx" ON "SystemAlert"("type");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_severity_idx" ON "SystemAlert"("severity");
+      CREATE INDEX IF NOT EXISTS "SystemAlert_createdAt_idx" ON "SystemAlert"("createdAt");
+    `)
+
+    // ============ Ensure KnowledgeBase table (GOC) ============
+    await ensureTableExists('KnowledgeBase', `
+      CREATE TABLE IF NOT EXISTS "KnowledgeBase" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "errorCode" TEXT NOT NULL UNIQUE,
+        "category" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "rootCause" TEXT NOT NULL,
+        "appliedSolution" TEXT NOT NULL,
+        "severity" TEXT NOT NULL DEFAULT 'MEDIUM',
+        "referenceUrl" TEXT,
+        "timesUsed" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `, `
+      CREATE TABLE IF NOT EXISTS "KnowledgeBase" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "errorCode" TEXT NOT NULL UNIQUE,
+        "category" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "rootCause" TEXT NOT NULL,
+        "appliedSolution" TEXT NOT NULL,
+        "severity" TEXT NOT NULL DEFAULT 'MEDIUM',
+        "referenceUrl" TEXT,
+        "timesUsed" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `)
 
     _syncDone = true
     console.log('[DB] Auto-sync completed successfully')
   } catch (error) {
     console.error('[DB] Auto-sync error:', error instanceof Error ? error.message : error)
+    // Don't set _syncDone so it can retry
   } finally {
     _syncRunning = false
   }
 }
 
 /**
- * Helper para formatear fechas en SQL (compatible SQLite/PostgreSQL)
+ * Helper to format dates in SQL queries — works for both SQLite and PostgreSQL.
  */
 export function sqlDateFormat(column: string, format: 'year-month' | 'year'): string {
   const pg = isPostgreSQL()
@@ -356,9 +473,15 @@ export function sqlDateFormat(column: string, format: 'year-month' | 'year'): st
   return pg ? `TO_CHAR("${column}", 'YYYY')` : `strftime('%Y', "${column}")`
 }
 
+/**
+ * Exported isPostgreSQL for use in route handlers that need DB-agnostic raw queries.
+ */
 export { isPostgreSQL }
 
-// ⚠️ Auto-sync solo en desarrollo (para SQLite). En producción NO se ejecuta.
+// Auto-sync on module load — ONLY in development (SQLite).
+// In production (Supabase) the schema is already in sync via migrations.
+// Running ~40 sequential queries on every cold start exhausts the
+// connection pool on serverless, causing P2024 timeouts for real requests.
 if (process.env.NODE_ENV !== 'production') {
   ensureSchemaColumns().catch(() => { /* non-fatal */ })
 }

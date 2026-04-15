@@ -6,17 +6,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { Shield, Mail, Lock, Loader2, Building2 } from 'lucide-react'
+import { Shield, Mail, Lock, Loader2, Building2, ArrowLeft } from 'lucide-react'
 import { apiFetch, setToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
 
 interface LoginFormProps {
   onLogin: (user: LoginResponse['user']) => void
   onSwitchToRegister: () => void
-  onBackToHome: () => void
+  onBackToLanding?: () => void
 }
 
-export default function LoginForm({ onLogin, onSwitchToRegister, onBackToHome }: LoginFormProps) {
+export default function LoginForm({ onLogin, onSwitchToRegister, onBackToLanding }: LoginFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -50,21 +50,19 @@ export default function LoginForm({ onLogin, onSwitchToRegister, onBackToHome }:
         transition={{ duration: 0.5 }}
         className="w-full max-w-md"
       >
-        {/* Back to Home button */}
-        <button
-          onClick={onBackToHome}
-          className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-emerald-400 transition-colors mb-6 group"
-        >
-          <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Volver a Inicio
-        </button>
-
-        <div className="text-center mb-8">
-          <button onClick={onBackToHome} className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden hover:bg-emerald-500/30 transition-colors">
-            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
+        {onBackToLanding && (
+          <button
+            onClick={onBackToLanding}
+            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors mb-4 group"
+          >
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+            Volver al inicio
           </button>
+        )}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden">
+            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
+          </div>
           <h1 className="text-2xl font-bold text-white">Energy-Compliance Hub</h1>
           <p className="text-slate-400 mt-1">Plataforma de gestión HSE y permisos de trabajo</p>
         </div>
@@ -161,10 +159,10 @@ export default function LoginForm({ onLogin, onSwitchToRegister, onBackToHome }:
 interface RegisterFormProps {
   onRegister: () => void
   onSwitchToLogin: () => void
-  onBackToHome: () => void
+  onBackToLanding?: () => void
 }
 
-export function RegisterForm({ onRegister, onSwitchToLogin, onBackToHome }: RegisterFormProps) {
+export function RegisterForm({ onRegister, onSwitchToLogin, onBackToLanding }: RegisterFormProps) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -198,21 +196,19 @@ export function RegisterForm({ onRegister, onSwitchToLogin, onBackToHome }: Regi
         transition={{ duration: 0.5 }}
         className="w-full max-w-md"
       >
-        {/* Back to Home button */}
-        <button
-          onClick={onBackToHome}
-          className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-emerald-400 transition-colors mb-6 group"
-        >
-          <svg className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Volver a Inicio
-        </button>
-
-        <div className="text-center mb-8">
-          <button onClick={onBackToHome} className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden hover:bg-emerald-500/30 transition-colors">
-            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
+        {onBackToLanding && (
+          <button
+            onClick={onBackToLanding}
+            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors mb-4 group"
+          >
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+            Volver al inicio
           </button>
+        )}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-emerald-500/20 mb-4 overflow-hidden">
+            <img src="/logo.jpeg" alt="Energy-Compliance Hub" className="w-16 h-16 object-cover rounded-xl" />
+          </div>
           <h1 className="text-2xl font-bold text-white">Energy-Compliance Hub</h1>
           <p className="text-slate-400 mt-1">Crear una nueva cuenta</p>
         </div>

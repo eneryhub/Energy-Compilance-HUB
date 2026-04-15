@@ -51,11 +51,10 @@ model Company {
   invoices           SubscriptionInvoice[]
   sensors            Sensor[]
   apiKeys            ApiKey[]
+  systemAlerts       SystemAlert[]
+  emergencyAlerts    EmergencyAlert[]
+  hseReports         HseReport[]
   scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
-
-  // ERC Module
-  emergencyAlerts EmergencyAlert[]
-  hseReports     HSEReport[]
 }
 
 // ============ USER / RBAC ============
@@ -82,10 +81,8 @@ model User {
   auditLogs    AuditLog[]
   documents    HseDocument[]
   reviewedDocuments HseDocument[] @relation("DocumentReviewer")
-
-  // ERC Module
-  emergencyAlerts EmergencyAlert[]
-  hseReports     HSEReport[]
+  emergencyAlerts    EmergencyAlert[] @relation("EmergencyAlertUser")
+  hseReports         HseReport[] @relation("HseReportUser")
 
   @@unique([email, companyId])
 }
@@ -395,55 +392,6 @@ model ApiKey {
   @@index([isActive])
 }
 
-// ============ ERC — EMERGENCY ALERTS ============
-model EmergencyAlert {
-  id          String   @id @default(cuid())
-  companyId   String
-  userId      String
-  tipo        String   @default("PANICO") // PANICO, INCENDIO, DERRAME, CAIDA, ELECTRICO, OTRO
-  ubicacion   String   // JSON string: { lat, lng, accuracy, address }
-  estado      String   @default("ACTIVA") // ACTIVA, ATENDIDA, DESCARTADA
-  prioridad   String   @default("ALTA")   // ALTA, MEDIA, BAJA
-  descripcion String?
-  photoUrl    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  attendedById  String?
-  attendedByName String?
-  attendedAt    DateTime?
-
-  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user       User    @relation(fields: [userId], references: [id])
-
-  @@index([companyId])
-  @@index([estado])
-  @@index([prioridad])
-  @@index([createdAt])
-}
-
-// ============ ERC — HSE REPORTS (Denuncias / Hallazgos) ============
-model HSEReport {
-  id          String   @id @default(cuid())
-  companyId   String
-  userId      String
-  descripcion String
-  fotoUrl     String?
-  categoria   String   @default("CONDICION_INSEGURA") // CONDICION_INSEGURA, ACTO_INSEGURO, CUASI_ACCIDENTE, INCIDENTE_AMBIENTAL, MEJORA
-  prioridad   String   @default("MEDIA") // ALTA, MEDIA, BAJA
-  estado      String   @default("ABIERTO") // ABIERTO, EN_REVISION, RESUELTO, DESCARTADO
-  ubicacion   String?  // JSON string: { lat, lng }
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user       User    @relation(fields: [userId], references: [id])
-
-  @@index([companyId])
-  @@index([estado])
-  @@index([categoria])
-  @@index([createdAt])
-}
-
 // ============ SUBSCRIPTION INVOICE HISTORY ============
 model SubscriptionInvoice {
   id              String   @id @default(cuid())
@@ -462,4 +410,93 @@ model SubscriptionInvoice {
 
   @@index([companyId])
   @@index([paidAt])
+}
+
+// ============ SYSTEM ALERTS (GOC — Global Operations Center) ============
+model SystemAlert {
+  id                String    @id @default(cuid())
+  companyId         String
+  type              String    // CONNECTION_ERROR, AUTH_FAILURE, SENSOR_CRITICAL, PERMIT_BLOCKED, SYSTEM_ERROR
+  severity          String    @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  title             String
+  message           String
+  metadata          String?   // JSON string with extra context
+  isAcknowledged    Boolean   @default(false)
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  relatedEntityId   String?
+  relatedEntityType String?   // USER, PERMIT, SENSOR, COMPANY, AUDIT
+  createdAt         DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([isAcknowledged])
+  @@index([type])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+// ============ KNOWLEDGE BASE (GOC — Diagnostic Encyclopedia) ============
+model KnowledgeBase {
+  id              String   @id @default(cuid())
+  errorCode       String   @unique
+  category        String   // DATABASE, AUTH, SENSOR, SCADA, NETWORK, DEPLOYMENT
+  title           String
+  rootCause       String
+  appliedSolution String
+  severity        String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  referenceUrl    String?
+  timesUsed       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============ EMERGENCY ALERTS (ERC — Emergency Response Center) ============
+model EmergencyAlert {
+  id              String    @id @default(cuid())
+  companyId       String
+  userId          String
+  tipo            String    @default("PANICO") // PANICO, INCENDIO, DERRAME, EVACUACION, LESION, OTRO
+  ubicacion       String    @default("{}") // JSON string: { lat, lng, accuracy }
+  estado          String    @default("ACTIVA") // ACTIVA, ATENDIDA, DESCARTADA
+  prioridad       String    @default("ALTA") // BAJA, MEDIA, ALTA, CRITICA
+  descripcion     String?
+  photoUrl        String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  attendedById    String?
+  attendedByName  String?
+  attendedAt      DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation("EmergencyAlertUser", fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([estado])
+  @@index([prioridad])
+  @@index([createdAt])
+}
+
+// ============ HSE REPORTS (Field observations / unsafe conditions) ============
+model HseReport {
+  id              String    @id @default(cuid())
+  companyId       String
+  userId          String
+  descripcion     String
+  fotoUrl         String?
+  categoria       String    @default("CONDICION_INSEGURA") // CONDICION_INSEGURA, ACTO_INSEGURO, NEAR_MISS, MEJORA
+  prioridad       String    @default("MEDIA") // BAJA, MEDIA, ALTA
+  estado          String    @default("ABIERTO") // ABIERTO, EN_PROGRESO, CERRADO
+  ubicacion       String?   // JSON string: { lat, lng, accuracy }
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation("HseReportUser", fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([estado])
+  @@index([categoria])
+  @@index([createdAt])
 }
