@@ -28,6 +28,7 @@ import DiagnosticDashboard from '@/components/diagnostics/diagnostic-dashboard'
 import LandingPage from '@/components/landing/landing-page'
 import PanicButton from '@/components/erc/panic-button'
 import ERCMonitor from '@/components/erc/erc-monitor'
+import SentinelAvatar from '@/components/ai/sentinel-avatar'
 import { Button } from '@/components/ui/button'
 import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert, Siren } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
@@ -595,6 +596,9 @@ export default function Home() {
         </motion.div>
       </AnimatePresence>
       )}
+
+      {/* ── Sentinel-AI: Proactive Monitoring Avatar (all roles) ── */}
+      <SentinelAvatar />
     </AppShell>
   )
 }
