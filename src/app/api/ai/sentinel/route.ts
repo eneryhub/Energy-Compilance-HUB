@@ -53,6 +53,17 @@ interface SentinelResponse {
   timestamp: string
 }
 
+// ── Safe query wrapper (prevents one DB error from killing the whole scan) ──
+
+async function safeQuery<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    console.error('[Sentinel] Query failed (non-fatal):', err instanceof Error ? err.message : err)
+    return fallback
+  }
+}
+
 // ── Empty response (used on errors) ─────────────────────────────────────────
 
 const EMPTY_RESPONSE: SentinelResponse = {
@@ -85,76 +96,33 @@ export async function GET(request: NextRequest) {
     //    (will be populated after the query)
     let criticalSensors: CriticalSensor[] = []
 
-    // 3. Read-only queries — run in parallel
-    const [sensors, expiringDocs, emergencies, stalePermits] = await Promise.all([
-      // 3a. Critical Sensors
-      db.sensor.findMany({
-        where: {
-          companyId,
-          isActive: true,
-          currentValue: { gte: 0 }, // Ensure non-null
-        },
-        select: {
-          id: true,
-          name: true,
-          type: true,
-          currentValue: true,
-          unit: true,
-          thresholdCritical: true,
-        },
-      }),
+    // 3. Read-only queries — each wrapped in safeQuery so one failure
+    //    doesn't kill the entire sentinel scan (graceful degradation).
+    //    Uses optional chaining (?.) as guard against stale Prisma client.
+    const sensors = await safeQuery(() => db.sensor.findMany({
+      where: { companyId, isActive: true, currentValue: { gte: 0 } },
+      select: { id: true, name: true, type: true, currentValue: true, unit: true, thresholdCritical: true },
+    }), [])
 
-      // 3b. Expiring Documents (within 7 days or already expired)
-      db.hseDocument.findMany({
-        where: {
-          companyId,
-          status: 'ACTIVE',
-          expiryDate: { lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) },
-        },
-        select: {
-          id: true,
-          title: true,
-          documentType: true,
-          expiryDate: true,
-          holderName: true,
-        },
-      }),
+    const expiringDocs = await safeQuery(() => db.hseDocument.findMany({
+      where: { companyId, status: 'ACTIVE', expiryDate: { lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) } },
+      select: { id: true, title: true, documentType: true, expiryDate: true, holderName: true },
+    }), [])
 
-      // 3c. Active Emergency Alerts
-      db.emergencyAlert.findMany({
-        where: {
-          companyId,
-          estado: 'ACTIVA',
-        },
-        select: {
-          id: true,
-          tipo: true,
-          descripcion: true,
-          createdAt: true,
-          user: { select: { name: true } },
-        },
-      }),
+    const emergencies = await safeQuery(() => db.emergencyAlert.findMany({
+      where: { companyId, estado: 'ACTIVA' },
+      select: { id: true, tipo: true, descripcion: true, createdAt: true, user: { select: { name: true } } },
+    }), [])
 
-      // 3d. Stale Permits (PENDING for more than 2 hours)
-      db.permit.findMany({
-        where: {
-          companyId,
-          status: 'PENDING',
-          createdAt: { lte: new Date(now.getTime() - 2 * 60 * 60 * 1000) },
-        },
-        select: {
-          id: true,
-          permitNumber: true,
-          riskType: true,
-          technicianName: true,
-          createdAt: true,
-        },
-      }),
-    ])
+    const stalePermits = await safeQuery(() => db.permit.findMany({
+      where: { companyId, status: 'PENDING', createdAt: { lte: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
+      select: { id: true, permitNumber: true, riskType: true, technicianName: true, createdAt: true },
+    }), [])
 
-    // 3a continued: Filter sensors where currentValue >= thresholdCritical (in-memory since Float? comparison needs null check)
-    criticalSensors = sensors
-      .filter(s => s.currentValue !== null && s.currentValue >= s.thresholdCritical)
+    // 3a continued: Filter sensors where currentValue >= thresholdCritical
+    // Defensive: guard against undefined db models in case of stale Prisma client
+    criticalSensors = (Array.isArray(sensors) ? sensors : [])
+      .filter((s: typeof sensors[number]) => s.currentValue !== null && s.currentValue >= s.thresholdCritical)
       .map(s => ({
         id: s.id,
         name: s.name,
@@ -164,8 +132,8 @@ export async function GET(request: NextRequest) {
         thresholdCritical: s.thresholdCritical,
       }))
 
-    // Map other findings
-    const expiringDocuments: ExpiringDocument[] = expiringDocs.map(d => ({
+    // Map other findings — defensive Array.isArray guards
+    const expiringDocuments: ExpiringDocument[] = (Array.isArray(expiringDocs) ? expiringDocs : []).map(d => ({
       id: d.id,
       title: d.title,
       documentType: d.documentType,
@@ -173,15 +141,17 @@ export async function GET(request: NextRequest) {
       holderName: d.holderName,
     }))
 
-    const activeEmergencies: ActiveEmergency[] = emergencies.map(e => ({
-      id: e.id,
-      tipo: e.tipo,
-      descripcion: e.descripcion,
-      createdAt: e.createdAt.toISOString(),
-      userName: e.user.name,
-    }))
+    const activeEmergencies: ActiveEmergency[] = emergencies
+      .filter(e => e.user != null)
+      .map(e => ({
+        id: e.id,
+        tipo: e.tipo,
+        descripcion: e.descripcion,
+        createdAt: e.createdAt.toISOString(),
+        userName: e.user!.name,
+      }))
 
-    const stalePermitsOut: StalePermit[] = stalePermits.map(p => ({
+    const stalePermitsOut: StalePermit[] = (Array.isArray(stalePermits) ? stalePermits : []).map(p => ({
       id: p.id,
       permitNumber: p.permitNumber,
       riskType: p.riskType,

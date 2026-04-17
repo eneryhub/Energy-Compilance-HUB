@@ -276,19 +276,56 @@ export default function IncidentMonitor({
     try {
       // Use allSettled so stats failure doesn't kill alerts/reports loading
       const [alertsResult, reportsResult, statsResult] = await Promise.allSettled([
-        apiFetch<EmergencyAlert[]>('/erc/alerts'),
-        apiFetch<HSEReport[]>('/erc/reports'),
+        apiFetch<{ alerts?: EmergencyAlert[] }>('/erc/alerts'),
+        apiFetch<{ reports?: HSEReport[] }>('/erc/reports'),
         apiFetch<ErcStats>('/erc/stats'),
       ])
 
-      if (alertsResult.status === 'fulfilled') setAlerts(alertsResult.value)
-      else console.warn('[ERC] Failed to load alerts')
+      // Safely unwrap alerts — API returns { alerts: [...] }
+      if (alertsResult.status === 'fulfilled') {
+        const raw = alertsResult.value
+        const items = Array.isArray(raw?.alerts) ? raw.alerts
+          : Array.isArray(raw) ? raw as unknown as EmergencyAlert[]
+          : []
+        setAlerts(items)
+      } else {
+        console.warn('[ERC] Failed to load alerts')
+        setAlerts([])
+      }
 
-      if (reportsResult.status === 'fulfilled') setReports(reportsResult.value)
-      else console.warn('[ERC] Failed to load reports')
+      // Safely unwrap reports — API returns { reports: [...] }
+      if (reportsResult.status === 'fulfilled') {
+        const raw = reportsResult.value
+        const items = Array.isArray(raw?.reports) ? raw.reports
+          : Array.isArray(raw) ? raw as unknown as HSEReport[]
+          : []
+        setReports(items)
+      } else {
+        console.warn('[ERC] Failed to load reports')
+        setReports([])
+      }
 
       if (statsResult.status === 'fulfilled') {
-        setStats(statsResult.value)
+        const rawStats = statsResult.value
+        // Sanitize stats — ensure all expected fields exist
+        setStats({
+          activeAlerts: typeof rawStats?.activeAlerts === 'number' ? rawStats.activeAlerts : 0,
+          totalAlerts: typeof rawStats?.totalAlerts === 'number' ? rawStats.totalAlerts : 0,
+          totalReports: typeof rawStats?.totalReports === 'number' ? rawStats.totalReports : 0,
+          openReports: typeof rawStats?.openReports === 'number' ? rawStats.openReports : 0,
+          resolvedReports: typeof rawStats?.resolvedReports === 'number' ? rawStats.resolvedReports : 0,
+          criticalOpenReports: typeof rawStats?.criticalOpenReports === 'number' ? rawStats.criticalOpenReports : 0,
+          alertsByType: (rawStats?.alertsByType && typeof rawStats.alertsByType === 'object') ? rawStats.alertsByType : {},
+          reportsByCategoria: (rawStats?.reportsByCategoria && typeof rawStats.reportsByCategoria === 'object') ? rawStats.reportsByCategoria : {},
+          reportsByEstado: (rawStats?.reportsByEstado && typeof rawStats.reportsByEstado === 'object') ? rawStats.reportsByEstado : {},
+          recentAlerts: Array.isArray(rawStats?.recentAlerts) ? rawStats.recentAlerts : [],
+          recentReports: Array.isArray(rawStats?.recentReports) ? rawStats.recentReports : [],
+          alertsLast7Days: typeof rawStats?.alertsLast7Days === 'number' ? rawStats.alertsLast7Days : 0,
+          reportsLast7Days: typeof rawStats?.reportsLast7Days === 'number' ? rawStats.reportsLast7Days : 0,
+          reportsLast30Days: typeof rawStats?.reportsLast30Days === 'number' ? rawStats.reportsLast30Days : 0,
+          avgResolutionHours: typeof rawStats?.avgResolutionHours === 'number' ? rawStats.avgResolutionHours : null,
+          resolutionRate: typeof rawStats?.resolutionRate === 'number' ? rawStats.resolutionRate : 0,
+        })
         failureCountRef.current = 0
         setDataError(null)
       } else {

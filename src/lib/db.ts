@@ -31,24 +31,40 @@ if (
   }
 }
 
-let _db: PrismaClient
+let _db: PrismaClient | undefined
 
-if (process.env.NODE_ENV === 'production') {
-  // In production, create once and reuse
-  _db = globalForPrisma.prisma ?? new PrismaClient()
-  if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
-} else {
-  // In development, check schema version to detect model changes
-  if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
-    _db = globalForPrisma.prisma
+try {
+  if (process.env.NODE_ENV === 'production') {
+    // In production, create once and reuse
+    _db = globalForPrisma.prisma ?? new PrismaClient()
+    if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
   } else {
-    _db = new PrismaClient()
-    globalForPrisma.prisma = _db
-    globalForPrisma.prismaSchemaVersion = PRISMA_SCHEMA_VERSION
+    // In development, check schema version to detect model changes
+    if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
+      _db = globalForPrisma.prisma
+    } else {
+      _db = new PrismaClient()
+      globalForPrisma.prisma = _db
+      globalForPrisma.prismaSchemaVersion = PRISMA_SCHEMA_VERSION
+    }
   }
+} catch (err) {
+  console.error('[DB] CRITICAL: Failed to initialize PrismaClient:', err instanceof Error ? err.message : err)
+  _db = undefined
 }
 
 export const db = _db
+
+/**
+ * Runtime guard — ensures db is available before any query.
+ * Returns a 500 response if db is not initialized (e.g. Supabase connection failed).
+ */
+export function requireDb(): PrismaClient {
+  if (!_db) {
+    throw new Error('Database not initialized. Check DATABASE_URL and Supabase connection.')
+  }
+  return _db
+}
 
 /**
  * Detect if the database is PostgreSQL (Vercel/Supabase) or SQLite (local dev).
