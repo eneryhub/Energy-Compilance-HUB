@@ -117,14 +117,14 @@ export async function GET(request: NextRequest) {
     let paramIndex = 1
 
     if (pg) {
-      conditions.push(`"companyId" = $${paramIndex++}`)
+      conditions.push(`r."companyId" = $${paramIndex++}`)
       params.push(session.companyId)
-      if (estado) { conditions.push(`"estado" = $${paramIndex++}`); params.push(estado) }
-      if (categoria) { conditions.push(`"categoria" = $${paramIndex++}`); params.push(categoria) }
+      if (estado) { conditions.push(`r."estado" = $${paramIndex++}`); params.push(estado) }
+      if (categoria) { conditions.push(`r."categoria" = $${paramIndex++}`); params.push(categoria) }
     } else {
-      conditions.push(`"companyId" = '${session.companyId}'`)
-      if (estado) conditions.push(`"estado" = '${estado}'`)
-      if (categoria) conditions.push(`"categoria" = '${categoria}'`)
+      conditions.push(`r."companyId" = '${session.companyId}'`)
+      if (estado) conditions.push(`r."estado" = '${estado}'`)
+      if (categoria) conditions.push(`r."categoria" = '${categoria}'`)
     }
 
     const whereClause = conditions.join(' AND ')
