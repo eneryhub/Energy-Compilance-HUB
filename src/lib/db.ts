@@ -8,7 +8,7 @@ const globalForPrisma = globalThis as unknown as {
 
 // Increment this when the Prisma schema changes to force client regeneration in dev.
 // The old cached client won't have the new models/fields.
-const PRISMA_SCHEMA_VERSION = 8
+const PRISMA_SCHEMA_VERSION = 10
 
 // ─────────────────────────────────────────────────────────────────
 // PRODUCTION CONNECTION POOL LIMITER
@@ -466,6 +466,261 @@ export async function ensureSchemaColumns(): Promise<void> {
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `)
+
+    // ============ Ensure SupportMessage table (In-App Chat) ============
+    await ensureTableExists('SupportMessage', `
+      CREATE TABLE IF NOT EXISTS "SupportMessage" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "userId" TEXT,
+        "userName" TEXT,
+        "message" TEXT NOT NULL,
+        "senderType" TEXT NOT NULL DEFAULT 'USER',
+        "isRead" BOOLEAN NOT NULL DEFAULT 0,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "SupportMessage_companyId_idx" ON "SupportMessage"("companyId");
+      CREATE INDEX IF NOT EXISTS "SupportMessage_createdAt_idx" ON "SupportMessage"("createdAt");
+    `, `
+      CREATE TABLE IF NOT EXISTS "SupportMessage" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "userId" TEXT,
+        "userName" TEXT,
+        "message" TEXT NOT NULL,
+        "senderType" TEXT NOT NULL DEFAULT 'USER',
+        "isRead" BOOLEAN NOT NULL DEFAULT false,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "SupportMessage_companyId_idx" ON "SupportMessage"("companyId");
+      CREATE INDEX IF NOT EXISTS "SupportMessage_createdAt_idx" ON "SupportMessage"("createdAt");
+    `)
+
+    // ============ Ensure InventoryLocation table ============
+    await ensureTableExists('InventoryLocation', `
+      CREATE TABLE IF NOT EXISTS "InventoryLocation" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "province" TEXT,
+        "city" TEXT,
+        "address" TEXT,
+        "latitude" REAL,
+        "longitude" REAL,
+        "isActive" BOOLEAN NOT NULL DEFAULT 1,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_companyId_idx" ON "InventoryLocation"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_isActive_idx" ON "InventoryLocation"("isActive");
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_province_idx" ON "InventoryLocation"("province");
+    `, `
+      CREATE TABLE IF NOT EXISTS "InventoryLocation" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "province" TEXT,
+        "city" TEXT,
+        "address" TEXT,
+        "latitude" DOUBLE PRECISION,
+        "longitude" DOUBLE PRECISION,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_companyId_idx" ON "InventoryLocation"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_isActive_idx" ON "InventoryLocation"("isActive");
+      CREATE INDEX IF NOT EXISTS "InventoryLocation_province_idx" ON "InventoryLocation"("province");
+    `)
+
+    // ============ Ensure InventoryItem table ============
+    await ensureTableExists('InventoryItem', `
+      CREATE TABLE IF NOT EXISTS "InventoryItem" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "sku" TEXT,
+        "category" TEXT NOT NULL DEFAULT 'GENERAL',
+        "unit" TEXT NOT NULL DEFAULT 'unidad',
+        "thumbnailUrl" TEXT,
+        "thresholdMin" INTEGER NOT NULL DEFAULT 5,
+        "thresholdMax" INTEGER,
+        "isActive" BOOLEAN NOT NULL DEFAULT 1,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "InventoryItem_companyId_sku_key" UNIQUE ("companyId", "sku"),
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryItem_companyId_idx" ON "InventoryItem"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryItem_category_idx" ON "InventoryItem"("category");
+      CREATE INDEX IF NOT EXISTS "InventoryItem_isActive_idx" ON "InventoryItem"("isActive");
+    `, `
+      CREATE TABLE IF NOT EXISTS "InventoryItem" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "sku" TEXT,
+        "category" TEXT NOT NULL DEFAULT 'GENERAL',
+        "unit" TEXT NOT NULL DEFAULT 'unidad',
+        "thumbnailUrl" TEXT,
+        "thresholdMin" INTEGER NOT NULL DEFAULT 5,
+        "thresholdMax" INTEGER,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT "InventoryItem_companyId_sku_key" UNIQUE ("companyId", "sku")
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryItem_companyId_idx" ON "InventoryItem"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryItem_category_idx" ON "InventoryItem"("category");
+      CREATE INDEX IF NOT EXISTS "InventoryItem_isActive_idx" ON "InventoryItem"("isActive");
+    `)
+
+    // ============ Ensure InventoryDevice table ============
+    await ensureTableExists('InventoryDevice', `
+      CREATE TABLE IF NOT EXISTS "InventoryDevice" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "type" TEXT NOT NULL DEFAULT 'CAMERA',
+        "ipAddress" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ONLINE',
+        "lastSeenAt" DATETIME,
+        "metadata" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("locationId") REFERENCES "InventoryLocation"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_companyId_idx" ON "InventoryDevice"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_locationId_idx" ON "InventoryDevice"("locationId");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_type_idx" ON "InventoryDevice"("type");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_status_idx" ON "InventoryDevice"("status");
+    `, `
+      CREATE TABLE IF NOT EXISTS "InventoryDevice" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "type" TEXT NOT NULL DEFAULT 'CAMERA',
+        "ipAddress" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ONLINE',
+        "lastSeenAt" TIMESTAMPTZ,
+        "metadata" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_companyId_idx" ON "InventoryDevice"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_locationId_idx" ON "InventoryDevice"("locationId");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_type_idx" ON "InventoryDevice"("type");
+      CREATE INDEX IF NOT EXISTS "InventoryDevice_status_idx" ON "InventoryDevice"("status");
+    `)
+
+    // ============ Ensure SmartInventory table ============
+    await ensureTableExists('SmartInventory', `
+      CREATE TABLE IF NOT EXISTS "SmartInventory" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "itemId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "beaconId" TEXT,
+        "quantity" INTEGER NOT NULL DEFAULT 0,
+        "cameraCount" INTEGER,
+        "beaconCount" INTEGER,
+        "lastCountedAt" DATETIME,
+        "lastSyncAt" DATETIME,
+        "discrepancy" BOOLEAN NOT NULL DEFAULT 0,
+        "notes" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "SmartInventory_itemId_locationId_key" UNIQUE ("itemId", "locationId"),
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("itemId") REFERENCES "InventoryItem"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("locationId") REFERENCES "InventoryLocation"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "SmartInventory_companyId_idx" ON "SmartInventory"("companyId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_locationId_idx" ON "SmartInventory"("locationId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_itemId_idx" ON "SmartInventory"("itemId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_discrepancy_idx" ON "SmartInventory"("discrepancy");
+    `, `
+      CREATE TABLE IF NOT EXISTS "SmartInventory" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "itemId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "beaconId" TEXT,
+        "quantity" INTEGER NOT NULL DEFAULT 0,
+        "cameraCount" INTEGER,
+        "beaconCount" INTEGER,
+        "lastCountedAt" TIMESTAMPTZ,
+        "lastSyncAt" TIMESTAMPTZ,
+        "discrepancy" BOOLEAN NOT NULL DEFAULT false,
+        "notes" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT "SmartInventory_itemId_locationId_key" UNIQUE ("itemId", "locationId")
+      );
+      CREATE INDEX IF NOT EXISTS "SmartInventory_companyId_idx" ON "SmartInventory"("companyId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_locationId_idx" ON "SmartInventory"("locationId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_itemId_idx" ON "SmartInventory"("itemId");
+      CREATE INDEX IF NOT EXISTS "SmartInventory_discrepancy_idx" ON "SmartInventory"("discrepancy");
+    `)
+
+    // ============ Ensure InventoryAudit table ============
+    await ensureTableExists('InventoryAudit', `
+      CREATE TABLE IF NOT EXISTS "InventoryAudit" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "deviceId" TEXT,
+        "itemName" TEXT,
+        "itemCount" INTEGER NOT NULL DEFAULT 0,
+        "beaconCount" INTEGER,
+        "confidence" REAL,
+        "snapshotUrl" TEXT,
+        "rawImageUrl" TEXT,
+        "discrepancy" BOOLEAN NOT NULL DEFAULT 0,
+        "resolvedAt" DATETIME,
+        "resolvedById" TEXT,
+        "notes" TEXT,
+        "metadata" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("locationId") REFERENCES "InventoryLocation"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("deviceId") REFERENCES "InventoryDevice"("id") ON DELETE SET NULL ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_companyId_idx" ON "InventoryAudit"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_locationId_idx" ON "InventoryAudit"("locationId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_deviceId_idx" ON "InventoryAudit"("deviceId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_createdAt_idx" ON "InventoryAudit"("createdAt");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_discrepancy_idx" ON "InventoryAudit"("discrepancy");
+    `, `
+      CREATE TABLE IF NOT EXISTS "InventoryAudit" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "locationId" TEXT NOT NULL,
+        "deviceId" TEXT,
+        "itemName" TEXT,
+        "itemCount" INTEGER NOT NULL DEFAULT 0,
+        "beaconCount" INTEGER,
+        "confidence" DOUBLE PRECISION,
+        "snapshotUrl" TEXT,
+        "rawImageUrl" TEXT,
+        "discrepancy" BOOLEAN NOT NULL DEFAULT false,
+        "resolvedAt" TIMESTAMPTZ,
+        "resolvedById" TEXT,
+        "notes" TEXT,
+        "metadata" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_companyId_idx" ON "InventoryAudit"("companyId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_locationId_idx" ON "InventoryAudit"("locationId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_deviceId_idx" ON "InventoryAudit"("deviceId");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_createdAt_idx" ON "InventoryAudit"("createdAt");
+      CREATE INDEX IF NOT EXISTS "InventoryAudit_discrepancy_idx" ON "InventoryAudit"("discrepancy");
     `)
 
     _syncDone = true

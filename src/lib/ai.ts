@@ -69,9 +69,17 @@ export function getAISource(): string {
   return 'sdk'
 }
 
-// ── Unified chat completion (works with both backends) ──
+// ── Multimodal content parts (for vision/image analysis) ──
 
-export async function chatCompletion(messages: Array<{ role: string; content: string }>, options?: { temperature?: number }): Promise<string> {
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
+
+export type MessageContent = string | ContentPart[]
+
+// ── Unified chat completion (works with both backends, supports vision) ──
+
+export async function chatCompletion(messages: Array<{ role: string; content: MessageContent }>, options?: { temperature?: number; model?: string }): Promise<string> {
   const ai = await getAI()
   if (!ai) {
     console.warn('[AI] chatCompletion called but no AI backend available — returning empty string (caller should use fallback)')
@@ -82,18 +90,19 @@ export async function chatCompletion(messages: Array<{ role: string; content: st
     // Build body with explicit field mapping — avoids prototype/extra-property issues on Vercel Edge
     const cleanMessages = messages.map(m => ({
       role: String(m.role),
-      content: String(m.content),
+      content: typeof m.content === 'string' ? String(m.content) : m.content,
     }))
+    const model = String(options?.model || ai.model)
     const temperature = typeof options?.temperature === 'number' ? options.temperature : 0.1
     const bodyObj = {
-      model: String(ai.model),
+      model,
       messages: cleanMessages,
       max_tokens: 2048,
       temperature,
     }
     const bodyStr = JSON.stringify(bodyObj)
 
-    console.log(`[AI] → Calling OpenAI: model=${ai.model}, messages=${cleanMessages.length}, body=${bodyStr.length} bytes`)
+    console.log(`[AI] → Calling OpenAI: model=${model}, messages=${cleanMessages.length}, body=${bodyStr.length} bytes`)
 
     const response = await fetch(`${ai.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -124,6 +133,7 @@ export async function chatCompletion(messages: Array<{ role: string; content: st
       content: m.content,
     })),
     thinking: { type: 'disabled' },
+    ...(options?.model ? { model: String(options.model) } : {}),
   })
   const content = response.choices?.[0]?.message?.content || ''
   console.log(`[AI] ✅ SDK response received (${content.length} chars)`)

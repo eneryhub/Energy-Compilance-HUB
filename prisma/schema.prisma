@@ -54,6 +54,12 @@ model Company {
   systemAlerts       SystemAlert[]
   emergencyAlerts    EmergencyAlert[]
   hseReports         HseReport[]
+  supportMessages    SupportMessage[]
+  inventoryLocations InventoryLocation[]
+  inventoryItems     InventoryItem[]
+  inventoryDevices   InventoryDevice[]
+  smartInventory     SmartInventory[]
+  inventoryAudits    InventoryAudit[]
   scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
 }
 
@@ -476,6 +482,155 @@ model EmergencyAlert {
   @@index([estado])
   @@index([prioridad])
   @@index([createdAt])
+}
+
+// ============ SUPPORT MESSAGES (In-App Chat) ============
+model SupportMessage {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  userName    String?
+  message     String
+  senderType  String   @default("USER") // USER, SYSTEM, ADMIN
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([createdAt])
+}
+
+// ============ SMART INVENTORY — Geolocated Inventory Ecosystem ============
+
+// Inventory Locations: Multi-warehouse hierarchy (Province/City/Site)
+model InventoryLocation {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String                   // "Planta Norte", "Almacén Central BsAs"
+  province    String?                  // Province / State
+  city        String?                  // City
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  devices   InventoryDevice[]
+  stock     SmartInventory[]
+  audits    InventoryAudit[]
+
+  @@index([companyId])
+  @@index([isActive])
+  @@index([province])
+}
+
+// Inventory Items: Trackable items (batteries, tools, PPE, materials)
+model InventoryItem {
+  id              String   @id @default(cuid())
+  companyId       String
+  name            String                   // "Batería 12V", "Casco Seguridad"
+  sku             String?                  // Stock-keeping unit (company-scoped unique)
+  category        String   @default("GENERAL") // BATERIA, HERRAMIENTA, EPP, MATERIAL, GENERAL
+  unit            String   @default("unidad")  // unidad, caja, par, juego, rollo
+  thumbnailUrl    String?
+  thresholdMin    Int      @default(5)     // Alert when stock <= this
+  thresholdMax    Int?                   // Max capacity (optional)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  locations SmartInventory[]
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+  @@index([category])
+  @@index([isActive])
+}
+
+// Inventory Devices: Cameras and BLE beacon gateways per site
+model InventoryDevice {
+  id          String   @id @default(cuid())
+  companyId   String
+  locationId  String
+  name        String                   // "Cámara Zona A", "Gateway BLE Norte"
+  type        String   @default("CAMERA") // CAMERA, BEACON_GATEWAY
+  ipAddress   String?
+  status      String   @default("ONLINE") // ONLINE, OFFLINE, MAINTENANCE
+  lastSeenAt  DateTime?
+  metadata    String?                  // JSON: camera model, beacon firmware, etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  audits    InventoryAudit[]
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([type])
+  @@index([status])
+}
+
+// Smart Inventory: Item-Location junction with BLE + AI visual counts
+model SmartInventory {
+  id              String    @id @default(cuid())
+  companyId       String
+  itemId          String
+  locationId      String
+  beaconId        String?             // BLE beacon MAC or UUID (optional)
+  quantity        Int       @default(0) // Last known total quantity
+  cameraCount     Int?               // AI visual count (last snapshot)
+  beaconCount     Int?               // BLE detected count (last scan)
+  lastCountedAt   DateTime?
+  lastSyncAt      DateTime?
+  discrepancy     Boolean   @default(false) // true when cameraCount != beaconCount
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item      InventoryItem      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, locationId])
+  @@index([companyId])
+  @@index([locationId])
+  @@index([itemId])
+  @@index([discrepancy])
+}
+
+// Inventory Audit: AI snapshots & discrepancy log
+model InventoryAudit {
+  id              String   @id @default(cuid())
+  companyId       String
+  locationId      String
+  deviceId        String?
+  itemName        String?                  // Item name or category scanned
+  itemCount       Int      @default(0)     // AI detected count
+  beaconCount     Int?                    // BLE detected count at scan time
+  confidence      Float?                  // 0.0 - 1.0 AI confidence score
+  snapshotUrl     String?                 // Image with bounding boxes drawn
+  rawImageUrl     String?                 // Original captured image
+  discrepancy     Boolean  @default(false)
+  resolvedAt      DateTime?
+  resolvedById    String?
+  notes           String?
+  metadata        String?                 // JSON: model version, processing time, etc.
+  createdAt       DateTime @default(now())
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  device    InventoryDevice?   @relation(fields: [deviceId], references: [id])
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([deviceId])
+  @@index([createdAt])
+  @@index([discrepancy])
 }
 
 // ============ HSE REPORTS (Field observations / unsafe conditions) ============
