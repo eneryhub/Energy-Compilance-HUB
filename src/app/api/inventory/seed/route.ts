@@ -93,9 +93,30 @@ export async function POST(request: NextRequest) {
       db.inventoryDevice.create({ data: { companyId, locationId: locCABA.id, name: 'Cámara Zona A - Recepción', type: 'CAMERA', ipAddress: '192.168.1.101', status: 'ONLINE' } }),
       db.inventoryDevice.create({ data: { companyId, locationId: locCABA.id, name: 'Cámara Zona B - Estantes', type: 'CAMERA', ipAddress: '192.168.1.102', status: 'ONLINE' } }),
       db.inventoryDevice.create({ data: { companyId, locationId: locZarate.id, name: 'Cámara Planta Norte - Hangar', type: 'CAMERA', ipAddress: '10.0.0.50', status: 'ONLINE' } }),
-      db.inventoryDevice.create({ data: { companyId, locationId: locCABA.id, name: 'Gateway BLE CABA Principal', type: 'BEACON_GATEWAY', ipAddress: '192.168.1.200', status: 'ONLINE' } }),
-      db.inventoryDevice.create({ data: { companyId, locationId: locZarate.id, name: 'Gateway BLE Zárate', type: 'BEACON_GATEWAY', ipAddress: '10.0.0.200', status: 'ONLINE' } }),
-      db.inventoryDevice.create({ data: { companyId, locationId: locBahia.id, name: 'Gateway BLE Bahía Blanca', type: 'BEACON_GATEWAY', status: 'OFFLINE' } }),
+      db.inventoryDevice.create({
+        data: {
+          companyId, locationId: locCABA.id,
+          name: 'Gateway BLE CABA Principal', type: 'BEACON_GATEWAY', status: 'ONLINE',
+          beaconUuid: 'a1b2c3d4-e5f6-4a5b-8c7d-9e0f1a2b3c4d',
+          beaconMajor: 1, beaconMinor: 100, beaconRssi: -70,
+        },
+      }),
+      db.inventoryDevice.create({
+        data: {
+          companyId, locationId: locZarate.id,
+          name: 'Gateway BLE Zárate', type: 'BEACON_GATEWAY', status: 'ONLINE',
+          beaconUuid: 'b2c3d4e5-f6a7-4b5c-9d8e-0f1a2b3c4d5e',
+          beaconMajor: 1, beaconMinor: 200, beaconRssi: -65,
+        },
+      }),
+      db.inventoryDevice.create({
+        data: {
+          companyId, locationId: locBahia.id,
+          name: 'Gateway BLE Bahía Blanca', type: 'BEACON_GATEWAY', status: 'OFFLINE',
+          beaconUuid: 'c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f',
+          beaconMajor: 2, beaconMinor: 50, beaconRssi: -75,
+        },
+      }),
       db.inventoryDevice.create({ data: { companyId, locationId: locBahia.id, name: 'Cámara Depósito Sur', type: 'CAMERA', ipAddress: '172.16.0.50', status: 'MAINTENANCE' } }),
     ])
 

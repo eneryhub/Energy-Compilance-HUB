@@ -558,10 +558,17 @@ model InventoryDevice {
   locationId  String
   name        String                   // "Cámara Zona A", "Gateway BLE Norte"
   type        String   @default("CAMERA") // CAMERA, BEACON_GATEWAY
-  ipAddress   String?
+  ipAddress   String?                  // IP for cameras (e.g. "192.168.1.100")
   status      String   @default("ONLINE") // ONLINE, OFFLINE, MAINTENANCE
   lastSeenAt  DateTime?
   metadata    String?                  // JSON: camera model, beacon firmware, etc.
+
+  // BLE Beacon configuration (iBeacon protocol — only for BEACON_GATEWAY type)
+  beaconUuid  String?  @unique         // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
+  beaconMajor Int?                     // Major value (0-65535)
+  beaconMinor Int?                     // Minor value (0-65535)
+  beaconRssi  Int      @default(-70)   // Signal strength threshold (dBm). Recommended: -50 to -80
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

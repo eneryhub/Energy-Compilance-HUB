@@ -66,6 +66,10 @@ interface InvDevice {
   type: 'CAMERA' | 'BEACON_GATEWAY'
   status: 'ONLINE' | 'OFFLINE' | 'MAINTENANCE'
   ipAddress: string | null
+  beaconUuid: string | null
+  beaconMajor: number | null
+  beaconMinor: number | null
+  beaconRssi: number
   createdAt: string
   location?: { id: string; name: string; province: string | null }
 }
@@ -211,14 +215,26 @@ export default function InventoryDashboard() {
 
   // ── Dialog States ──
   const [deviceDialogOpen, setDeviceDialogOpen] = useState(false)
-  const [deviceForm, setDeviceForm] = useState({ name: '', type: 'CAMERA', locationId: '', ipAddress: '' })
+  const [deviceForm, setDeviceForm] = useState({ name: '', type: 'CAMERA' as 'CAMERA' | 'BEACON_GATEWAY', locationId: '', ipAddress: '', beaconUuid: '', beaconMajor: '', beaconMinor: '', beaconRssi: '-70' })
   const [deviceSubmitting, setDeviceSubmitting] = useState(false)
 
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
   const [scanForm, setScanForm] = useState({ deviceId: '', itemId: '', imageBase64: '' })
   const [scanImagePreview, setScanImagePreview] = useState<string | null>(null)
   const [scanSubmitting, setScanSubmitting] = useState(false)
-  const [scanResult, setScanResult] = useState<{ count: number; confidence: number; detected: string[]; discrepancy: boolean; beaconCount: number | null } | null>(null)
+  const [scanResult, setScanResult] = useState<{
+    count: number
+    confidence: number
+    observations: string
+    detected: string[]
+    discrepancy: boolean
+    beaconCount: number | null
+    detectedItem: string | null
+    matchedItem: { id: string; name: string } | null
+    isExactMatch: boolean
+    isUserMismatch: boolean
+    lowConfidence: boolean
+  } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [locationDialogOpen, setLocationDialogOpen] = useState(false)
@@ -410,12 +426,25 @@ export default function InventoryDashboard() {
     if (!deviceForm.name.trim() || !deviceForm.locationId) return
     setDeviceSubmitting(true)
     try {
+      const body: Record<string, unknown> = {
+        name: deviceForm.name.trim(),
+        type: deviceForm.type,
+        locationId: deviceForm.locationId,
+      }
+      if (deviceForm.type === 'CAMERA') {
+        body.ipAddress = deviceForm.ipAddress.trim() || null
+      } else {
+        if (deviceForm.beaconUuid.trim()) body.beaconUuid = deviceForm.beaconUuid.trim()
+        if (deviceForm.beaconMajor.trim()) body.beaconMajor = parseInt(deviceForm.beaconMajor, 10)
+        if (deviceForm.beaconMinor.trim()) body.beaconMinor = parseInt(deviceForm.beaconMinor, 10)
+        if (deviceForm.beaconRssi.trim()) body.beaconRssi = parseInt(deviceForm.beaconRssi, 10)
+      }
       await apiFetch('/inventory/devices', {
         method: 'POST',
-        body: JSON.stringify({ name: deviceForm.name.trim(), type: deviceForm.type, locationId: deviceForm.locationId, ipAddress: deviceForm.ipAddress.trim() || null }),
+        body: JSON.stringify(body),
       })
       setDeviceDialogOpen(false)
-      setDeviceForm({ name: '', type: 'CAMERA', locationId: '', ipAddress: '' })
+      setDeviceForm({ name: '', type: 'CAMERA', locationId: '', ipAddress: '', beaconUuid: '', beaconMajor: '', beaconMinor: '', beaconRssi: '-70' })
       if (selectedLocationId) { fetchDevices(selectedLocationId); fetchStats(selectedLocationId) }
     } catch { /* handled silently */ }
     finally { setDeviceSubmitting(false) }
@@ -490,7 +519,19 @@ export default function InventoryDashboard() {
         if (item) body.itemName = item.name
       }
       const result = await apiFetch<{
-        analysis: { count: number; confidence: number; detected: string[]; discrepancy: boolean; beaconCount: number | null }
+        analysis: {
+          count: number
+          confidence: number
+          observations: string
+          detected: string[]
+          discrepancy: boolean
+          beaconCount: number | null
+          detectedItem: string | null
+          matchedItem: { id: string; name: string } | null
+          isExactMatch: boolean
+          isUserMismatch: boolean
+          lowConfidence: boolean
+        }
       }>('/inventory/snapshot', { method: 'POST', body: JSON.stringify(body) })
       if (result?.analysis) {
         setScanResult(result.analysis)
@@ -795,8 +836,20 @@ export default function InventoryDashboard() {
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
                         </div>
-                        {device.ipAddress && (
+                        {device.type === 'CAMERA' && device.ipAddress && (
                           <p className="text-[10px] text-slate-400 mt-2 ml-[46px] font-mono">{device.ipAddress}</p>
+                        )}
+                        {device.type === 'BEACON_GATEWAY' && device.beaconUuid && (
+                          <div className="mt-2 ml-[46px] space-y-0.5">
+                            <p className="text-[10px] text-slate-400 font-mono truncate" title={device.beaconUuid}>
+                              UUID: {device.beaconUuid.substring(0, 23)}...
+                            </p>
+                            <div className="flex items-center gap-3 text-[10px] text-slate-400">
+                              {device.beaconMajor !== null && <span>Major: {device.beaconMajor}</span>}
+                              {device.beaconMinor !== null && <span>Minor: {device.beaconMinor}</span>}
+                              <span>RSSI: {device.beaconRssi ?? -70} dBm</span>
+                            </div>
+                          </div>
                         )}
                       </motion.div>
                     )
@@ -1081,10 +1134,80 @@ export default function InventoryDashboard() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-slate-700">Direccion IP / ID (opcional)</Label>
-                <Input value={deviceForm.ipAddress} onChange={(e) => setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }))} placeholder="Ej: 192.168.1.100" className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono" />
-              </div>
+
+              {deviceForm.type === 'CAMERA' ? (
+                <div className="space-y-2">
+                  <Label className="text-xs text-slate-700">Direccion IP (opcional)</Label>
+                  <Input value={deviceForm.ipAddress} onChange={(e) => setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }))} placeholder="Ej: 192.168.1.100" className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono" />
+                  <p className="text-[10px] text-slate-400">Direccion de red de la camara en la red local</p>
+                </div>
+              ) : (
+                <div className="space-y-3 p-3 rounded-lg bg-orange-50 border border-orange-200">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Radio className="w-4 h-4 text-orange-600" />
+                    <Label className="text-xs font-medium text-orange-800">Configuracion Beacon BLE (iBeacon)</Label>
+                  </div>
+                  <p className="text-[10px] text-orange-600 leading-relaxed">
+                    Ingresa los datos del beacon fisico instalado en la ubicacion. Los dispositivos deben estar dentro del rango del beacon para registrar movimientos.
+                  </p>
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-slate-700">UUID</Label>
+                      <Input
+                        value={deviceForm.beaconUuid}
+                        onChange={(e) => setDeviceForm((p) => ({ ...p, beaconUuid: e.target.value }))}
+                        placeholder="f7826da6-4fa3-4e98-8014-7c7a646e9c01"
+                        className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono"
+                        maxLength={36}
+                      />
+                      <p className="text-[10px] text-slate-400">Formato UUID v4 (36 caracteres con guiones)</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-[11px] text-slate-700">Major</Label>
+                        <Input
+                          value={deviceForm.beaconMajor}
+                          onChange={(e) => setDeviceForm((p) => ({ ...p, beaconMajor: e.target.value.replace(/[^0-9]/g, '') }))}
+                          placeholder="1"
+                          className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono"
+                          type="number"
+                          min={0}
+                          max={65535}
+                        />
+                        <p className="text-[10px] text-slate-400">0 - 65535</p>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[11px] text-slate-700">Minor</Label>
+                        <Input
+                          value={deviceForm.beaconMinor}
+                          onChange={(e) => setDeviceForm((p) => ({ ...p, beaconMinor: e.target.value.replace(/[^0-9]/g, '') }))}
+                          placeholder="1"
+                          className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono"
+                          type="number"
+                          min={0}
+                          max={65535}
+                        />
+                        <p className="text-[10px] text-slate-400">0 - 65535</p>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-slate-700">RSSI (umbral de senal)</Label>
+                      <Input
+                        value={deviceForm.beaconRssi}
+                        onChange={(e) => setDeviceForm((p) => ({ ...p, beaconRssi: e.target.value.replace(/[^0-9-]/g, '') }))}
+                        placeholder="-70"
+                        className="h-9 bg-white border-slate-200 text-slate-800 text-sm font-mono"
+                        type="number"
+                        min={-100}
+                        max={0}
+                      />
+                      <p className="text-[10px] text-slate-400">
+                        Senal minima para considerar &quot;en rango&quot;. Mas cercano a 0 = mas fuerte. Recomendado: -50 a -80 dBm
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="ghost" size="sm" onClick={() => setDeviceDialogOpen(false)} className="text-slate-500">Cancelar</Button>
                 <Button size="sm" onClick={handleAddDevice} disabled={deviceSubmitting || !deviceForm.name.trim()} className="gap-2 bg-cyan-600 hover:bg-cyan-500 text-white">
@@ -1201,7 +1324,7 @@ export default function InventoryDashboard() {
                 Simular Escaneo IA
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500">
-                Sube una imagen del inventario para que la IA cuente los objetos visibles
+                La IA identifica automáticamente el tipo de articulo y cuenta las unidades visibles
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-2">
@@ -1261,44 +1384,92 @@ export default function InventoryDashboard() {
                 </div>
               </div>
 
-              {/* Scan Result */}
+              {/* Scan Result — Autonomous Detection */}
               <AnimatePresence>
                 {scanResult && (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                    {/* Detected Item Header */}
                     <div className="flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-emerald-600" />
-                      <span className="text-sm font-medium text-slate-800">Resultado del Analisis</span>
+                      <div className={cn(
+                        'h-8 w-8 rounded-lg flex items-center justify-center',
+                        scanResult.lowConfidence ? 'bg-amber-100' : 'bg-emerald-100'
+                      )}>
+                        {scanResult.lowConfidence
+                          ? <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          : <Zap className="w-4 h-4 text-emerald-600" />
+                        }
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-semibold text-slate-800">Detección Autónoma IA</span>
+                        {scanResult.detectedItem && (
+                          <p className="text-xs text-slate-500 truncate">
+                            IA detectó: <span className="font-medium text-cyan-700">{scanResult.detectedItem}</span>
+                            {scanResult.matchedItem && !scanResult.isExactMatch && (
+                              <span className="ml-1 text-slate-400">→ match: {scanResult.matchedItem.name}</span>
+                            )}
+                          </p>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Low Confidence Warning */}
+                    {scanResult.lowConfidence && (
+                      <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-semibold text-amber-700">Detección incierta</p>
+                          <p className="text-[11px] text-amber-600 mt-0.5">Confianza del {Math.round(scanResult.confidence * 100)}% — por favor verifique manualmente el conteo.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* User Mismatch Warning */}
+                    {scanResult.isUserMismatch && scanForm.itemId && (
+                      <div className="rounded-lg bg-violet-50 border border-violet-200 p-2.5 flex items-start gap-2">
+                        <Eye className="w-4 h-4 text-violet-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-semibold text-violet-700">Discrepancia de identificación</p>
+                          <p className="text-[11px] text-violet-600 mt-0.5">
+                            La IA detectó <span className="font-semibold">{scanResult.detectedItem}</span> pero se esperaba ver un artículo diferente del catálogo.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stats Grid */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-white shadow-sm rounded-xl p-2.5 text-center">
+                      <div className="rounded-lg bg-white shadow-sm p-2.5 text-center">
                         <p className="text-[10px] text-slate-400 uppercase mb-0.5">Conteo IA</p>
                         <p className="text-lg font-bold text-emerald-600 tabular-nums">{scanResult.count}</p>
                       </div>
-                      <div className="rounded-lg bg-white shadow-sm rounded-xl p-2.5 text-center">
+                      <div className="rounded-lg bg-white shadow-sm p-2.5 text-center">
                         <p className="text-[10px] text-slate-400 uppercase mb-0.5">Confianza</p>
-                        <p className="text-lg font-bold text-slate-800 tabular-nums">{Math.round(scanResult.confidence * 100)}%</p>
+                        <p className={cn(
+                          'text-lg font-bold tabular-nums',
+                          scanResult.lowConfidence ? 'text-amber-600' : 'text-slate-800'
+                        )}>{Math.round(scanResult.confidence * 100)}%</p>
                       </div>
-                      <div className="rounded-lg bg-white shadow-sm rounded-xl p-2.5 text-center">
+                      <div className="rounded-lg bg-white shadow-sm p-2.5 text-center">
                         <p className="text-[10px] text-slate-400 uppercase mb-0.5">Beacon</p>
-                        <p className="text-lg font-bold text-slate-800 tabular-nums">{scanResult.beaconCount ?? 'N/A'}</p>
+                        <p className="text-lg font-bold text-slate-800 tabular-nums">{scanResult.beaconCount ?? '—'}</p>
                       </div>
                     </div>
+
+                    {/* Beacon Discrepancy */}
                     {scanResult.discrepancy && (
                       <div className="rounded-lg bg-red-50 border border-red-200 p-2.5 flex items-center gap-2">
                         <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
                         <p className="text-xs text-red-600">
-                          Discrepancia: IA conto {scanResult.count} vs Beacon {scanResult.beaconCount ?? 0}
+                          Discrepancia: IA contó {scanResult.count} vs Beacon {scanResult.beaconCount ?? 0}
                         </p>
                       </div>
                     )}
-                    {scanResult.detected.length > 0 && (
-                      <div>
-                        <p className="text-[10px] text-slate-400 uppercase mb-1">Objetos Detectados</p>
-                        <div className="flex flex-wrap gap-1">
-                          {scanResult.detected.slice(0, 8).map((d, i) => (
-                            <Badge key={i} variant="outline" className="text-[10px] border-slate-200 text-slate-700 bg-white">{d}</Badge>
-                          ))}
-                        </div>
+
+                    {/* AI Observations */}
+                    {scanResult.observations && (
+                      <div className="rounded-lg bg-white shadow-sm p-2.5">
+                        <p className="text-[10px] text-slate-400 uppercase mb-1">Observaciones IA</p>
+                        <p className="text-xs text-slate-600 leading-relaxed">{scanResult.observations}</p>
                       </div>
                     )}
                   </motion.div>

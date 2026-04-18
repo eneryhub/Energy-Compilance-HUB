@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { name, locationId, type, ipAddress, metadata } = body
+    const { name, locationId, type, ipAddress, metadata, beaconUuid, beaconMajor, beaconMinor, beaconRssi } = body
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return NextResponse.json({ error: 'El nombre del dispositivo es requerido' }, { status: 400 })
@@ -72,6 +72,48 @@ export async function POST(request: NextRequest) {
 
     if (!locationId || typeof locationId !== 'string') {
       return NextResponse.json({ error: 'La ubicación es requerida' }, { status: 400 })
+    }
+
+    const deviceType = type || 'CAMERA'
+
+    // Validate BLE fields for BEACON_GATEWAY type
+    if (deviceType === 'BEACON_GATEWAY') {
+      if (beaconUuid && typeof beaconUuid === 'string') {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        if (!uuidRegex.test(beaconUuid)) {
+          return NextResponse.json(
+            { error: 'El UUID del beacon debe tener formato UUID v4 (36 caracteres con guiones)' },
+            { status: 400 }
+          )
+        }
+      }
+      if (beaconMajor !== undefined && beaconMajor !== null) {
+        const major = Number(beaconMajor)
+        if (!Number.isInteger(major) || major < 0 || major > 65535) {
+          return NextResponse.json(
+            { error: 'El valor Major debe ser un entero entre 0 y 65535' },
+            { status: 400 }
+          )
+        }
+      }
+      if (beaconMinor !== undefined && beaconMinor !== null) {
+        const minor = Number(beaconMinor)
+        if (!Number.isInteger(minor) || minor < 0 || minor > 65535) {
+          return NextResponse.json(
+            { error: 'El valor Minor debe ser un entero entre 0 y 65535' },
+            { status: 400 }
+          )
+        }
+      }
+      if (beaconRssi !== undefined && beaconRssi !== null) {
+        const rssi = Number(beaconRssi)
+        if (!Number.isInteger(rssi) || rssi < -100 || rssi > 0) {
+          return NextResponse.json(
+            { error: 'El RSSI debe ser un valor entero entre -100 y 0 dBm' },
+            { status: 400 }
+          )
+        }
+      }
     }
 
     // Verify location belongs to company
@@ -88,8 +130,12 @@ export async function POST(request: NextRequest) {
         companyId: session.companyId,
         locationId,
         name: name.trim(),
-        type: type || 'CAMERA',
-        ipAddress: ipAddress && typeof ipAddress === 'string' ? ipAddress.trim() : null,
+        type: deviceType,
+        ipAddress: deviceType === 'CAMERA' && ipAddress && typeof ipAddress === 'string' ? ipAddress.trim() : null,
+        beaconUuid: deviceType === 'BEACON_GATEWAY' && beaconUuid && typeof beaconUuid === 'string' ? beaconUuid.trim().toLowerCase() : null,
+        beaconMajor: deviceType === 'BEACON_GATEWAY' && beaconMajor !== undefined && beaconMajor !== null ? Number(beaconMajor) : null,
+        beaconMinor: deviceType === 'BEACON_GATEWAY' && beaconMinor !== undefined && beaconMinor !== null ? Number(beaconMinor) : null,
+        beaconRssi: deviceType === 'BEACON_GATEWAY' && beaconRssi !== undefined && beaconRssi !== null ? Number(beaconRssi) : -70,
         metadata: metadata ? JSON.stringify(metadata) : null,
       },
     })
