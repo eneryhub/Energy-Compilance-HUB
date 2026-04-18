@@ -8,7 +8,7 @@ const globalForPrisma = globalThis as unknown as {
 
 // Increment this when the Prisma schema changes to force client regeneration in dev.
 // The old cached client won't have the new models/fields.
-const PRISMA_SCHEMA_VERSION = 10
+const PRISMA_SCHEMA_VERSION = 11
 
 // ─────────────────────────────────────────────────────────────────
 // PRODUCTION CONNECTION POOL LIMITER
@@ -590,6 +590,10 @@ export async function ensureSchemaColumns(): Promise<void> {
         "status" TEXT NOT NULL DEFAULT 'ONLINE',
         "lastSeenAt" DATETIME,
         "metadata" TEXT,
+        "beaconUuid" TEXT,
+        "beaconMajor" INTEGER,
+        "beaconMinor" INTEGER,
+        "beaconRssi" INTEGER NOT NULL DEFAULT -70,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
@@ -610,6 +614,10 @@ export async function ensureSchemaColumns(): Promise<void> {
         "status" TEXT NOT NULL DEFAULT 'ONLINE',
         "lastSeenAt" TIMESTAMPTZ,
         "metadata" TEXT,
+        "beaconUuid" TEXT,
+        "beaconMajor" INTEGER,
+        "beaconMinor" INTEGER,
+        "beaconRssi" INTEGER NOT NULL DEFAULT -70,
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
@@ -618,6 +626,22 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "InventoryDevice_type_idx" ON "InventoryDevice"("type");
       CREATE INDEX IF NOT EXISTS "InventoryDevice_status_idx" ON "InventoryDevice"("status");
     `)
+
+    // ============ Ensure InventoryDevice BLE columns ============
+    await ensureColumn('InventoryDevice', 'beaconUuid', 'TEXT', 'TEXT')
+    await ensureColumn('InventoryDevice', 'beaconMajor', 'INTEGER', 'INTEGER')
+    await ensureColumn('InventoryDevice', 'beaconMinor', 'INTEGER', 'INTEGER')
+    await ensureColumn('InventoryDevice', 'beaconRssi', 'INTEGER NOT NULL DEFAULT -70', 'INTEGER NOT NULL DEFAULT -70')
+
+    // Drop old global unique index on beaconUuid (was @unique, now @@unique([companyId, beaconUuid]))
+    try {
+      await _db.$executeRawUnsafe(`DROP INDEX IF EXISTS "InventoryDevice_beaconUuid_key"`)
+    } catch { /* index may not exist */ }
+
+    // Create compound unique index on (companyId, beaconUuid)
+    try {
+      await _db.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "InventoryDevice_companyId_beaconUuid_key" ON "InventoryDevice"("companyId", "beaconUuid")`)
+    } catch { /* may already exist */ }
 
     // ============ Ensure SmartInventory table ============
     await ensureTableExists('SmartInventory', `

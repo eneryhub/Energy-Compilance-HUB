@@ -564,7 +564,7 @@ model InventoryDevice {
   metadata    String?                  // JSON: camera model, beacon firmware, etc.
 
   // BLE Beacon configuration (iBeacon protocol — only for BEACON_GATEWAY type)
-  beaconUuid  String?  @unique         // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
+  beaconUuid  String?                  // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
   beaconMajor Int?                     // Major value (0-65535)
   beaconMinor Int?                     // Minor value (0-65535)
   beaconRssi  Int      @default(-70)   // Signal strength threshold (dBm). Recommended: -50 to -80
@@ -580,6 +580,7 @@ model InventoryDevice {
   @@index([locationId])
   @@index([type])
   @@index([status])
+  @@unique([companyId, beaconUuid])
 }
 
 // Smart Inventory: Item-Location junction with BLE + AI visual counts

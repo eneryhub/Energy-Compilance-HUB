@@ -563,6 +563,26 @@ export default function InventoryDashboard() {
     finally { setSeeding(false) }
   }
 
+  const handleReseedDemo = async () => {
+    setSeeding(true)
+    try {
+      await apiFetch('/inventory/seed', { method: 'DELETE' })
+      const result = await apiFetch<{ seeded?: boolean; message?: string; alreadySeeded?: boolean }>('/inventory/seed', { method: 'POST' })
+      if (result?.seeded) {
+        setLocations([])
+        setSelectedLocationId('')
+        setDevices([])
+        setStockRecords([])
+        setDiscrepancies([])
+        setSnapshots([])
+        setStats({ totalStock: 0, lowStockAlerts: 0, activeDiscrepancies: 0, devicesOnline: 0 })
+        await fetchLocations()
+        await fetchItems()
+      }
+    } catch { /* silent */ }
+    finally { setSeeding(false) }
+  }
+
   const handleClearSeed = async () => {
     setSeeding(true)
     try {

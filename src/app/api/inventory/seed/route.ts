@@ -20,18 +20,40 @@ export async function POST(request: NextRequest) {
     const companyId = session.companyId
     const userId = session.userId
 
-    // Check if seed data already exists for this company
-    const existingLocations = await db.inventoryLocation.findMany({
-      where: { companyId },
-      take: 1,
-    })
+    // Check if seed data already exists for this company (fully complete)
+    const [existingLocations, existingItems, existingDevices, existingStock] = await Promise.all([
+      db.inventoryLocation.findMany({ where: { companyId }, take: 1 }),
+      db.inventoryItem.findMany({ where: { companyId }, take: 1 }),
+      db.inventoryDevice.findMany({ where: { companyId }, take: 1 }),
+      db.smartInventory.findMany({ where: { companyId }, take: 1 }),
+    ])
 
-    if (existingLocations.length > 0) {
+    // If fully seeded (locations + items + devices + stock), don't re-seed
+    if (existingLocations.length > 0 && existingItems.length > 0 && existingDevices.length > 0 && existingStock.length > 0) {
       return NextResponse.json({
-        message: 'Ya existen datos de inventario para esta empresa. Usa DELETE para limpiar primero.',
+        message: 'Ya existen datos de inventario completos para esta empresa. Usa DELETE para limpiar primero.',
         alreadySeeded: true,
       })
     }
+
+    // If partial seed exists (e.g. locations only from a failed previous attempt), clean and restart
+    if (existingLocations.length > 0) {
+      await db.inventoryAudit.deleteMany({ where: { companyId } })
+      await db.smartInventory.deleteMany({ where: { companyId } })
+      await db.inventoryDevice.deleteMany({ where: { companyId } })
+      await db.inventoryItem.deleteMany({ where: { companyId } })
+      await db.inventoryLocation.deleteMany({ where: { companyId } })
+    }
+
+    // ── Migrate: Drop old global unique constraint on beaconUuid ──
+    // Previous schema had @unique on beaconUuid (global). Now it's @@unique([companyId, beaconUuid]).
+    // This migration ensures old databases don't block seed with P2002 errors.
+    try {
+      await db.$executeRawUnsafe(`DROP INDEX IF EXISTS "InventoryDevice_beaconUuid_key"`)
+    } catch { /* index may not exist or DB doesn't support IF EXISTS */ }
+    try {
+      await db.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "InventoryDevice_companyId_beaconUuid_key" ON "InventoryDevice"("companyId", "beaconUuid")`)
+    } catch { /* may already exist */ }
 
     // ── 1) LOCATIONS ──
     const locs = await Promise.all([

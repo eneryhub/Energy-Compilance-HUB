@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getTokenPayload } from '@/lib/auth'
 // @ts-expect-error — PDFKit is a CommonJS module
 import PDFDocument from 'pdfkit'
+import * as XLSX from 'xlsx'
 
 // GET /api/inventory/export?locationId=xxx&format=pdf|xlsx
 export async function GET(request: NextRequest) {
@@ -97,7 +98,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    return generatePdf({
+    return await generatePdf({
       companyName, location, stockRecords, devices, audits,
       totalStock, totalItems, lowStockCount, discrepancyCount, devicesOnline, totalDevices,
       periodStr, dateStr,
@@ -127,7 +128,8 @@ function generatePdf(ctx: {
   totalDevices: number
   periodStr: string
   dateStr: string
-}) {
+}): Promise<NextResponse> {
+  return new Promise((resolve, reject) => {
   const PDFDoc = PDFDocument
   const buffers: Buffer[] = []
   const doc = new PDFDocument({
@@ -137,6 +139,15 @@ function generatePdf(ctx: {
   })
 
   doc.on('data', (chunk: Buffer) => buffers.push(chunk))
+  doc.on('end', () => {
+    resolve(new NextResponse(Buffer.concat(buffers), {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="reporte-inventario-${ctx.location.name.replace(/\s+/g, '-').toLowerCase()}.pdf"`,
+      },
+    }))
+  })
+  doc.on('error', reject)
 
   const W = 595.28 // A4 width in points
   const H = 841.89 // A4 height in points
@@ -348,13 +359,7 @@ function generatePdf(ctx: {
   }
 
   doc.end()
-
-  return new NextResponse(Buffer.concat(buffers), {
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="reporte-inventario-${ctx.location.name.replace(/\s+/g, '-').toLowerCase()}.pdf"`,
-    },
-  })
+  }) // end Promise
 }
 
 // ── Helper: Section Title ──
@@ -388,7 +393,7 @@ function drawTableHeader(doc: any, x: number, y: number, totalW: number, colWidt
 }
 
 // ═══════════════════════════════════════════════════════════════
-// XLSX GENERATION (ExcelJS)
+// XLSX GENERATION (SheetJS / xlsx)
 // ═══════════════════════════════════════════════════════════════
 
 async function generateXlsx(ctx: {
@@ -406,163 +411,84 @@ async function generateXlsx(ctx: {
   periodStr: string
   dateStr: string
 }) {
-  const ExcelJS = (await import('exceljs')).default
-  const workbook = new ExcelJS.Workbook()
-  workbook.creator = ctx.companyName
-  workbook.created = new Date()
-
-  // ── Styles ──
-  const navyFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A2647' } } as any
-  const orangeFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFA500' } } as any
-  const grayFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F5F5' } } as any
-  const headerFont = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 }
-  const titleFont = { bold: true, color: { argb: 'FFFFA500' }, size: 11 }
-  const sectionFont = { bold: true, color: { argb: 'FF1A365D' }, size: 11 }
-  const borderThin = {
-    top: { style: 'thin', color: { argb: 'FFCCCCCC' } },
-    bottom: { style: 'thin', color: { argb: 'FFCCCCCC' } },
-    left: { style: 'thin', color: { argb: 'FFCCCCCC' } },
-    right: { style: 'thin', color: { argb: 'FFCCCCCC' } },
-  }
+  const wb = XLSX.utils.book_new()
 
   // ── Sheet 1: Inventario ──
-  const ws1 = workbook.addWorksheet('Inventario', { properties: { tabColor: { argb: 'FF0A2647' } } })
-  ws1.columns = [
-    { header: 'N°', key: 'n', width: 5 },
-    { header: 'Articulo', key: 'name', width: 35 },
-    { header: 'SKU', key: 'sku', width: 18 },
-    { header: 'Categoria', key: 'category', width: 16 },
-    { header: 'Unidad', key: 'unit', width: 10 },
-    { header: 'Cantidad', key: 'quantity', width: 12 },
-    { header: 'Conteo IA', key: 'cameraCount', width: 12 },
-    { header: 'Conteo BLE', key: 'beaconCount', width: 12 },
-    { header: 'Umbral Min', key: 'threshold', width: 12 },
-    { header: 'Estado', key: 'status', width: 12 },
-    { header: 'Discrepancia', key: 'discrepancy', width: 12 },
-    { header: 'Ult. Recuento', key: 'lastCounted', width: 16 },
+  const invHeaders = ['N°', 'Articulo', 'SKU', 'Categoria', 'Unidad', 'Cantidad', 'Conteo IA', 'Conteo BLE', 'Umbral Min', 'Estado', 'Discrepancia', 'Ult. Recuento']
+  const invData = ctx.stockRecords.map((rec: any, i: number) => {
+    const qty = rec.quantity
+    const threshold = rec.item?.thresholdMin ?? 999999
+    const status = qty <= threshold ? (qty <= Math.floor(threshold * 0.5) ? 'CRITICO' : 'BAJO') : 'OK'
+    return [
+      i + 1,
+      rec.item?.name || 'Desconocido',
+      rec.item?.sku || '—',
+      rec.item?.category || '—',
+      rec.item?.unit || '—',
+      qty,
+      rec.cameraCount ?? '—',
+      rec.beaconCount ?? '—',
+      rec.item?.thresholdMin ?? '—',
+      status,
+      rec.discrepancy ? 'SI' : 'NO',
+      rec.lastCountedAt ? new Date(rec.lastCountedAt).toLocaleDateString('es-AR') : '—',
+    ]
+  })
+  const ws1 = XLSX.utils.aoa_to_sheet([invHeaders, ...invData])
+  // Set column widths
+  ws1['!cols'] = [
+    { wch: 5 }, { wch: 35 }, { wch: 18 }, { wch: 16 }, { wch: 10 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+    { wch: 12 }, { wch: 16 },
   ]
-
-  // Header row
-  const hRow1 = ws1.getRow(1)
-  hRow1.height = 30
-  hRow1.eachCell((cell: any) => {
-    cell.fill = navyFill
-    cell.font = headerFont
-    cell.alignment = { vertical: 'middle', horizontal: 'center' }
-    cell.border = borderThin
-  })
-
-  // Data rows
-  ctx.stockRecords.forEach((rec: any, i: number) => {
-    const row = ws1.addRow({
-      n: i + 1,
-      name: rec.item?.name || 'Desconocido',
-      sku: rec.item?.sku || '—',
-      category: rec.item?.category || '—',
-      unit: rec.item?.unit || '—',
-      quantity: rec.quantity,
-      cameraCount: rec.cameraCount ?? '—',
-      beaconCount: rec.beaconCount ?? '—',
-      threshold: rec.item?.thresholdMin ?? '—',
-      status: rec.quantity <= (rec.item?.thresholdMin ?? 999999) ? (rec.quantity <= Math.floor((rec.item?.thresholdMin ?? 0) * 0.5) ? 'CRITICO' : 'BAJO') : 'OK',
-      discrepancy: rec.discrepancy ? 'SI' : 'NO',
-      lastCounted: rec.lastCountedAt ? new Date(rec.lastCountedAt).toLocaleDateString('es-AR') : '—',
-    })
-    row.eachCell((cell: any) => {
-      cell.border = borderThin
-      cell.alignment = { vertical: 'middle' }
-      if (i % 2 === 1) cell.fill = grayFill
-    })
-  })
+  XLSX.utils.book_append_sheet(wb, ws1, 'Inventario')
 
   // ── Sheet 2: Dispositivos ──
-  const ws2 = workbook.addWorksheet('Dispositivos', { properties: { tabColor: { argb: 'FF2E8B57' } } })
-  ws2.columns = [
-    { header: 'N°', key: 'n', width: 5 },
-    { header: 'Nombre', key: 'name', width: 30 },
-    { header: 'Tipo', key: 'type', width: 16 },
-    { header: 'Estado', key: 'status', width: 14 },
-    { header: 'IP / UUID', key: 'info', width: 36 },
-    { header: 'Major', key: 'major', width: 8 },
-    { header: 'Minor', key: 'minor', width: 8 },
-    { header: 'RSSI', key: 'rssi', width: 8 },
-    { header: 'Ult. Vista', key: 'lastSeen', width: 16 },
-  ]
-
-  const hRow2 = ws2.getRow(1)
-  hRow2.height = 30
-  hRow2.eachCell((cell: any) => {
-    cell.fill = navyFill
-    cell.font = headerFont
-    cell.alignment = { vertical: 'middle', horizontal: 'center' }
-    cell.border = borderThin
-  })
-
-  ctx.devices.forEach((dev: any, i: number) => {
+  const devHeaders = ['N°', 'Nombre', 'Tipo', 'Estado', 'IP / UUID', 'Major', 'Minor', 'RSSI', 'Ult. Vista']
+  const devData = ctx.devices.map((dev: any, i: number) => {
     const typeLabel = dev.type === 'CAMERA' ? 'Camara' : 'Gateway BLE'
     const info = dev.type === 'CAMERA' ? (dev.ipAddress || '') : (dev.beaconUuid || '')
-    const row = ws2.addRow({
-      n: i + 1,
-      name: dev.name,
-      type: typeLabel,
-      status: dev.status,
-      info: info,
-      major: dev.beaconMajor ?? '',
-      minor: dev.beaconMinor ?? '',
-      rssi: dev.beaconRssi ?? '',
-      lastSeen: dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleDateString('es-AR') : '',
-    })
-    row.eachCell((cell: any) => {
-      cell.border = borderThin
-      cell.alignment = { vertical: 'middle' }
-      if (i % 2 === 1) cell.fill = grayFill
-    })
+    return [
+      i + 1,
+      dev.name,
+      typeLabel,
+      dev.status,
+      info,
+      dev.beaconMajor ?? '',
+      dev.beaconMinor ?? '',
+      dev.beaconRssi ?? '',
+      dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleDateString('es-AR') : '',
+    ]
   })
-
-  // ── Sheet 3: Auditoria ──
-  const ws3 = workbook.addWorksheet('Auditoria IA', { properties: { tabColor: { argb: 'FFFFA500' } } })
-  ws3.columns = [
-    { header: 'N°', key: 'n', width: 5 },
-    { header: 'Articulo', key: 'itemName', width: 30 },
-    { header: 'Conteo IA', key: 'itemCount', width: 12 },
-    { header: 'Conteo BLE', key: 'beaconCount', width: 12 },
-    { header: 'Confianza', key: 'confidence', width: 12 },
-    { header: 'Discrepancia', key: 'discrepancy', width: 12 },
-    { header: 'Dispositivo', key: 'deviceName', width: 25 },
-    { header: 'Tipo Disp.', key: 'deviceType', width: 14 },
-    { header: 'Fecha', key: 'createdAt', width: 18 },
+  const ws2 = XLSX.utils.aoa_to_sheet([devHeaders, ...devData])
+  ws2['!cols'] = [
+    { wch: 5 }, { wch: 30 }, { wch: 16 }, { wch: 14 }, { wch: 36 },
+    { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 16 },
   ]
+  XLSX.utils.book_append_sheet(wb, ws2, 'Dispositivos')
 
-  const hRow3 = ws3.getRow(1)
-  hRow3.height = 30
-  hRow3.eachCell((cell: any) => {
-    cell.fill = navyFill
-    cell.font = headerFont
-    cell.alignment = { vertical: 'middle', horizontal: 'center' }
-    cell.border = borderThin
-  })
-
-  ctx.audits.forEach((audit: any, i: number) => {
-    const row = ws3.addRow({
-      n: i + 1,
-      itemName: audit.itemName || '—',
-      itemCount: audit.itemCount ?? 0,
-      beaconCount: audit.beaconCount ?? '—',
-      confidence: audit.confidence != null ? `${Math.round(audit.confidence * 100)}%` : '—',
-      discrepancy: audit.discrepancy ? 'SI' : 'NO',
-      deviceName: audit.device?.name || '—',
-      deviceType: audit.device?.type || '—',
-      createdAt: audit.createdAt ? new Date(audit.createdAt).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—',
-    })
-    row.eachCell((cell: any) => {
-      cell.border = borderThin
-      cell.alignment = { vertical: 'middle' }
-      if (i % 2 === 1) cell.fill = grayFill
-    })
-  })
+  // ── Sheet 3: Auditoria IA ──
+  const audHeaders = ['N°', 'Articulo', 'Conteo IA', 'Conteo BLE', 'Confianza', 'Discrepancia', 'Dispositivo', 'Tipo Disp.', 'Fecha']
+  const audData = ctx.audits.map((audit: any, i: number) => [
+    i + 1,
+    audit.itemName || '—',
+    audit.itemCount ?? 0,
+    audit.beaconCount ?? '—',
+    audit.confidence != null ? `${Math.round(audit.confidence * 100)}%` : '—',
+    audit.discrepancy ? 'SI' : 'NO',
+    audit.device?.name || '—',
+    audit.device?.type || '—',
+    audit.createdAt ? new Date(audit.createdAt).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—',
+  ])
+  const ws3 = XLSX.utils.aoa_to_sheet([audHeaders, ...audData])
+  ws3['!cols'] = [
+    { wch: 5 }, { wch: 30 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+    { wch: 12 }, { wch: 25 }, { wch: 14 }, { wch: 18 },
+  ]
+  XLSX.utils.book_append_sheet(wb, ws3, 'Auditoria IA')
 
   // ── Write buffer ──
-  const buffer = await workbook.xlsx.writeBuffer()
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
   return new NextResponse(Buffer.from(buffer), {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
