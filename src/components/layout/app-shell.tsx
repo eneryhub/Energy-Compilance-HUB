@@ -111,7 +111,7 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'erc', label: 'Seguridad en Campo', icon: Siren, roles: ['EMPLOYEE'] },
   { id: 'erc-monitor', label: 'Monitor de Incidentes', icon: Bell, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
   { id: 'inventory', label: 'Inventario Inteligente', icon: Package, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
-  { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },
+  // { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },  // HIDDEN: Enterprise presentation mode
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },
   { id: 'system', label: 'Plataforma', icon: Layers, roles: ['ADMIN'] },
@@ -244,32 +244,38 @@ function SidebarContent({
               <TooltipTrigger asChild>
                 <button
                   onClick={() => {
-                    if (locked && onUpgradeRequest) {
-                      onUpgradeRequest(item.id, item.label, gated.upsellMessage)
-                      onNavigate?.()
-                      return
-                    }
+                    // HIDDEN: Enterprise presentation mode — removed locked click interception
+                    // if (locked && onUpgradeRequest) {
+                    //   onUpgradeRequest(item.id, item.label, gated.upsellMessage)
+                    //   onNavigate?.()
+                    //   return
+                    // }
                     onViewChange(item.id)
                     onNavigate?.()
                   }}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
-                    locked
-                      ? 'text-slate-600 hover:bg-amber-500/10 hover:text-amber-400/80 cursor-pointer'
-                      : isActive
-                        ? 'bg-emerald-500/15 text-emerald-400'
-                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    // HIDDEN: Enterprise presentation mode — removed locked styling
+                    // locked
+                    //   ? 'text-slate-600 hover:bg-amber-500/10 hover:text-amber-400/80 cursor-pointer'
+                    //   : isActive
+                    isActive
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
                   )}
                 >
+                  {/* HIDDEN: Enterprise presentation mode — lock overlay removed
                   {locked ? (
                     <div className="relative">
                       <Icon className="w-4.5 h-4.5" />
                       <Lock className="w-2.5 h-2.5 text-amber-500 absolute -top-0.5 -right-0.5" />
                     </div>
                   ) : (
+                  */}
                     <Icon className={cn('w-4.5 h-4.5', isActive && 'text-emerald-400')} />
-                  )}
+                  {/* )} */}
                   <span className="flex-1 text-left">{item.label}</span>
+                  {/* HIDDEN: Enterprise presentation mode — Pro/Ent badge removed
                   {locked && (
                     <span className={cn(
                       'text-[9px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide',
@@ -280,10 +286,14 @@ function SidebarContent({
                       {gated?.minPlan === 'enterprise' ? 'Ent' : 'Pro'}
                     </span>
                   )}
+                  */}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right" className="hidden lg:block">
+                {/* HIDDEN: Enterprise presentation mode — removed plan-gated tooltip
                 {locked ? `${item.label} — Plan ${gated?.minPlan === 'enterprise' ? 'Enterprise' : 'Business'}` : item.label}
+                */}
+                {item.label}
               </TooltipContent>
             </Tooltip>
           )
@@ -424,29 +434,36 @@ export default function AppShell(props: AppShellProps) {
                     <TooltipTrigger asChild>
                       <button
                         onClick={() => {
-                          if (locked && props.onUpgradeRequest) {
-                            props.onUpgradeRequest(item.id, item.label, gated.upsellMessage)
-                            return
-                          }
+                          // HIDDEN: Enterprise presentation mode — removed locked click interception
+                          // if (locked && props.onUpgradeRequest) {
+                          //   props.onUpgradeRequest(item.id, item.label, gated.upsellMessage)
+                          //   return
+                          // }
                           props.onViewChange(item.id)
                         }}
                         className={cn(
                           'w-10 h-10 rounded-lg flex items-center justify-center transition-all',
-                          locked
-                            ? 'text-slate-600 hover:bg-amber-500/10 hover:text-amber-400'
-                            : isActive
-                              ? 'bg-emerald-500/15 text-emerald-400'
-                              : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                          // HIDDEN: Enterprise presentation mode — removed locked styling
+                          // locked
+                          //   ? 'text-slate-600 hover:bg-amber-500/10 hover:text-amber-400'
+                          //   : isActive
+                          isActive
+                            ? 'bg-emerald-500/15 text-emerald-400'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
                         )}
                       >
                         <div className="relative">
                           <Icon className="w-5 h-5" />
-                          {locked && <Lock className="w-3 h-3 text-amber-500 absolute -top-1 -right-1.5" />}
+                          {/* HIDDEN: Enterprise presentation mode — lock icon removed */}
+                          {/* {locked && <Lock className="w-3 h-3 text-amber-500 absolute -top-1 -right-1.5" />} */}
                         </div>
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="right">
+                      {/* HIDDEN: Enterprise presentation mode — removed plan-gated tooltip
                       {locked ? `${item.label} — Plan ${gated?.minPlan === 'enterprise' ? 'Enterprise' : 'Business'}` : item.label}
+                      */}
+                      {item.label}
                     </TooltipContent>
                   </Tooltip>
                 )

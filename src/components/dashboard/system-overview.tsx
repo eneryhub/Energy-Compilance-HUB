@@ -91,7 +91,7 @@ const modules = [
       'Autenticación JWT con sesiones seguras',
       'Multitenancy por empresa (Company isolation)',
       'PDFKit para generación de PDFs server-side',
-      'Suscripción por planes: Starter, Business, Enterprise',
+      // 'Suscripción por planes: Starter, Business, Enterprise', // HIDDEN: Enterprise presentation
     ],
   },
 ]
@@ -393,7 +393,7 @@ export default function SystemOverview() {
                 { title: 'Firma Digital con Hash', desc: 'Canvas nativo, SHA-256 integrity hash, timestamp, coordenadas GPS embebidas', icon: PenLine },
                 { title: 'Generación PDF Server-Side', desc: 'PDFKit con datos completos, firmas embebidas, checklist, GPS, estado PENDIENTE/AUTORIZADO', icon: FileText },
                 { title: 'Auditoría Total', desc: 'AuditLog con acción, entidad, usuario, IP, timestamp. Trazabilidad completa', icon: Eye },
-                { title: 'Suscripción por Planes', desc: 'Starter ($149), Business ($499), Enterprise ($9999). Stripe-ready', icon: BarChart3 },
+                // { title: 'Suscripción por Planes', desc: 'Starter ($149), Business ($499), Enterprise ($9999). Stripe-ready', icon: BarChart3 }, // HIDDEN: Enterprise presentation
                 { title: 'Responsive + Mobile-First', desc: 'Diseño adaptado para campo: tablets, móviles, sidebar colapsable', icon: Wifi },
               ].map((feature, i) => {
                 const Icon = feature.icon

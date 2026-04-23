@@ -32,7 +32,8 @@ export default function SupportChat({ plan, onUpgradeRequest }: SupportChatProps
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const isAccessible = plan === 'enterprise'
+  // HIDDEN: Enterprise presentation mode — always accessible (was: plan === 'enterprise')
+  const isAccessible = true
 
   const loadMessages = useCallback(async () => {
     if (!isAccessible) return

@@ -332,7 +332,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
     { label: "Inicio", target: "hero" },
     { label: "Plataforma", target: "features" },
     { label: "Cómo Funciona", target: "how-it-works" },
-    { label: "Planes", target: "pricing" },
+    // { label: "Planes", target: "pricing" },  // Hidden for Enterprise presentation
     { label: "FAQ", target: "faq" },
   ]
 
@@ -480,7 +480,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               className="relative text-sm font-bold px-5 py-2 rounded-lg text-black overflow-hidden"
               style={{ background: "linear-gradient(135deg, #facc15, #eab308)", boxShadow: "0 0 20px rgba(250,204,21,0.25)" }}
             >
-              Comenzar Gratis
+              Solicitar Demo
             </motion.button>
           </div>
 
@@ -515,7 +515,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                 <div className="h-px bg-white/5 my-2" />
                 <button onClick={() => { setMobileOpen(false); onLogin() }} className="rounded-lg px-4 py-3 text-sm font-medium text-white/40 text-left hover:text-white">Iniciar Sesión</button>
                 <button onClick={() => { setMobileOpen(false); onRegister() }} className="rounded-lg px-4 py-2.5 text-sm font-bold text-black" style={{ background: "linear-gradient(135deg, #facc15, #eab308)" }}>
-                  Comenzar Gratis
+                  Solicitar Demo
                 </button>
               </div>
             </motion.div>
@@ -577,7 +577,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                     className="group relative flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl text-sm font-bold text-black overflow-hidden"
                     style={{ background: "linear-gradient(135deg, #facc15, #eab308)", boxShadow: "0 0 40px rgba(250,204,21,0.3), 0 8px 24px rgba(0,0,0,0.4)", animation: "glow-pulse 3s ease-in-out infinite" }}
                   >
-                    Comenzar Trial Gratis
+                    Solicitar Demo
                     <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                   </motion.button>
                   <motion.button
@@ -587,16 +587,16 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                     className="flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl text-sm font-semibold text-white/60 hover:text-white transition-colors"
                     style={{ border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}
                   >
-                    Ver Demo en Vivo
+                    Contacto Corporativo
                     <ChevronRight className="h-4 w-4" />
                   </motion.button>
                 </div>
               </FadeIn>
 
-              {/* Trust strip */}
+              {/* Trust strip — Enterprise */}
               <FadeIn delay={0.4}>
                 <div className="flex items-center gap-6 text-xs text-white/25">
-                  {["Sin tarjeta de crédito", "SOC 2 Compliant", "SLA 99.99%"].map((t) => (
+                  {["Plataforma corporativa", "SOC 2 Compliant", "SLA 99.99%"].map((t) => (
                     <div key={t} className="flex items-center gap-1.5">
                       <CheckCircle className="h-3 w-3 text-teal-400" />
                       <span>{t}</span>
@@ -792,8 +792,9 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
       </section>
 
       {/* ================================================================ */}
-      {/*  PRICING                                                         */}
+      {/*  PRICING — Hidden for Enterprise presentation                   */}
       {/* ================================================================ */}
+      {false && (
       <section id="pricing" className="py-24 lg:py-32">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <FadeIn className="text-center mb-16">
@@ -866,6 +867,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           </StaggerContainer>
         </div>
       </section>
+      )}
 
       {/* ================================================================ */}
       {/*  FAQ                                                             */}
@@ -912,7 +914,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
           <FadeIn>
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-medium mb-8"
               style={{ background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.15)", color: "#facc15" }}>
-              <Zap className="h-3 w-3" /> Sin tarjeta de crédito requerida
+              <Zap className="h-3 w-3" /> Plataforma corporativa exclusiva
             </div>
             <h2 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight mb-6">
               Su operación merece{" "}
@@ -921,7 +923,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
               </span>
             </h2>
             <p className="text-lg text-white/35 mb-12 max-w-xl mx-auto">
-              Únase a 500+ empresas que digitalizaron su cumplimiento energético. Configure su cuenta en 30 segundos.
+              Más de 500 empresas confían en nuestra plataforma. Acceso gestionado por el Holding, sin pagos públicos.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <motion.button
@@ -931,7 +933,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                 className="group flex items-center justify-center gap-2 px-9 py-4 rounded-xl text-sm font-bold text-black"
                 style={{ background: "linear-gradient(135deg, #facc15, #eab308)", boxShadow: "0 0 60px rgba(250,204,21,0.3), 0 12px 32px rgba(0,0,0,0.5)", animation: "glow-pulse 3s ease-in-out infinite" }}
               >
-                Comenzar Trial Gratis — 14 días
+                Solicitar Demo
                 <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
               </motion.button>
               <motion.a
@@ -940,7 +942,7 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
                 className="flex items-center justify-center gap-2 px-9 py-4 rounded-xl text-sm font-semibold text-white/50 hover:text-white transition-colors"
                 style={{ border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" }}
               >
-                <Mail className="h-4 w-4" /> Hablar con Ventas
+                <Mail className="h-4 w-4" /> Contacto Corporativo
               </motion.a>
             </div>
           </FadeIn>

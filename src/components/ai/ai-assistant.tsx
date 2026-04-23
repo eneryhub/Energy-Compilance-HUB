@@ -53,7 +53,8 @@ const MODULE_DESCRIPTIONS: Record<ViewType, string> = {
     'El Monitor de Incidentes muestra en tiempo real las alertas de seguridad reportadas desde el campo. Permite ver, clasificar y dar seguimiento a cada incidente.',
 
   subscription:
-    'En Suscripción puedes gestionar tu plan: consultar el periodo de prueba, renovar, o cambiar entre los planes Starter, Business y Enterprise.',
+    // HIDDEN: Enterprise presentation mode — original: 'En Suscripción puedes gestionar tu plan...'
+    'Esta sección está deshabilitada en el modo corporativo. Contacte al administrador del Holding para gestión de accesos.',
 
   audit:
     'Auditoría registra todas las acciones realizadas en la plataforma: quién hizo qué y cuándo. Ideal para trazabilidad y cumplimiento regulatorio.',
@@ -106,17 +107,6 @@ interface AIAssistantProps {
 
 // ── Audio cache on client (blob URLs) ──
 const _audioBlobCache = new Map<string, string>()
-
-// ── Hash function (simple) ──
-function hashText(text: string): string {
-  let hash = 0
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charCodeAt(i)
-    hash = ((hash << 5) - hash) + char
-    hash |= 0
-  }
-  return `${hash}`
-}
 
 // ── cn helper (inline to avoid circular imports) ──
 function clsx(...classes: (string | false | null | undefined)[]) {
@@ -171,7 +161,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
     _setGlobalSpeaking(speaking)
   }, [speaking])
 
-  // Play TTS for given text (no depende de currentView para la caché)
+  // Play TTS for given text (with retry guard — max 1 attempt per module change)
   const playDescription = useCallback(async (text: string) => {
     if (!text || muted) return
 
@@ -188,8 +178,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
     setSpeaking(false)
     setGuideText(text)
 
-    // Cache key basada únicamente en el texto (no en currentView)
-    const cacheKey = hashText(text)
+    const cacheKey = `${currentView}_${text.slice(0, 50)}`
 
     try {
       let blobUrl: string | null = null
@@ -198,9 +187,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
       const cachedUrl = _audioBlobCache.get(cacheKey)
       if (cachedUrl) {
         blobUrl = cachedUrl
-        console.log('[AI Assistant] Using cached audio for:', text.slice(0, 50))
       } else {
-        console.log('[AI Assistant] Fetching audio for:', text.slice(0, 50))
         // Fetch audio from backend proxy
         abortCtrlRef.current = new AbortController()
         const res = await fetch('/api/ai/speech', {
@@ -208,13 +195,14 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: text.slice(0, 1024),
-            voice: 'nova',      // Voz válida de OpenAI
+            voice: 'kazi',
             speed: 1.0,
           }),
           signal: abortCtrlRef.current.signal,
         })
 
         if (!res.ok) {
+          // Read server error body for diagnostics
           let serverMsg = 'Error desconocido'
           try {
             const errBody = await res.json()
@@ -268,6 +256,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
         retryCountRef.current += 1
         if (retryCountRef.current <= MAX_RETRIES) {
           console.warn('[AI Assistant] TTS failed, retry', retryCountRef.current, '/', MAX_RETRIES, ':', err)
+          // Exponential backoff: 2s, 4s
           const delay = Math.pow(2, retryCountRef.current) * 1000
           setTimeout(() => playDescription(text), delay)
         } else {
@@ -277,7 +266,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
       setLoading(false)
       setSpeaking(false)
     }
-  }, [muted])  // ← solo depende de muted, no de currentView
+  }, [currentView, muted])
 
   // Auto-play when module changes — reset retry counter for new view
   useEffect(() => {
@@ -290,7 +279,7 @@ export default function AIAssistant({ currentView }: AIAssistantProps) {
       }, 800)
       return () => clearTimeout(timer)
     }
-  }, [currentView, description, muted, playDescription]) // added description and playDescription
+  }, [currentView]) // intentionally only trigger on currentView change
 
   // Cleanup on unmount
   useEffect(() => {
