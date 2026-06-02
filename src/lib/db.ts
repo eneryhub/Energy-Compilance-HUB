@@ -11,39 +11,46 @@ const globalForPrisma = globalThis as unknown as {
 const PRISMA_SCHEMA_VERSION = 11
 
 // ─────────────────────────────────────────────────────────────────
-// PRODUCTION CONNECTION POOL LIMITER
-// On Vercel serverless, each function instance creates a PrismaClient.
-// Without limits, Prisma uses num_cpus*2+1 connections per instance.
-// Supabase PgBouncer (free tier) has ~20 total connections.
-// 3 concurrent requests per function prevents pool exhaustion.
+// SINGLETON PRISMA CLIENT WITH EXPLICIT CONNECTION POOL LIMITS
+// This avoids the need to mutate DATABASE_URL and ensures the limits
+// are applied even in serverless environments (Vercel).
 // ─────────────────────────────────────────────────────────────────
-if (
-  process.env.NODE_ENV === 'production' &&
-  process.env.DATABASE_URL &&
-  (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://'))
-) {
+const prismaClientSingleton = () => {
   const url = process.env.DATABASE_URL
-  // Only inject if not already present
-  if (!url.includes('connection_limit=')) {
-    const sep = url.includes('?') ? '&' : '?'
-    process.env.DATABASE_URL = `${url}${sep}connection_limit=3&pool_timeout=20&connect_timeout=30`
-    console.log('[DB] Production: injected pool limits (connection_limit=3, pool_timeout=20, connect_timeout=30)')
+  if (!url) {
+    throw new Error('DATABASE_URL is not defined')
   }
+
+  // Check if connection parameters are already present to avoid duplication
+  const separator = url.includes('?') ? '&' : '?'
+  let finalUrl = url
+  if (!url.includes('connection_limit=')) {
+    finalUrl = `${url}${separator}connection_limit=3&pool_timeout=20&connect_timeout=30`
+  }
+
+  // Create client with explicit datasource URL
+  return new PrismaClient({
+    datasources: {
+      db: {
+        url: finalUrl,
+      },
+    },
+  })
 }
 
 let _db: PrismaClient | undefined
 
 try {
   if (process.env.NODE_ENV === 'production') {
-    // In production, create once and reuse
-    _db = globalForPrisma.prisma ?? new PrismaClient()
+    // In production, create once and reuse (singleton pattern)
+    _db = globalForPrisma.prisma ?? prismaClientSingleton()
     if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
   } else {
     // In development, check schema version to detect model changes
     if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
       _db = globalForPrisma.prisma
     } else {
-      _db = new PrismaClient()
+      _db = prismaClientSingleton()
       globalForPrisma.prisma = _db
       globalForPrisma.prismaSchemaVersion = PRISMA_SCHEMA_VERSION
     }
