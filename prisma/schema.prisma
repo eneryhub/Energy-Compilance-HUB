@@ -34,6 +34,7 @@ model Company {
   stripeSubscriptionId String?  @unique
   stripePriceId        String?
   billingEmail         String?
+  billingCycle         String?
   trialEndsAt          DateTime?
   currentPeriodStart   DateTime?
   currentPeriodEnd     DateTime?
@@ -60,6 +61,16 @@ model Company {
   inventoryDevices   InventoryDevice[]
   smartInventory     SmartInventory[]
   inventoryAudits    InventoryAudit[]
+  transportVehicles       TransportVehicle[]
+  transportDrivers        TransportDriver[]
+  transportRoutes         TransportRoute[]
+  transportTrips          TransportTrip[]
+  transportInspections    TransportInspection[]
+  transportDriverEvents   TransportDriverEvent[]
+  environmentIncidents    EnvironmentalIncident[]
+  environmentAssessments  EnvironmentalAssessment[]
+  environmentMetrics      EnvironmentalMetric[]
+  hseEventLogs            HSEEventLog[]
   scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
 }
 
@@ -89,6 +100,12 @@ model User {
   reviewedDocuments HseDocument[] @relation("DocumentReviewer")
   emergencyAlerts    EmergencyAlert[] @relation("EmergencyAlertUser")
   hseReports         HseReport[] @relation("HseReportUser")
+  transportDrivers        TransportDriver[]
+  transportTrips          TransportTrip[] @relation("TripDriver")
+  transportInspections    TransportInspection[] @relation("InspectionInspector")
+  transportDriverEvents   TransportDriverEvent[] @relation("DriverEventDriver")
+  environmentIncidents   EnvironmentalIncident[] @relation("IncidentReporter")
+  currentVehicleDrivers  TransportVehicle[] @relation("VehicleDriver")
 
   @@unique([email, companyId])
 }
@@ -661,5 +678,297 @@ model HseReport {
   @@index([companyId])
   @@index([estado])
   @@index([categoria])
+  @@index([createdAt])
+}
+
+// ============ TRANSPORT MODULE ============
+
+// Transport Vehicles: Fleet registry
+model TransportVehicle {
+  id                String   @id @default(cuid())
+  companyId         String
+  plate             String
+  type              String   // TRACTOR, CAMION, CAMIONETA, PICKUP, BUS, EQUIPO_ESPECIAL
+  brand             String?
+  model             String?
+  year              Int?
+  capacityKg        Float?
+  vin               String?
+  isActive          Boolean  @default(true)
+  status            String   @default("DISPONIBLE") // DISPONIBLE, EN_RUTA, MANTENIMIENTO, FUERA_SERVICIO
+  lastInspectionAt  DateTime?
+  currentDriverId   String?
+  metadata          String?  @default("{}") // JSON
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currentDriver   User?            @relation("VehicleDriver", fields: [currentDriverId], references: [id])
+  trips           TransportTrip[]
+  inspections     TransportInspection[]
+  driverEvents    TransportDriverEvent[]
+
+  @@unique([companyId, plate])
+  @@index([companyId])
+  @@index([status])
+  @@index([isActive])
+}
+
+// Transport Drivers: Driver profiles + certifications
+model TransportDriver {
+  id                String   @id @default(cuid())
+  companyId         String
+  userId            String
+  licenseNumber     String
+  licenseType       String   // A, B, C, D, E
+  licenseExpiry     DateTime?
+  status            String   @default("ACTIVO") // ACTIVO, SUSPENDIDO, VENCIDO, INACTIVO
+  fatigueScore      Float    @default(0)
+  totalTrips        Int      @default(0)
+  certificationData String?  @default("{}") // JSON
+  medicalExpiry     DateTime?
+  emergencyContact  String?  @default("{}") // JSON
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([companyId, userId])
+  @@index([companyId])
+  @@index([status])
+}
+
+// Transport Routes: Route definitions with waypoints
+model TransportRoute {
+  id                  String   @id @default(cuid())
+  companyId           String
+  name                String
+  origin              String
+  destination         String
+  distanceKm          Float
+  estimatedDurationMin Int
+  waypoints           String?  @default("[]") // JSON
+  riskLevel           String   @default("MEDIO") // BAJO, MEDIO, ALTO, CRITICO
+  hasHSECheckpoints   Boolean  @default(false)
+  checkpointConfig    String?  @default("{}") // JSON
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trips   TransportTrip[]
+
+  @@index([companyId])
+  @@index([isActive])
+  @@index([riskLevel])
+}
+
+// Transport Trips: Individual trips (operations)
+model TransportTrip {
+  id                    String    @id @default(cuid())
+  companyId             String
+  vehicleId             String
+  driverId              String
+  routeId               String
+  status                String    @default("PLANIFICADO") // PLANIFICADO, EN_INSPECCION, AUTORIZADO, EN_TRANSITO, COMPLETADO, CANCELADO, BLOQUEADO
+  startDate             DateTime
+  endDate               DateTime?
+  startOdometerKm       Float?
+  endOdometerKm         Float?
+  fuelConsumed          Float?
+  riskValidationResult  String?   @default("{}") // JSON
+  inspectionResult      String?   @default("{}") // JSON
+  blockingReason        String?
+  blockedById           String?
+  blockedAt             DateTime?
+  notes                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  company     Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vehicle    TransportVehicle     @relation(fields: [vehicleId], references: [id])
+  driver     User                 @relation("TripDriver", fields: [driverId], references: [id])
+  route      TransportRoute       @relation(fields: [routeId], references: [id])
+  inspections  TransportInspection[]
+  driverEvents  TransportDriverEvent[]
+
+  @@index([companyId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([routeId])
+  @@index([status])
+  @@index([startDate])
+}
+
+// Transport Inspections: Pre-trip vehicle inspections
+model TransportInspection {
+  id              String   @id @default(cuid())
+  companyId       String
+  tripId          String
+  vehicleId       String
+  inspectorId     String
+  type            String   // PRE_VIAJE, POST_VIAJE
+  checklistResult String?  @default("{}") // JSON
+  passed          Boolean
+  issues          String?  @default("[]") // JSON
+  photos          String?  @default("[]") // JSON
+  createdAt       DateTime @default(now())
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trip      TransportTrip     @relation(fields: [tripId], references: [id])
+  vehicle   TransportVehicle  @relation(fields: [vehicleId], references: [id])
+  inspector User              @relation("InspectionInspector", fields: [inspectorId], references: [id])
+
+  @@index([companyId])
+  @@index([tripId])
+  @@index([vehicleId])
+  @@index([inspectorId])
+  @@index([createdAt])
+}
+
+// Transport Driver Events: AI-detected driver events (DMS - Driver Monitoring System)
+model TransportDriverEvent {
+  id            String   @id @default(cuid())
+  companyId     String
+  tripId        String
+  driverId      String
+  vehicleId     String
+  eventType     String   // FATIGA, DISTRACCION_CELULAR, DISTRACCION_OBJETO, SOMNOLENCIA, SIN_CINTURON, CONDUCCION_AGRESIVA, NORMAL
+  riskLevel     String   // BAJO, MEDIO, ALTO, CRITICO
+  confidence    Float
+  snapshotUrl   String?
+  aiAnalysis    String?  @default("{}") // JSON
+  gpsLocation   String?  @default("{}") // JSON
+  timestamp     DateTime
+  isResolved    Boolean  @default(false)
+  resolvedAt    DateTime?
+  actionTaken   String?
+  createdAt     DateTime @default(now())
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trip      TransportTrip     @relation(fields: [tripId], references: [id])
+  driver    User              @relation("DriverEventDriver", fields: [driverId], references: [id])
+  vehicle   TransportVehicle  @relation(fields: [vehicleId], references: [id])
+
+  @@index([companyId])
+  @@index([tripId])
+  @@index([driverId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@index([riskLevel])
+}
+
+// ============ ENVIRONMENT MODULE ============
+
+// Environmental Incidents: Spills, emissions, waste events
+model EnvironmentalIncident {
+  id                  String    @id @default(cuid())
+  companyId           String
+  reportedById        String
+  type                String    // DERRAME, EMISION, RESIDUO_PELIGROSO, CONTAMINACION_SUELO, CONTAMINACION_AGUA, RUIDO, OTRO
+  severity            String    // BAJO, MEDIO, ALTO, CRITICO
+  sourceId            String?
+  sourceType          String    // TRANSPORT_INCIDENT, MANUAL, SENSOR, SYSTEM
+  description         String
+  location            String?   @default("{}") // JSON
+  estimatedImpact     String?   @default("{}") // JSON
+  photos              String?   @default("[]") // JSON
+  status              String    @default("REPORTADO") // REPORTADO, EN_INVESTIGACION, CONTENIDO, REMEDIADO, CERRADO
+  containmentMeasures String?   @default("[]") // JSON
+  remediationPlan     String?
+  remediationDate     DateTime?
+  closedById          String?
+  closedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reportedBy  User    @relation("IncidentReporter", fields: [reportedById], references: [id])
+
+  @@index([companyId])
+  @@index([type])
+  @@index([severity])
+  @@index([status])
+  @@index([sourceType])
+  @@index([createdAt])
+}
+
+// Environmental Assessments: Impact assessments
+model EnvironmentalAssessment {
+  id               String   @id @default(cuid())
+  companyId        String
+  title            String
+  type             String   // IMPACTO_AMBIENTAL, RIESGO_HIDROCARBURO, EMISIONES, RESIDUOS, RUIDO, BIODIVERSIDAD
+  status           String   @default("BORRADOR") // BORRADOR, EN_REVISION, APROBADO, VENCIDO
+  description      String?
+  location         String?  @default("{}") // JSON
+  scope            String?  @default("{}") // JSON
+  findings         String?  @default("[]") // JSON
+  recommendations  String?  @default("[]") // JSON
+  approvedById     String?
+  approvedAt       DateTime?
+  nextReviewDate   DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([type])
+  @@index([status])
+  @@index([nextReviewDate])
+}
+
+// Environmental Metrics: Periodic environmental measurements
+model EnvironmentalMetric {
+  id                String   @id @default(cuid())
+  companyId         String
+  name              String
+  type              String   // CO2, NOx, SO2, PM25, RUIDO_DB, PH_AGUA, TURBIDEZ, OTRO
+  unit              String
+  currentValue      Float?
+  thresholdWarning  Float
+  thresholdCritical Float
+  measurementDate   DateTime
+  source            String   // MANUAL, SENSOR, API
+  sensorId          String?
+  locationId         String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([type])
+  @@index([measurementDate])
+  @@index([source])
+}
+
+// HSE Event Log: Immutable audit trail for HSE events (shared between modules)
+model HSEEventLog {
+  id                String   @id @default(cuid())
+  companyId         String
+  eventId           String   @unique
+  sourceModule      String   // TRANSPORT, ENVIRONMENT, SCADA, PERMIT, ERC
+  eventType         String   // TRIP_STARTED, TRIP_BLOCKED, DRIVER_ALERT, INSPECTION_FAILED, INCIDENT_REPORTED, CONTAINMENT_ACTIVATED, REMEDIATION_STARTED, ASSESSMENT_COMPLETED
+  severity          String   // INFO, WARNING, HIGH, CRITICAL
+  title             String
+  description       String?
+  metadata          String?  @default("{}") // JSON
+  actorId           String?
+  actorName         String?
+  relatedEntityId   String?
+  relatedEntityType String?
+  createdAt         DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([sourceModule])
+  @@index([eventType])
+  @@index([severity])
+  @@index([relatedEntityId])
   @@index([createdAt])
 }

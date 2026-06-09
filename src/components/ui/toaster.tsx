@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useRef, useState } from "react"
 import { useToast } from "@/hooks/use-toast"
 import {
   Toast,
@@ -10,7 +11,7 @@ import {
   ToastViewport,
 } from "@/components/ui/toast"
 
-export function Toaster() {
+function ToasterInner() {
   const { toasts } = useToast()
 
   return (
@@ -32,4 +33,20 @@ export function Toaster() {
       <ToastViewport />
     </ToastProvider>
   )
+}
+
+export function Toaster() {
+  const [mounted, setMounted] = useState(false)
+  const initRef = useRef(false)
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true)
+  }, [])
+
+  if (!mounted) {
+    return null
+  }
+
+  return <ToasterInner />
 }

@@ -80,6 +80,7 @@ const FALLBACK_RISK_TYPES: DynamicRiskType[] = [
   { id: '', key: 'ELECTRICO', label: 'Riesgo Eléctrico', color: '#f59e0b' },
   { id: '', key: 'CONFINADO', label: 'Espacio Confinado', color: '#8b5cf6' },
   { id: '', key: 'CALIENTE', label: 'Trabajo en Caliente', color: '#dc2626' },
+  { id: '', key: 'TRANSPORTE', label: 'Permiso de Transporte HSE', color: '#0ea5e9' },
 ]
 
 const riskIconMap: Record<string, React.ComponentType<any>> = {
@@ -210,27 +211,15 @@ export default function PermitForm({ onPermitCreated }: PermitFormProps) {
       const data = await apiFetch<ComplianceCheck>('/compliance/check')
       setCompliance(data)
     } catch {
-      // When offline/network error, don't block the form.
-      // Server will validate compliance when the queued permit syncs.
-      if (!navigator.onLine) {
-        setCompliance({
-          isCompliant: true,
-          expiredCritical: [],
-          expiringSoon: [],
-          totalDocuments: 0,
-          activeDocuments: 0,
-        })
-      } else {
-        setCompliance({
-          isCompliant: false,
-          expiredCritical: [
-            { id: '1', title: 'Certificado Médico', documentType: 'MEDICAL', criticality: 'CRITICAL', expiryDate: '2024-01-15', holderName: 'Carlos Mendoza', daysOverdue: 120 },
-          ],
-          expiringSoon: [],
-          totalDocuments: 24,
-          activeDocuments: 21,
-        })
-      }
+      setCompliance({
+        isCompliant: false,
+        expiredCritical: [
+          { id: '1', title: 'Certificado Médico', documentType: 'MEDICAL', criticality: 'CRITICAL', expiryDate: '2024-01-15', holderName: 'Carlos Mendoza', daysOverdue: 120 },
+        ],
+        expiringSoon: [],
+        totalDocuments: 24,
+        activeDocuments: 21,
+      })
     }
   }
 

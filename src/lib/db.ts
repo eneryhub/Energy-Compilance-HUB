@@ -8,49 +8,42 @@ const globalForPrisma = globalThis as unknown as {
 
 // Increment this when the Prisma schema changes to force client regeneration in dev.
 // The old cached client won't have the new models/fields.
-const PRISMA_SCHEMA_VERSION = 11
+const PRISMA_SCHEMA_VERSION = 12
 
 // ─────────────────────────────────────────────────────────────────
-// SINGLETON PRISMA CLIENT WITH EXPLICIT CONNECTION POOL LIMITS
-// This avoids the need to mutate DATABASE_URL and ensures the limits
-// are applied even in serverless environments (Vercel).
+// PRODUCTION CONNECTION POOL LIMITER
+// On Vercel serverless, each function instance creates a PrismaClient.
+// Without limits, Prisma uses num_cpus*2+1 connections per instance.
+// Supabase PgBouncer (free tier) has ~20 total connections.
+// 3 concurrent requests per function prevents pool exhaustion.
 // ─────────────────────────────────────────────────────────────────
-const prismaClientSingleton = () => {
+if (
+  process.env.NODE_ENV === 'production' &&
+  process.env.DATABASE_URL &&
+  (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://'))
+) {
   const url = process.env.DATABASE_URL
-  if (!url) {
-    throw new Error('DATABASE_URL is not defined')
-  }
-
-  // Check if connection parameters are already present to avoid duplication
-  const separator = url.includes('?') ? '&' : '?'
-  let finalUrl = url
+  // Only inject if not already present
   if (!url.includes('connection_limit=')) {
-    finalUrl = `${url}${separator}connection_limit=3&pool_timeout=20&connect_timeout=30`
+    const sep = url.includes('?') ? '&' : '?'
+    process.env.DATABASE_URL = `${url}${sep}connection_limit=3&pool_timeout=20&connect_timeout=30`
+    console.log('[DB] Production: injected pool limits (connection_limit=3, pool_timeout=20, connect_timeout=30)')
   }
-
-  // Create client with explicit datasource URL
-  return new PrismaClient({
-    datasources: {
-      db: {
-        url: finalUrl,
-      },
-    },
-  })
 }
 
 let _db: PrismaClient | undefined
 
 try {
   if (process.env.NODE_ENV === 'production') {
-    // In production, create once and reuse (singleton pattern)
-    _db = globalForPrisma.prisma ?? prismaClientSingleton()
+    // In production, create once and reuse
+    _db = globalForPrisma.prisma ?? new PrismaClient()
     if (!globalForPrisma.prisma) globalForPrisma.prisma = _db
   } else {
     // In development, check schema version to detect model changes
     if (globalForPrisma.prisma && globalForPrisma.prismaSchemaVersion === PRISMA_SCHEMA_VERSION) {
       _db = globalForPrisma.prisma
     } else {
-      _db = prismaClientSingleton()
+      _db = new PrismaClient()
       globalForPrisma.prisma = _db
       globalForPrisma.prismaSchemaVersion = PRISMA_SCHEMA_VERSION
     }
@@ -752,6 +745,518 @@ export async function ensureSchemaColumns(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "InventoryAudit_deviceId_idx" ON "InventoryAudit"("deviceId");
       CREATE INDEX IF NOT EXISTS "InventoryAudit_createdAt_idx" ON "InventoryAudit"("createdAt");
       CREATE INDEX IF NOT EXISTS "InventoryAudit_discrepancy_idx" ON "InventoryAudit"("discrepancy");
+    `)
+
+    // ============ Ensure TransportVehicle table ============
+    await ensureTableExists('TransportVehicle', `
+      CREATE TABLE IF NOT EXISTS "TransportVehicle" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "plate" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "brand" TEXT,
+        "model" TEXT,
+        "year" INTEGER,
+        "capacityKg" REAL,
+        "vin" TEXT,
+        "isActive" BOOLEAN NOT NULL DEFAULT 1,
+        "status" TEXT NOT NULL DEFAULT 'DISPONIBLE',
+        "lastInspectionAt" DATETIME,
+        "currentDriverId" TEXT,
+        "metadata" TEXT NOT NULL DEFAULT '{}',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "TransportVehicle_companyId_plate_key" UNIQUE ("companyId", "plate"),
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("currentDriverId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_companyId_idx" ON "TransportVehicle"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_status_idx" ON "TransportVehicle"("status");
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_isActive_idx" ON "TransportVehicle"("isActive");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportVehicle" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "plate" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "brand" TEXT,
+        "model" TEXT,
+        "year" INTEGER,
+        "capacityKg" DOUBLE PRECISION,
+        "vin" TEXT,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "status" TEXT NOT NULL DEFAULT 'DISPONIBLE',
+        "lastInspectionAt" TIMESTAMPTZ,
+        "currentDriverId" TEXT,
+        "metadata" TEXT NOT NULL DEFAULT '{}',
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT "TransportVehicle_companyId_plate_key" UNIQUE ("companyId", "plate")
+      );
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_companyId_idx" ON "TransportVehicle"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_status_idx" ON "TransportVehicle"("status");
+      CREATE INDEX IF NOT EXISTS "TransportVehicle_isActive_idx" ON "TransportVehicle"("isActive");
+    `)
+
+    // ============ Ensure TransportDriver table ============
+    await ensureTableExists('TransportDriver', `
+      CREATE TABLE IF NOT EXISTS "TransportDriver" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL,
+        "licenseNumber" TEXT NOT NULL,
+        "licenseType" TEXT NOT NULL,
+        "licenseExpiry" DATETIME,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVO',
+        "fatigueScore" REAL NOT NULL DEFAULT 0,
+        "totalTrips" INTEGER NOT NULL DEFAULT 0,
+        "certificationData" TEXT NOT NULL DEFAULT '{}',
+        "medicalExpiry" DATETIME,
+        "emergencyContact" TEXT NOT NULL DEFAULT '{}',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "TransportDriver_companyId_userId_key" UNIQUE ("companyId", "userId"),
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportDriver_companyId_idx" ON "TransportDriver"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportDriver_status_idx" ON "TransportDriver"("status");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportDriver" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL,
+        "licenseNumber" TEXT NOT NULL,
+        "licenseType" TEXT NOT NULL,
+        "licenseExpiry" TIMESTAMPTZ,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVO',
+        "fatigueScore" DOUBLE PRECISION NOT NULL DEFAULT 0,
+        "totalTrips" INTEGER NOT NULL DEFAULT 0,
+        "certificationData" TEXT NOT NULL DEFAULT '{}',
+        "medicalExpiry" TIMESTAMPTZ,
+        "emergencyContact" TEXT NOT NULL DEFAULT '{}',
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT "TransportDriver_companyId_userId_key" UNIQUE ("companyId", "userId")
+      );
+      CREATE INDEX IF NOT EXISTS "TransportDriver_companyId_idx" ON "TransportDriver"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportDriver_status_idx" ON "TransportDriver"("status");
+    `)
+
+    // ============ Ensure TransportRoute table ============
+    await ensureTableExists('TransportRoute', `
+      CREATE TABLE IF NOT EXISTS "TransportRoute" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "origin" TEXT NOT NULL,
+        "destination" TEXT NOT NULL,
+        "distanceKm" REAL NOT NULL,
+        "estimatedDurationMin" INTEGER NOT NULL,
+        "waypoints" TEXT NOT NULL DEFAULT '[]',
+        "riskLevel" TEXT NOT NULL DEFAULT 'MEDIO',
+        "hasHSECheckpoints" BOOLEAN NOT NULL DEFAULT 0,
+        "checkpointConfig" TEXT NOT NULL DEFAULT '{}',
+        "isActive" BOOLEAN NOT NULL DEFAULT 1,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportRoute_companyId_idx" ON "TransportRoute"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportRoute_isActive_idx" ON "TransportRoute"("isActive");
+      CREATE INDEX IF NOT EXISTS "TransportRoute_riskLevel_idx" ON "TransportRoute"("riskLevel");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportRoute" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "origin" TEXT NOT NULL,
+        "destination" TEXT NOT NULL,
+        "distanceKm" DOUBLE PRECISION NOT NULL,
+        "estimatedDurationMin" INTEGER NOT NULL,
+        "waypoints" TEXT NOT NULL DEFAULT '[]',
+        "riskLevel" TEXT NOT NULL DEFAULT 'MEDIO',
+        "hasHSECheckpoints" BOOLEAN NOT NULL DEFAULT false,
+        "checkpointConfig" TEXT NOT NULL DEFAULT '{}',
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "TransportRoute_companyId_idx" ON "TransportRoute"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportRoute_isActive_idx" ON "TransportRoute"("isActive");
+      CREATE INDEX IF NOT EXISTS "TransportRoute_riskLevel_idx" ON "TransportRoute"("riskLevel");
+    `)
+
+    // ============ Ensure TransportTrip table ============
+    await ensureTableExists('TransportTrip', `
+      CREATE TABLE IF NOT EXISTS "TransportTrip" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "driverId" TEXT NOT NULL,
+        "routeId" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'PLANIFICADO',
+        "startDate" DATETIME NOT NULL,
+        "endDate" DATETIME,
+        "startOdometerKm" REAL,
+        "endOdometerKm" REAL,
+        "fuelConsumed" REAL,
+        "riskValidationResult" TEXT NOT NULL DEFAULT '{}',
+        "inspectionResult" TEXT NOT NULL DEFAULT '{}',
+        "blockingReason" TEXT,
+        "blockedById" TEXT,
+        "blockedAt" DATETIME,
+        "notes" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("vehicleId") REFERENCES "TransportVehicle"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("driverId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("routeId") REFERENCES "TransportRoute"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportTrip_companyId_idx" ON "TransportTrip"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_vehicleId_idx" ON "TransportTrip"("vehicleId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_driverId_idx" ON "TransportTrip"("driverId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_routeId_idx" ON "TransportTrip"("routeId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_status_idx" ON "TransportTrip"("status");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_startDate_idx" ON "TransportTrip"("startDate");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportTrip" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "driverId" TEXT NOT NULL,
+        "routeId" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'PLANIFICADO',
+        "startDate" TIMESTAMPTZ NOT NULL,
+        "endDate" TIMESTAMPTZ,
+        "startOdometerKm" DOUBLE PRECISION,
+        "endOdometerKm" DOUBLE PRECISION,
+        "fuelConsumed" DOUBLE PRECISION,
+        "riskValidationResult" TEXT NOT NULL DEFAULT '{}',
+        "inspectionResult" TEXT NOT NULL DEFAULT '{}',
+        "blockingReason" TEXT,
+        "blockedById" TEXT,
+        "blockedAt" TIMESTAMPTZ,
+        "notes" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "TransportTrip_companyId_idx" ON "TransportTrip"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_vehicleId_idx" ON "TransportTrip"("vehicleId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_driverId_idx" ON "TransportTrip"("driverId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_routeId_idx" ON "TransportTrip"("routeId");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_status_idx" ON "TransportTrip"("status");
+      CREATE INDEX IF NOT EXISTS "TransportTrip_startDate_idx" ON "TransportTrip"("startDate");
+    `)
+
+    // ============ Ensure TransportInspection table ============
+    await ensureTableExists('TransportInspection', `
+      CREATE TABLE IF NOT EXISTS "TransportInspection" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "tripId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "inspectorId" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "checklistResult" TEXT NOT NULL DEFAULT '{}',
+        "passed" BOOLEAN NOT NULL,
+        "issues" TEXT NOT NULL DEFAULT '[]',
+        "photos" TEXT NOT NULL DEFAULT '[]',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("tripId") REFERENCES "TransportTrip"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("vehicleId") REFERENCES "TransportVehicle"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("inspectorId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportInspection_companyId_idx" ON "TransportInspection"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_tripId_idx" ON "TransportInspection"("tripId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_vehicleId_idx" ON "TransportInspection"("vehicleId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_inspectorId_idx" ON "TransportInspection"("inspectorId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_createdAt_idx" ON "TransportInspection"("createdAt");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportInspection" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "tripId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "inspectorId" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "checklistResult" TEXT NOT NULL DEFAULT '{}',
+        "passed" BOOLEAN NOT NULL,
+        "issues" TEXT NOT NULL DEFAULT '[]',
+        "photos" TEXT NOT NULL DEFAULT '[]',
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "TransportInspection_companyId_idx" ON "TransportInspection"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_tripId_idx" ON "TransportInspection"("tripId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_vehicleId_idx" ON "TransportInspection"("vehicleId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_inspectorId_idx" ON "TransportInspection"("inspectorId");
+      CREATE INDEX IF NOT EXISTS "TransportInspection_createdAt_idx" ON "TransportInspection"("createdAt");
+    `)
+
+    // ============ Ensure TransportDriverEvent table ============
+    await ensureTableExists('TransportDriverEvent', `
+      CREATE TABLE IF NOT EXISTS "TransportDriverEvent" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "tripId" TEXT NOT NULL,
+        "driverId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "eventType" TEXT NOT NULL,
+        "riskLevel" TEXT NOT NULL,
+        "confidence" REAL NOT NULL,
+        "snapshotUrl" TEXT,
+        "aiAnalysis" TEXT NOT NULL DEFAULT '{}',
+        "gpsLocation" TEXT NOT NULL DEFAULT '{}',
+        "timestamp" DATETIME NOT NULL,
+        "isResolved" BOOLEAN NOT NULL DEFAULT 0,
+        "resolvedAt" DATETIME,
+        "actionTaken" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("tripId") REFERENCES "TransportTrip"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("driverId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY ("vehicleId") REFERENCES "TransportVehicle"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_companyId_idx" ON "TransportDriverEvent"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_tripId_idx" ON "TransportDriverEvent"("tripId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_driverId_idx" ON "TransportDriverEvent"("driverId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_eventType_idx" ON "TransportDriverEvent"("eventType");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_timestamp_idx" ON "TransportDriverEvent"("timestamp");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_riskLevel_idx" ON "TransportDriverEvent"("riskLevel");
+    `, `
+      CREATE TABLE IF NOT EXISTS "TransportDriverEvent" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "tripId" TEXT NOT NULL,
+        "driverId" TEXT NOT NULL,
+        "vehicleId" TEXT NOT NULL,
+        "eventType" TEXT NOT NULL,
+        "riskLevel" TEXT NOT NULL,
+        "confidence" DOUBLE PRECISION NOT NULL,
+        "snapshotUrl" TEXT,
+        "aiAnalysis" TEXT NOT NULL DEFAULT '{}',
+        "gpsLocation" TEXT NOT NULL DEFAULT '{}',
+        "timestamp" TIMESTAMPTZ NOT NULL,
+        "isResolved" BOOLEAN NOT NULL DEFAULT false,
+        "resolvedAt" TIMESTAMPTZ,
+        "actionTaken" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_companyId_idx" ON "TransportDriverEvent"("companyId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_tripId_idx" ON "TransportDriverEvent"("tripId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_driverId_idx" ON "TransportDriverEvent"("driverId");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_eventType_idx" ON "TransportDriverEvent"("eventType");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_timestamp_idx" ON "TransportDriverEvent"("timestamp");
+      CREATE INDEX IF NOT EXISTS "TransportDriverEvent_riskLevel_idx" ON "TransportDriverEvent"("riskLevel");
+    `)
+
+    // ============ Ensure EnvironmentalIncident table ============
+    await ensureTableExists('EnvironmentalIncident', `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalIncident" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "reportedById" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "severity" TEXT NOT NULL,
+        "sourceId" TEXT,
+        "sourceType" TEXT NOT NULL,
+        "description" TEXT NOT NULL,
+        "location" TEXT NOT NULL DEFAULT '{}',
+        "estimatedImpact" TEXT NOT NULL DEFAULT '{}',
+        "photos" TEXT NOT NULL DEFAULT '[]',
+        "status" TEXT NOT NULL DEFAULT 'REPORTADO',
+        "containmentMeasures" TEXT NOT NULL DEFAULT '[]',
+        "remediationPlan" TEXT,
+        "remediationDate" DATETIME,
+        "closedById" TEXT,
+        "closedAt" DATETIME,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+        FOREIGN KEY ("reportedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_companyId_idx" ON "EnvironmentalIncident"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_type_idx" ON "EnvironmentalIncident"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_severity_idx" ON "EnvironmentalIncident"("severity");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_status_idx" ON "EnvironmentalIncident"("status");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_sourceType_idx" ON "EnvironmentalIncident"("sourceType");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_createdAt_idx" ON "EnvironmentalIncident"("createdAt");
+    `, `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalIncident" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "reportedById" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "severity" TEXT NOT NULL,
+        "sourceId" TEXT,
+        "sourceType" TEXT NOT NULL,
+        "description" TEXT NOT NULL,
+        "location" TEXT NOT NULL DEFAULT '{}',
+        "estimatedImpact" TEXT NOT NULL DEFAULT '{}',
+        "photos" TEXT NOT NULL DEFAULT '[]',
+        "status" TEXT NOT NULL DEFAULT 'REPORTADO',
+        "containmentMeasures" TEXT NOT NULL DEFAULT '[]',
+        "remediationPlan" TEXT,
+        "remediationDate" TIMESTAMPTZ,
+        "closedById" TEXT,
+        "closedAt" TIMESTAMPTZ,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_companyId_idx" ON "EnvironmentalIncident"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_type_idx" ON "EnvironmentalIncident"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_severity_idx" ON "EnvironmentalIncident"("severity");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_status_idx" ON "EnvironmentalIncident"("status");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_sourceType_idx" ON "EnvironmentalIncident"("sourceType");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalIncident_createdAt_idx" ON "EnvironmentalIncident"("createdAt");
+    `)
+
+    // ============ Ensure EnvironmentalAssessment table ============
+    await ensureTableExists('EnvironmentalAssessment', `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalAssessment" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'BORRADOR',
+        "description" TEXT,
+        "location" TEXT NOT NULL DEFAULT '{}',
+        "scope" TEXT NOT NULL DEFAULT '{}',
+        "findings" TEXT NOT NULL DEFAULT '[]',
+        "recommendations" TEXT NOT NULL DEFAULT '[]',
+        "approvedById" TEXT,
+        "approvedAt" DATETIME,
+        "nextReviewDate" DATETIME,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_companyId_idx" ON "EnvironmentalAssessment"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_type_idx" ON "EnvironmentalAssessment"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_status_idx" ON "EnvironmentalAssessment"("status");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_nextReviewDate_idx" ON "EnvironmentalAssessment"("nextReviewDate");
+    `, `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalAssessment" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'BORRADOR',
+        "description" TEXT,
+        "location" TEXT NOT NULL DEFAULT '{}',
+        "scope" TEXT NOT NULL DEFAULT '{}',
+        "findings" TEXT NOT NULL DEFAULT '[]',
+        "recommendations" TEXT NOT NULL DEFAULT '[]',
+        "approvedById" TEXT,
+        "approvedAt" TIMESTAMPTZ,
+        "nextReviewDate" TIMESTAMPTZ,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_companyId_idx" ON "EnvironmentalAssessment"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_type_idx" ON "EnvironmentalAssessment"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_status_idx" ON "EnvironmentalAssessment"("status");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalAssessment_nextReviewDate_idx" ON "EnvironmentalAssessment"("nextReviewDate");
+    `)
+
+    // ============ Ensure EnvironmentalMetric table ============
+    await ensureTableExists('EnvironmentalMetric', `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalMetric" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "unit" TEXT NOT NULL,
+        "currentValue" REAL,
+        "thresholdWarning" REAL NOT NULL,
+        "thresholdCritical" REAL NOT NULL,
+        "measurementDate" DATETIME NOT NULL,
+        "source" TEXT NOT NULL,
+        "sensorId" TEXT,
+        "locationId" TEXT,
+        "notes" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_companyId_idx" ON "EnvironmentalMetric"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_type_idx" ON "EnvironmentalMetric"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_measurementDate_idx" ON "EnvironmentalMetric"("measurementDate");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_source_idx" ON "EnvironmentalMetric"("source");
+    `, `
+      CREATE TABLE IF NOT EXISTS "EnvironmentalMetric" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "type" TEXT NOT NULL,
+        "unit" TEXT NOT NULL,
+        "currentValue" DOUBLE PRECISION,
+        "thresholdWarning" DOUBLE PRECISION NOT NULL,
+        "thresholdCritical" DOUBLE PRECISION NOT NULL,
+        "measurementDate" TIMESTAMPTZ NOT NULL,
+        "source" TEXT NOT NULL,
+        "sensorId" TEXT,
+        "locationId" TEXT,
+        "notes" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_companyId_idx" ON "EnvironmentalMetric"("companyId");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_type_idx" ON "EnvironmentalMetric"("type");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_measurementDate_idx" ON "EnvironmentalMetric"("measurementDate");
+      CREATE INDEX IF NOT EXISTS "EnvironmentalMetric_source_idx" ON "EnvironmentalMetric"("source");
+    `)
+
+    // ============ Ensure HSEEventLog table ============
+    await ensureTableExists('HSEEventLog', `
+      CREATE TABLE IF NOT EXISTS "HSEEventLog" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "eventId" TEXT NOT NULL UNIQUE,
+        "sourceModule" TEXT NOT NULL,
+        "eventType" TEXT NOT NULL,
+        "severity" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "description" TEXT,
+        "metadata" TEXT NOT NULL DEFAULT '{}',
+        "actorId" TEXT,
+        "actorName" TEXT,
+        "relatedEntityId" TEXT,
+        "relatedEntityType" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("companyId") REFERENCES "Company"("id") ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_companyId_idx" ON "HSEEventLog"("companyId");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_sourceModule_idx" ON "HSEEventLog"("sourceModule");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_eventType_idx" ON "HSEEventLog"("eventType");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_severity_idx" ON "HSEEventLog"("severity");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_relatedEntityId_idx" ON "HSEEventLog"("relatedEntityId");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_createdAt_idx" ON "HSEEventLog"("createdAt");
+    `, `
+      CREATE TABLE IF NOT EXISTS "HSEEventLog" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "companyId" TEXT NOT NULL,
+        "eventId" TEXT NOT NULL UNIQUE,
+        "sourceModule" TEXT NOT NULL,
+        "eventType" TEXT NOT NULL,
+        "severity" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "description" TEXT,
+        "metadata" TEXT NOT NULL DEFAULT '{}',
+        "actorId" TEXT,
+        "actorName" TEXT,
+        "relatedEntityId" TEXT,
+        "relatedEntityType" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_companyId_idx" ON "HSEEventLog"("companyId");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_sourceModule_idx" ON "HSEEventLog"("sourceModule");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_eventType_idx" ON "HSEEventLog"("eventType");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_severity_idx" ON "HSEEventLog"("severity");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_relatedEntityId_idx" ON "HSEEventLog"("relatedEntityId");
+      CREATE INDEX IF NOT EXISTS "HSEEventLog_createdAt_idx" ON "HSEEventLog"("createdAt");
     `)
 
     _syncDone = true

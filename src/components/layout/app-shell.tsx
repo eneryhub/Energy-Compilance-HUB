@@ -32,6 +32,8 @@ import {
   Bell,
   X,
   Package,
+  Truck,
+  Leaf,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -46,7 +48,7 @@ import { removeToken, getToken } from '@/lib/api'
 // Re-enable locally if needed: import AIAssistant from '@/components/ai/ai-assistant'
 // const AIAssistantComponent = AIAssistant
 
-export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor' | 'inventory'
+export type ViewType = 'dashboard' | 'users' | 'permits' | 'documents' | 'approval' | 'scada' | 'locations' | 'system' | 'audit' | 'subscription' | 'risk-types' | 'predictive' | 'admin-portal-hq' | 'reports' | 'risk-map' | 'user-manual' | 'technical-manual' | 'diagnostics' | 'goc' | 'paperclip' | 'erc' | 'erc-monitor' | 'inventory' | 'transport' | 'environment'
 
 interface AppShellProps {
   currentView: ViewType
@@ -111,6 +113,8 @@ const navItems: { id: ViewType; label: string; icon: React.ComponentType<any>; r
   { id: 'erc', label: 'Seguridad en Campo', icon: Siren, roles: ['EMPLOYEE'] },
   { id: 'erc-monitor', label: 'Monitor de Incidentes', icon: Bell, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER', 'TECHNICIAN'] },
   { id: 'inventory', label: 'Inventario Inteligente', icon: Package, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
+  { id: 'transport', label: 'Transporte HSE', icon: Truck, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
+  { id: 'environment', label: 'Ambiente', icon: Leaf, roles: ['ADMIN', 'SUPERVISOR', 'MANAGER'] },
   // { id: 'subscription', label: 'Suscripción', icon: CreditCard, roles: ['ADMIN'] },  // HIDDEN: Enterprise presentation mode
   { id: 'audit', label: 'Auditoría', icon: History, roles: ['ADMIN'] },
   { id: 'users', label: 'Usuarios', icon: User, roles: ['ADMIN'] },

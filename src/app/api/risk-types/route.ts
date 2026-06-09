@@ -9,6 +9,7 @@ const DEFAULT_RISK_TYPES = [
   { key: 'ELECTRICO', label: 'Riesgo Eléctrico', color: '#f59e0b', description: 'Trabajos con tensión eléctrica', icon: 'Zap', sortOrder: 1 },
   { key: 'CONFINADO', label: 'Espacio Confinado', color: '#8b5cf6', description: 'Ingreso a espacios confinados', icon: 'Box', sortOrder: 2 },
   { key: 'CALIENTE', label: 'Trabajo en Caliente', color: '#dc2626', description: 'Soldadura, corte, trabajos con fuego', icon: 'Flame', sortOrder: 3 },
+  { key: 'TRANSPORTE', label: 'Permiso de Transporte HSE', color: '#0ea5e9', description: 'Autorización para salida de vehículos de transporte, incluye checklist de vehículo y conductor', icon: 'Truck', sortOrder: 4 },
 ]
 
 const DEFAULT_CHECKLISTS: Record<string, { itemKey: string; label: string; required: boolean; sortOrder: number }[]> = {
@@ -38,6 +39,19 @@ const DEFAULT_CHECKLISTS: Record<string, { itemKey: string; label: string; requi
     { itemKey: 'has_first_aid_kit', label: 'Botiquín de primeros auxilios disponible', required: false, sortOrder: 1 },
     { itemKey: 'briefing_completed', label: 'Charla de seguridad (briefing) completada', required: false, sortOrder: 2 },
     { itemKey: 'emergency_routes_identified', label: 'Rutas de emergencia identificadas', required: false, sortOrder: 3 },
+  ],
+  TRANSPORTE: [
+    { itemKey: 'vehicle_exterior_lights', label: 'Luces exteriores funcionando', required: true, sortOrder: 0 },
+    { itemKey: 'vehicle_tires_ok', label: 'Neumáticos en buen estado', required: true, sortOrder: 1 },
+    { itemKey: 'vehicle_fuel_ok', label: 'Nivel de combustible adecuado', required: true, sortOrder: 2 },
+    { itemKey: 'vehicle_seatbelt', label: 'Cinturón de seguridad disponible', required: true, sortOrder: 3 },
+    { itemKey: 'vehicle_fire_extinguisher', label: 'Extintor vigente', required: true, sortOrder: 4 },
+    { itemKey: 'vehicle_emergency_kit', label: 'Kit de emergencia completo', required: true, sortOrder: 5 },
+    { itemKey: 'vehicle_docs_up_to_date', label: 'Documentación del vehículo al día', required: true, sortOrder: 6 },
+    { itemKey: 'vehicle_gps_active', label: 'GPS/DMS activo', required: true, sortOrder: 7 },
+    { itemKey: 'driver_license_valid', label: 'Licencia de conducir vigente', required: true, sortOrder: 8 },
+    { itemKey: 'driver_rest_compliant', label: 'Conductor cumple descanso obligatorio (<8h)', required: true, sortOrder: 9 },
+    { itemKey: 'driver_briefing_completed', label: 'Charla de seguridad completada', required: false, sortOrder: 10 },
   ],
 }
 

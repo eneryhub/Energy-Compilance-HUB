@@ -29,9 +29,11 @@ import LandingPage from '@/components/landing/landing-page'
 import PanicButton from '@/components/erc/panic-button'
 import ERCMonitor from '@/components/erc/erc-monitor'
 import InventoryDashboard from '@/components/inventory/inventory-dashboard'
+import TransportDashboard from '@/components/transport/transport-dashboard'
+import EnvironmentDashboard from '@/components/environment/environment-dashboard'
 import SentinelAvatar from '@/components/ai/sentinel-avatar'
 import { Button } from '@/components/ui/button'
-import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert, Siren, Package } from 'lucide-react'
+import { PlusCircle, List, Crown, Clock, CreditCard, ShieldAlert, Siren, Package, Truck, Leaf } from 'lucide-react'
 import { removeToken, getUser, getToken, setUser } from '@/lib/api'
 import type { LoginResponse } from '@/lib/api'
 
@@ -388,6 +390,28 @@ export default function Home() {
             ) : (
               <div className="py-20 text-center text-slate-400">
                 <Package className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Acceso restringido a administradores y supervisores</p>
+              </div>
+            )
+          )}
+
+          {currentView === 'transport' && (
+            (user?.role === 'ADMIN' || user?.role === 'SUPERVISOR' || user?.role === 'MANAGER') ? (
+              <TransportDashboard />
+            ) : (
+              <div className="py-20 text-center text-slate-400">
+                <Truck className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Acceso restringido a administradores y supervisores</p>
+              </div>
+            )
+          )}
+
+          {currentView === 'environment' && (
+            (user?.role === 'ADMIN' || user?.role === 'SUPERVISOR' || user?.role === 'MANAGER') ? (
+              <EnvironmentDashboard />
+            ) : (
+              <div className="py-20 text-center text-slate-400">
+                <Leaf className="w-12 h-12 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">Acceso restringido a administradores y supervisores</p>
               </div>
             )
