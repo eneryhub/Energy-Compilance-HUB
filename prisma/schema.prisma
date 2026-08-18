@@ -1,0 +1,974 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+// ============================================================
+// ENERGY-COMPLIANCE HUB - UNIFIED SCHEMA
+// Fusion: Energy-Compliance (Operations) + HSE Guard (Compliance)
+// All IDs use CUID for unified identification
+// ============================================================
+
+// ============ COMPANY / TENANCY ============
+model Company {
+  id                   String   @id @default(cuid())
+  name                 String
+  taxId                String?  @unique
+  email                String   @unique
+  phone                String?
+  address              String?
+  logo                 String?
+  subscriptionPlan     String   @default("starter") // starter, business, enterprise
+  subscriptionStatus   String   @default("TRIAL")   // TRIAL, ACTIVE, PAST_DUE, CANCELLED
+  subscriptionExpiresAt DateTime?
+  maxUsers             Int      @default(10)
+  maxPermitsPerMonth   Int      @default(200)
+  isActive             Boolean  @default(true)
+
+  // Stripe integration
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  billingEmail         String?
+  billingCycle         String?
+  trialEndsAt          DateTime?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  users        User[]
+  permits      Permit[]
+  documents    HseDocument[]
+  alertConfigs AlertConfig[]
+  workLocations WorkLocation[]
+  auditLogs    AuditLog[]
+  riskTypes          RiskTypeConfig[]
+  checklistItems     ChecklistItemConfig[]
+  invoices           SubscriptionInvoice[]
+  sensors            Sensor[]
+  apiKeys            ApiKey[]
+  systemAlerts       SystemAlert[]
+  emergencyAlerts    EmergencyAlert[]
+  hseReports         HseReport[]
+  supportMessages    SupportMessage[]
+  inventoryLocations InventoryLocation[]
+  inventoryItems     InventoryItem[]
+  inventoryDevices   InventoryDevice[]
+  smartInventory     SmartInventory[]
+  inventoryAudits    InventoryAudit[]
+  transportVehicles       TransportVehicle[]
+  transportDrivers        TransportDriver[]
+  transportRoutes         TransportRoute[]
+  transportTrips          TransportTrip[]
+  transportInspections    TransportInspection[]
+  transportDriverEvents   TransportDriverEvent[]
+  environmentIncidents    EnvironmentalIncident[]
+  environmentAssessments  EnvironmentalAssessment[]
+  environmentMetrics      EnvironmentalMetric[]
+  hseEventLogs            HSEEventLog[]
+  scadaDemoMode      Boolean  @default(true) // SCADA simulation toggle per company
+}
+
+// ============ USER / RBAC ============
+model User {
+  id            String    @id @default(cuid())
+  companyId     String
+  email         String
+  passwordHash  String?
+  name          String
+  role          String    @default("TECHNICIAN") // ADMIN, SUPERVISOR, TECHNICIAN, MANAGER, VIEWER
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  avatarUrl     String?
+  phone         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permitsCreated Permit[] @relation("CreatedBy")
+  permitsApproved Permit[] @relation("ApprovedBy")
+  permitsRejected Permit[] @relation("RejectedBy")
+  specialProtocolApprovals Permit[] @relation("SpecialApprovedBy")
+  signatures   Signature[]
+  auditLogs    AuditLog[]
+  documents    HseDocument[]
+  reviewedDocuments HseDocument[] @relation("DocumentReviewer")
+  emergencyAlerts    EmergencyAlert[] @relation("EmergencyAlertUser")
+  hseReports         HseReport[] @relation("HseReportUser")
+  transportDrivers        TransportDriver[]
+  transportTrips          TransportTrip[] @relation("TripDriver")
+  transportInspections    TransportInspection[] @relation("InspectionInspector")
+  transportDriverEvents   TransportDriverEvent[] @relation("DriverEventDriver")
+  environmentIncidents   EnvironmentalIncident[] @relation("IncidentReporter")
+  currentVehicleDrivers  TransportVehicle[] @relation("VehicleDriver")
+
+  @@unique([email, companyId])
+}
+
+// ============ PERMITS (Operations) ============
+model Permit {
+  id                String    @id @default(cuid())
+  companyId         String
+  permitNumber      String    @unique
+  riskType          String    // ALTURA, ELECTRICO, CONFINADO, CALIENTE
+  status            String    @default("PENDING") // PENDING, APPROVED, REJECTED, CANCELLED
+  safetyChecks      String    @default("{}") // JSON string of checklist responses
+  checklistNotes    String?   // JSON string of technician notes per checklist item
+  technicianName    String
+  supervisorName    String
+  workLocation      String
+  workDescription   String
+  rejectionReason       String?
+  approveJustification  String?  // Supervisor justification when approving outside geofence
+  technicianSignature   String? // JSON string with signature data + GPS
+  supervisorSignature   String? // JSON string with signature data + GPS
+  photos            String?   // JSON string array of photos
+  photosCount       Int       @default(0)
+  createdById       String?
+  createdByName     String?
+  createdByRole     String?
+  approvedById      String?
+  approvedByName    String?
+  rejectedById      String?
+  rejectedByName    String?
+
+  // GPS / Geofence fields
+  workLatitude      Float?
+  workLongitude     Float?
+  workRadius        Int       @default(100) // meters
+  workLocationId    String?
+  locationSource    String    @default("manual") // gps, manual, saved
+
+  // Special Protocol (Bypass Controlado)
+  isSpecialProtocol         Boolean  @default(false) // Bypass habilitado para mantenimiento/reparación
+  overrideJustification     String?              // Justificación técnica obligatoria
+  specialApprovedById       String?              // Usuario ADMIN/HSE que autorizó el bypass
+
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company           Company       @relation(fields: [companyId], references: [id])
+  createdBy         User?         @relation("CreatedBy", fields: [createdById], references: [id])
+  approvedBy        User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
+  rejectedBy        User?         @relation("RejectedBy", fields: [rejectedById], references: [id])
+  specialApprovedBy User?         @relation("SpecialApprovedBy", fields: [specialApprovedById], references: [id])
+  workLocationRef   WorkLocation? @relation(fields: [workLocationId], references: [id])
+  signatures        Signature[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([createdById])
+  @@index([isSpecialProtocol])
+}
+
+// ============ WORK LOCATIONS (GPS / Geofence) ============
+model WorkLocation {
+  id                String   @id @default(cuid())
+  companyId         String
+  name              String
+  address           String?
+  latitude          Float
+  longitude         Float
+  radiusMeters      Int      @default(100)
+  verificationMethod String?  // GPS, QR_CODE, BEACON
+  verifiedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // QR Code verification
+  qrCodeSecret      String?  @unique // Auto-generated secret used in QR token
+  qrCodeData        String?  // Full QR payload JSON stored for download
+
+  // Beacon BLE verification
+  beaconUuid        String?  @unique // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
+  beaconMajor       Int?     // Major value (0-65535)
+  beaconMinor       Int?     // Minor value (0-65535)
+  beaconRssi        Int      @default(-70) // Signal strength threshold (dBm)
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permits  Permit[]
+  sensors  Sensor[]
+
+  @@index([latitude, longitude])
+}
+
+// ============ DIGITAL SIGNATURES ============
+model Signature {
+  id              String   @id @default(cuid())
+  permitId        String
+  signerType      String   // TECHNICIAN, SUPERVISOR
+  signerName      String
+  signerId        String?
+  signatureData   String   // Base64 PNG image
+  signatureHash   String   @unique // SHA256 for integrity
+  signedAt        DateTime @default(now())
+
+  // GPS at signing time
+  latitude        Float?
+  longitude       Float?
+  accuracyMeters  Float?
+
+  // Geofence validation
+  isWithinGeofence      Boolean?
+  distanceToWorkMeters  Float?
+
+  // Device info
+  deviceInfo      String?  // JSON string
+  ipAddress       String?
+
+  createdAt       DateTime @default(now())
+
+  permit Permit @relation(fields: [permitId], references: [id], onDelete: Cascade)
+  signer User?   @relation(fields: [signerId], references: [id])
+
+  @@index([permitId])
+}
+
+// ============ HSE DOCUMENTS (Compliance Module) ============
+model HseDocument {
+  id            String   @id @default(cuid())
+  companyId     String
+  userId        String?  // assigned user
+  title         String
+  documentType  String   // certificado_medico, licencia_operativa, permiso_ambiental, etc.
+  category      String   // PERSONAL, EQUIPOS, LEGAL, AMBIENTAL
+  criticality   String   @default("NORMAL") // CRITICAL, NORMAL, LOW
+  status        String   @default("ACTIVE") // ACTIVE, EXPIRED, REVOKED, PENDING_RENEWAL
+  issueDate     DateTime?
+  expiryDate    DateTime?
+  holderName    String?
+  description   String?
+  fileUrl       String?
+  fileName      String?
+  fileSize      Int?
+  mimeType      String?
+  aiExtractedData String? // JSON string with AI-extracted data
+  aiConfidence  Float?
+  tags          String?  // JSON array string
+
+  reviewedById  String?
+  reviewedAt    DateTime?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignedUser User?   @relation(fields: [userId], references: [id])
+  reviewedBy   User?   @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+  alertConfigs AlertConfig[]
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([expiryDate])
+  @@index([criticality])
+  @@index([status])
+}
+
+// ============ CUSTOM RISK TYPES (per company) ============
+model RiskTypeConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  key           String   // unique key like ALTURA, ELECTRICO, or custom: EXCAVACION
+  label         String
+  color         String   @default("#6366f1")
+  description   String?
+  icon          String   @default("AlertTriangle")
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  checklist ChecklistItemConfig[]
+
+  @@unique([companyId, key])
+  @@index([companyId])
+}
+
+// ============ CUSTOM CHECKLIST ITEMS (per risk type) ============
+model ChecklistItemConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  riskTypeKey   String
+  itemKey       String   // unique key like has_harness
+  label         String
+  required      Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  riskType RiskTypeConfig   @relation(fields: [riskTypeKey, companyId], references: [key, companyId], onDelete: Cascade)
+
+  @@unique([companyId, riskTypeKey, itemKey])
+  @@index([companyId])
+  @@index([riskTypeKey])
+}
+
+// ============ ALERT CONFIGS ============
+model AlertConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  documentId    String?
+  name          String
+  alertType     String   // EMAIL, IN_APP, WHATSAPP
+  triggerDaysBefore Int @default(30) // days before expiry
+  isActive      Boolean  @default(true)
+  lastTriggeredAt DateTime?
+  message       String?  // AI-generated alert message
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  document HseDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+}
+
+// ============ AUDIT LOG ============
+model AuditLog {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  action      String   // LOGIN, LOGOUT, CREATE, APPROVE, REJECT, VIEW, UPDATE, DELETE
+  entityType  String   // USER, PERMIT, DOCUMENT, COMPANY, SIGNATURE
+  entityId    String?
+  details     String?  // JSON string with additional context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?    @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ============ SCADA SENSORS (Telemetry) ============
+model Sensor {
+  id                String   @id @default(cuid())
+  companyId         String
+  locationId        String?
+  name              String
+  type              String   // PRESION, TEMPERATURA, GAS, VOLTAJE
+  currentValue      Float?
+  unit              String   // psi, °C, %LEL, V
+  thresholdCritical Float
+  thresholdWarning  Float    @default(0)
+  isSimulated       Boolean  @default(true)
+  isActive          Boolean  @default(true)
+  lastReadingAt     DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  WorkLocation?    @relation(fields: [locationId], references: [id])
+  readings  SensorReading[]
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([type])
+  @@index([isActive])
+}
+
+// ============ SENSOR READINGS (Historical Telemetry) ============
+model SensorReading {
+  id        String   @id @default(cuid())
+  sensorId  String
+  value     Float
+  status    String   // NORMAL, WARNING, CRITICO
+  timestamp DateTime @default(now())
+
+  sensor    Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+
+  @@index([sensorId, timestamp])
+  @@index([sensorId])
+}
+
+// ============ API KEYS (Sensor Integrations) ============
+model ApiKey {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String   // Who created the key
+  name        String   // Label like "Gateway Planta Norte"
+  keyPrefix   String   // First 8 chars shown in UI: "ech_live_abc12345"
+  keyHash     String   @unique // SHA-256 hash of the full key (never stored plain)
+  permissions String   @default("sensor:ingest") // Comma-separated permissions
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([keyHash])
+  @@index([isActive])
+}
+
+// ============ SUBSCRIPTION INVOICE HISTORY ============
+model SubscriptionInvoice {
+  id              String   @id @default(cuid())
+  companyId       String
+  stripeInvoiceId String?  @unique
+  amount          Float?
+  currency        String   @default("usd")
+  status          String   @default("paid") // paid, pending, failed, refunded
+  planName        String
+  description     String?
+  invoicePdfUrl   String?
+  paidAt          DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([paidAt])
+}
+
+// ============ SYSTEM ALERTS (GOC — Global Operations Center) ============
+model SystemAlert {
+  id                String    @id @default(cuid())
+  companyId         String
+  type              String    // CONNECTION_ERROR, AUTH_FAILURE, SENSOR_CRITICAL, PERMIT_BLOCKED, SYSTEM_ERROR
+  severity          String    @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  title             String
+  message           String
+  metadata          String?   // JSON string with extra context
+  isAcknowledged    Boolean   @default(false)
+  acknowledgedById  String?
+  acknowledgedAt    DateTime?
+  relatedEntityId   String?
+  relatedEntityType String?   // USER, PERMIT, SENSOR, COMPANY, AUDIT
+  createdAt         DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([isAcknowledged])
+  @@index([type])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+// ============ KNOWLEDGE BASE (GOC — Diagnostic Encyclopedia) ============
+model KnowledgeBase {
+  id              String   @id @default(cuid())
+  errorCode       String   @unique
+  category        String   // DATABASE, AUTH, SENSOR, SCADA, NETWORK, DEPLOYMENT
+  title           String
+  rootCause       String
+  appliedSolution String
+  severity        String   @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  referenceUrl    String?
+  timesUsed       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============ EMERGENCY ALERTS (ERC — Emergency Response Center) ============
+model EmergencyAlert {
+  id              String    @id @default(cuid())
+  companyId       String
+  userId          String
+  tipo            String    @default("PANICO") // PANICO, INCENDIO, DERRAME, EVACUACION, LESION, OTRO
+  ubicacion       String    @default("{}") // JSON string: { lat, lng, accuracy }
+  estado          String    @default("ACTIVA") // ACTIVA, ATENDIDA, DESCARTADA
+  prioridad       String    @default("ALTA") // BAJA, MEDIA, ALTA, CRITICA
+  descripcion     String?
+  photoUrl        String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  attendedById    String?
+  attendedByName  String?
+  attendedAt      DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation("EmergencyAlertUser", fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([estado])
+  @@index([prioridad])
+  @@index([createdAt])
+}
+
+// ============ SUPPORT MESSAGES (In-App Chat) ============
+model SupportMessage {
+  id          String   @id @default(cuid())
+  companyId   String
+  userId      String?
+  userName    String?
+  message     String
+  senderType  String   @default("USER") // USER, SYSTEM, ADMIN
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([createdAt])
+}
+
+// ============ SMART INVENTORY — Geolocated Inventory Ecosystem ============
+
+// Inventory Locations: Multi-warehouse hierarchy (Province/City/Site)
+model InventoryLocation {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String                   // "Planta Norte", "Almacén Central BsAs"
+  province    String?                  // Province / State
+  city        String?                  // City
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  devices   InventoryDevice[]
+  stock     SmartInventory[]
+  audits    InventoryAudit[]
+
+  @@index([companyId])
+  @@index([isActive])
+  @@index([province])
+}
+
+// Inventory Items: Trackable items (batteries, tools, PPE, materials)
+model InventoryItem {
+  id              String   @id @default(cuid())
+  companyId       String
+  name            String                   // "Batería 12V", "Casco Seguridad"
+  sku             String?                  // Stock-keeping unit (company-scoped unique)
+  category        String   @default("GENERAL") // BATERIA, HERRAMIENTA, EPP, MATERIAL, GENERAL
+  unit            String   @default("unidad")  // unidad, caja, par, juego, rollo
+  thumbnailUrl    String?
+  thresholdMin    Int      @default(5)     // Alert when stock <= this
+  thresholdMax    Int?                   // Max capacity (optional)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  locations SmartInventory[]
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+  @@index([category])
+  @@index([isActive])
+}
+
+// Inventory Devices: Cameras and BLE beacon gateways per site
+model InventoryDevice {
+  id          String   @id @default(cuid())
+  companyId   String
+  locationId  String
+  name        String                   // "Cámara Zona A", "Gateway BLE Norte"
+  type        String   @default("CAMERA") // CAMERA, BEACON_GATEWAY
+  ipAddress   String?                  // IP for cameras (e.g. "192.168.1.100")
+  status      String   @default("ONLINE") // ONLINE, OFFLINE, MAINTENANCE
+  lastSeenAt  DateTime?
+  metadata    String?                  // JSON: camera model, beacon firmware, etc.
+
+  // BLE Beacon configuration (iBeacon protocol — only for BEACON_GATEWAY type)
+  beaconUuid  String?                  // iBeacon UUID (e.g. "f7826da6-4fa3-4e98-8014-7c7a646e9c01")
+  beaconMajor Int?                     // Major value (0-65535)
+  beaconMinor Int?                     // Minor value (0-65535)
+  beaconRssi  Int      @default(-70)   // Signal strength threshold (dBm). Recommended: -50 to -80
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  audits    InventoryAudit[]
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([type])
+  @@index([status])
+  @@unique([companyId, beaconUuid])
+}
+
+// Smart Inventory: Item-Location junction with BLE + AI visual counts
+model SmartInventory {
+  id              String    @id @default(cuid())
+  companyId       String
+  itemId          String
+  locationId      String
+  beaconId        String?             // BLE beacon MAC or UUID (optional)
+  quantity        Int       @default(0) // Last known total quantity
+  cameraCount     Int?               // AI visual count (last snapshot)
+  beaconCount     Int?               // BLE detected count (last scan)
+  lastCountedAt   DateTime?
+  lastSyncAt      DateTime?
+  discrepancy     Boolean   @default(false) // true when cameraCount != beaconCount
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item      InventoryItem      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, locationId])
+  @@index([companyId])
+  @@index([locationId])
+  @@index([itemId])
+  @@index([discrepancy])
+}
+
+// Inventory Audit: AI snapshots & discrepancy log
+model InventoryAudit {
+  id              String   @id @default(cuid())
+  companyId       String
+  locationId      String
+  deviceId        String?
+  itemName        String?                  // Item name or category scanned
+  itemCount       Int      @default(0)     // AI detected count
+  beaconCount     Int?                    // BLE detected count at scan time
+  confidence      Float?                  // 0.0 - 1.0 AI confidence score
+  snapshotUrl     String?                 // Image with bounding boxes drawn
+  rawImageUrl     String?                 // Original captured image
+  discrepancy     Boolean  @default(false)
+  resolvedAt      DateTime?
+  resolvedById    String?
+  notes           String?
+  metadata        String?                 // JSON: model version, processing time, etc.
+  createdAt       DateTime @default(now())
+
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location  InventoryLocation  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  device    InventoryDevice?   @relation(fields: [deviceId], references: [id])
+
+  @@index([companyId])
+  @@index([locationId])
+  @@index([deviceId])
+  @@index([createdAt])
+  @@index([discrepancy])
+}
+
+// ============ HSE REPORTS (Field observations / unsafe conditions) ============
+model HseReport {
+  id              String    @id @default(cuid())
+  companyId       String
+  userId          String
+  descripcion     String
+  fotoUrl         String?
+  categoria       String    @default("CONDICION_INSEGURA") // CONDICION_INSEGURA, ACTO_INSEGURO, NEAR_MISS, MEJORA
+  prioridad       String    @default("MEDIA") // BAJA, MEDIA, ALTA
+  estado          String    @default("ABIERTO") // ABIERTO, EN_PROGRESO, CERRADO
+  ubicacion       String?   // JSON string: { lat, lng, accuracy }
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation("HseReportUser", fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([estado])
+  @@index([categoria])
+  @@index([createdAt])
+}
+
+// ============ TRANSPORT MODULE ============
+
+// Transport Vehicles: Fleet registry
+model TransportVehicle {
+  id                String   @id @default(cuid())
+  companyId         String
+  plate             String
+  type              String   // TRACTOR, CAMION, CAMIONETA, PICKUP, BUS, EQUIPO_ESPECIAL
+  brand             String?
+  model             String?
+  year              Int?
+  capacityKg        Float?
+  vin               String?
+  isActive          Boolean  @default(true)
+  status            String   @default("DISPONIBLE") // DISPONIBLE, EN_RUTA, MANTENIMIENTO, FUERA_SERVICIO
+  lastInspectionAt  DateTime?
+  currentDriverId   String?
+  metadata          String?  @default("{}") // JSON
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  currentDriver   User?            @relation("VehicleDriver", fields: [currentDriverId], references: [id])
+  trips           TransportTrip[]
+  inspections     TransportInspection[]
+  driverEvents    TransportDriverEvent[]
+
+  @@unique([companyId, plate])
+  @@index([companyId])
+  @@index([status])
+  @@index([isActive])
+}
+
+// Transport Drivers: Driver profiles + certifications
+model TransportDriver {
+  id                String   @id @default(cuid())
+  companyId         String
+  userId            String
+  licenseNumber     String
+  licenseType       String   // A, B, C, D, E
+  licenseExpiry     DateTime?
+  status            String   @default("ACTIVO") // ACTIVO, SUSPENDIDO, VENCIDO, INACTIVO
+  fatigueScore      Float    @default(0)
+  totalTrips        Int      @default(0)
+  certificationData String?  @default("{}") // JSON
+  medicalExpiry     DateTime?
+  emergencyContact  String?  @default("{}") // JSON
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([companyId, userId])
+  @@index([companyId])
+  @@index([status])
+}
+
+// Transport Routes: Route definitions with waypoints
+model TransportRoute {
+  id                  String   @id @default(cuid())
+  companyId           String
+  name                String
+  origin              String
+  destination         String
+  distanceKm          Float
+  estimatedDurationMin Int
+  waypoints           String?  @default("[]") // JSON
+  riskLevel           String   @default("MEDIO") // BAJO, MEDIO, ALTO, CRITICO
+  hasHSECheckpoints   Boolean  @default(false)
+  checkpointConfig    String?  @default("{}") // JSON
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trips   TransportTrip[]
+
+  @@index([companyId])
+  @@index([isActive])
+  @@index([riskLevel])
+}
+
+// Transport Trips: Individual trips (operations)
+model TransportTrip {
+  id                    String    @id @default(cuid())
+  companyId             String
+  vehicleId             String
+  driverId              String
+  routeId               String
+  status                String    @default("PLANIFICADO") // PLANIFICADO, EN_INSPECCION, AUTORIZADO, EN_TRANSITO, COMPLETADO, CANCELADO, BLOQUEADO
+  startDate             DateTime
+  endDate               DateTime?
+  startOdometerKm       Float?
+  endOdometerKm         Float?
+  fuelConsumed          Float?
+  riskValidationResult  String?   @default("{}") // JSON
+  inspectionResult      String?   @default("{}") // JSON
+  blockingReason        String?
+  blockedById           String?
+  blockedAt             DateTime?
+  notes                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  company     Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  vehicle    TransportVehicle     @relation(fields: [vehicleId], references: [id])
+  driver     User                 @relation("TripDriver", fields: [driverId], references: [id])
+  route      TransportRoute       @relation(fields: [routeId], references: [id])
+  inspections  TransportInspection[]
+  driverEvents  TransportDriverEvent[]
+
+  @@index([companyId])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([routeId])
+  @@index([status])
+  @@index([startDate])
+}
+
+// Transport Inspections: Pre-trip vehicle inspections
+model TransportInspection {
+  id              String   @id @default(cuid())
+  companyId       String
+  tripId          String
+  vehicleId       String
+  inspectorId     String
+  type            String   // PRE_VIAJE, POST_VIAJE
+  checklistResult String?  @default("{}") // JSON
+  passed          Boolean
+  issues          String?  @default("[]") // JSON
+  photos          String?  @default("[]") // JSON
+  createdAt       DateTime @default(now())
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trip      TransportTrip     @relation(fields: [tripId], references: [id])
+  vehicle   TransportVehicle  @relation(fields: [vehicleId], references: [id])
+  inspector User              @relation("InspectionInspector", fields: [inspectorId], references: [id])
+
+  @@index([companyId])
+  @@index([tripId])
+  @@index([vehicleId])
+  @@index([inspectorId])
+  @@index([createdAt])
+}
+
+// Transport Driver Events: AI-detected driver events (DMS - Driver Monitoring System)
+model TransportDriverEvent {
+  id            String   @id @default(cuid())
+  companyId     String
+  tripId        String
+  driverId      String
+  vehicleId     String
+  eventType     String   // FATIGA, DISTRACCION_CELULAR, DISTRACCION_OBJETO, SOMNOLENCIA, SIN_CINTURON, CONDUCCION_AGRESIVA, NORMAL
+  riskLevel     String   // BAJO, MEDIO, ALTO, CRITICO
+  confidence    Float
+  snapshotUrl   String?
+  aiAnalysis    String?  @default("{}") // JSON
+  gpsLocation   String?  @default("{}") // JSON
+  timestamp     DateTime
+  isResolved    Boolean  @default(false)
+  resolvedAt    DateTime?
+  actionTaken   String?
+  createdAt     DateTime @default(now())
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  trip      TransportTrip     @relation(fields: [tripId], references: [id])
+  driver    User              @relation("DriverEventDriver", fields: [driverId], references: [id])
+  vehicle   TransportVehicle  @relation(fields: [vehicleId], references: [id])
+
+  @@index([companyId])
+  @@index([tripId])
+  @@index([driverId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@index([riskLevel])
+}
+
+// ============ ENVIRONMENT MODULE ============
+
+// Environmental Incidents: Spills, emissions, waste events
+model EnvironmentalIncident {
+  id                  String    @id @default(cuid())
+  companyId           String
+  reportedById        String
+  type                String    // DERRAME, EMISION, RESIDUO_PELIGROSO, CONTAMINACION_SUELO, CONTAMINACION_AGUA, RUIDO, OTRO
+  severity            String    // BAJO, MEDIO, ALTO, CRITICO
+  sourceId            String?
+  sourceType          String    // TRANSPORT_INCIDENT, MANUAL, SENSOR, SYSTEM
+  description         String
+  location            String?   @default("{}") // JSON
+  estimatedImpact     String?   @default("{}") // JSON
+  photos              String?   @default("[]") // JSON
+  status              String    @default("REPORTADO") // REPORTADO, EN_INVESTIGACION, CONTENIDO, REMEDIADO, CERRADO
+  containmentMeasures String?   @default("[]") // JSON
+  remediationPlan     String?
+  remediationDate     DateTime?
+  closedById          String?
+  closedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reportedBy  User    @relation("IncidentReporter", fields: [reportedById], references: [id])
+
+  @@index([companyId])
+  @@index([type])
+  @@index([severity])
+  @@index([status])
+  @@index([sourceType])
+  @@index([createdAt])
+}
+
+// Environmental Assessments: Impact assessments
+model EnvironmentalAssessment {
+  id               String   @id @default(cuid())
+  companyId        String
+  title            String
+  type             String   // IMPACTO_AMBIENTAL, RIESGO_HIDROCARBURO, EMISIONES, RESIDUOS, RUIDO, BIODIVERSIDAD
+  status           String   @default("BORRADOR") // BORRADOR, EN_REVISION, APROBADO, VENCIDO
+  description      String?
+  location         String?  @default("{}") // JSON
+  scope            String?  @default("{}") // JSON
+  findings         String?  @default("[]") // JSON
+  recommendations  String?  @default("[]") // JSON
+  approvedById     String?
+  approvedAt       DateTime?
+  nextReviewDate   DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([type])
+  @@index([status])
+  @@index([nextReviewDate])
+}
+
+// Environmental Metrics: Periodic environmental measurements
+model EnvironmentalMetric {
+  id                String   @id @default(cuid())
+  companyId         String
+  name              String
+  type              String   // CO2, NOx, SO2, PM25, RUIDO_DB, PH_AGUA, TURBIDEZ, OTRO
+  unit              String
+  currentValue      Float?
+  thresholdWarning  Float
+  thresholdCritical Float
+  measurementDate   DateTime
+  source            String   // MANUAL, SENSOR, API
+  sensorId          String?
+  locationId         String?
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([type])
+  @@index([measurementDate])
+  @@index([source])
+}
+
+// HSE Event Log: Immutable audit trail for HSE events (shared between modules)
+model HSEEventLog {
+  id                String   @id @default(cuid())
+  companyId         String
+  eventId           String   @unique
+  sourceModule      String   // TRANSPORT, ENVIRONMENT, SCADA, PERMIT, ERC
+  eventType         String   // TRIP_STARTED, TRIP_BLOCKED, DRIVER_ALERT, INSPECTION_FAILED, INCIDENT_REPORTED, CONTAINMENT_ACTIVATED, REMEDIATION_STARTED, ASSESSMENT_COMPLETED
+  severity          String   // INFO, WARNING, HIGH, CRITICAL
+  title             String
+  description       String?
+  metadata          String?  @default("{}") // JSON
+  actorId           String?
+  actorName         String?
+  relatedEntityId   String?
+  relatedEntityType String?
+  createdAt         DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([sourceModule])
+  @@index([eventType])
+  @@index([severity])
+  @@index([relatedEntityId])
+  @@index([createdAt])
+}

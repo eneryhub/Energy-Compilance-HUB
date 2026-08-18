@@ -1,0 +1,61 @@
+# --- Dependencias ---
+node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# --- Next.js / Build ---
+.next/
+/out/
+/build
+/dist
+next-env.d.ts
+
+# --- HSE / Archivos de Sistema de Alex ---
+# Ignorar backups y archivos temporales de gran tamaño
+*.tar
+*.zip
+*.gz
+*.sh
+.zscripts/
+# Ignorar carpetas de carga local (si solo son para pruebas)
+upload/
+download/
+
+# --- Variables de Entorno (CRÍTICO) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# --- Logs y Debug ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dev.log
+dev.out.log
+server.log
+
+# --- Herramientas AI y Editores ---
+.claude
+.z-ai-config
+.vercel
+.vscode/
+.idea/
+.DS_Store
+*.tsbuildinfo
+
+# --- Directorios de Skills/Prompting ---
+/skills/
+test/
+prompt/
+.vercel
+.env*.local
