@@ -995,9 +995,10 @@ export default function LandingPage({ onLogin, onRegister }: LandingPageProps) {
             ))}
           </div>
 
+          {/* FOOTER ACTUALIZADO */}
           <div className="mt-12 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4"
             style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-            <p className="text-[11px] text-white/20">© {new Date().getFullYear()} Energy-Compliance Hub · Petrolinkvzla. Todos los derechos reservados.</p>
+            <p className="text-[11px] text-white/20">© {new Date().getFullYear()} Energy-Compliance Hub. Operado por Alserla Intelligence Holdings, LLC. Todos los derechos reservados.</p>
             <div className="flex items-center gap-5">
               {[{ Icon: Lock, label: "Encriptación E2E" }, { Icon: ShieldCheck, label: "SOC 2 Compliant" }].map(({ Icon, label }) => (
                 <div key={label} className="flex items-center gap-1.5 text-[10px] text-white/20">
